@@ -1,0 +1,44 @@
+name: Tests
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: pip install pytest
+
+      - name: Install draw.io CLI
+        run: |
+          curl -fsSL https://github.com/jgraph/drawio-desktop/releases/download/v26.0.9/drawio-amd64-26.0.9.deb -o drawio.deb
+          sudo apt-get update
+          sudo apt-get install -y xvfb ./drawio.deb
+          # drawio needs a display; create a wrapper that uses xvfb-run
+          sudo mv /usr/bin/drawio /usr/bin/drawio-real
+          printf '#!/bin/sh\nexec xvfb-run -a /usr/bin/drawio-real --no-sandbox "$@"\n' | sudo tee /usr/bin/drawio > /dev/null
+          sudo chmod +x /usr/bin/drawio
+
+      - name: Run unit tests
+        run: python -m pytest tools/azdisc/tests/ -v --tb=short
+
+      - name: Upload diagram artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-diagrams
+          path: |
+            /tmp/pytest-*/**/diagram.*
+          if-no-files-found: ignore

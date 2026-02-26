@@ -365,21 +365,20 @@ def generate_drawio(cfg: Config) -> None:
     # Write icons_used.json
     cfg.out("icons_used.json").write_text(json.dumps(icons_used, indent=2, sort_keys=True))
 
-    # Optional SVG export
-    _try_export_svg(cfg, out_path)
+    # Optional image exports
+    _try_export(cfg, out_path, "svg")
+    _try_export(cfg, out_path, "png")
 
 
-def _try_export_svg(cfg: Config, drawio_path: Path) -> None:
+def _try_export(cfg: Config, drawio_path: Path, fmt: str) -> None:
     import shutil
     if not shutil.which("drawio"):
-        log.debug("drawio CLI not found; skipping SVG export.")
+        log.debug("drawio CLI not found; skipping %s export.", fmt)
         return
-    svg_path = cfg.out("diagram.svg")
-    result = subprocess.run(
-        ["drawio", "--export", "--format", "svg", "--output", str(svg_path), str(drawio_path)],
-        capture_output=True, text=True
-    )
+    out = cfg.out(f"diagram.{fmt}")
+    cmd = ["drawio", "--export", "--format", fmt, "--output", str(out), str(drawio_path)]
+    result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode == 0:
-        log.info("Exported SVG to %s", svg_path)
+        log.info("Exported %s to %s", fmt.upper(), out)
     else:
-        log.warning("SVG export failed: %s", result.stderr.strip())
+        log.warning("%s export failed: %s", fmt.upper(), result.stderr.strip())
