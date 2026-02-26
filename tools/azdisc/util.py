@@ -22,7 +22,7 @@ def setup_logging(verbose: bool = False) -> None:
 
 def stable_id(resource_id: str) -> str:
     """Return a short stable hex ID derived from a resource ID."""
-    return hashlib.sha1(resource_id.lower().encode()).hexdigest()[:16]
+    return hashlib.sha256(resource_id.lower().encode()).hexdigest()[:16]
 
 
 def normalize_id(arm_id: str) -> str:

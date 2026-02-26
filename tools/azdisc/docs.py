@@ -151,8 +151,7 @@ def _write_routing(cfg: Config, nodes: List[Dict], edges: List[Dict]) -> None:
             lines.append(f"### NSG: `{nsg['name']}` (`{nsg['id']}`)\n")
             p = nsg.get("properties") or {}
             for direction in ("inbound", "outbound"):
-                key = f"securityRules"
-                rules = p.get(key) or []
+                rules = p.get("securityRules") or []
                 direction_rules = [r for r in rules if (r.get("properties") or {}).get("direction", "").lower() == direction]
                 if direction_rules:
                     lines.append(f"#### {direction.capitalize()} Rules\n")

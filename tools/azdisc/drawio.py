@@ -86,7 +86,7 @@ def _make_cell(parent, cell_id: str, label: str, style: str,
     return cell
 
 
-def _layout_nodes(nodes: List[Dict]) -> Dict[str, Tuple[int, int, int, int]]:
+def layout_nodes(nodes: List[Dict]) -> Dict[str, Tuple[int, int, int, int]]:
     """
     Compute deterministic (x, y, w, h) positions.
     Hierarchy: REGION > RG > TYPE band (left-to-right grid with wrapping).
@@ -155,7 +155,7 @@ def generate_drawio(cfg: Config) -> None:
     assets_dir = Path(__file__).parent.parent.parent / "assets"
     icon_map = _load_icon_map(assets_dir)
 
-    positions = _layout_nodes(nodes)
+    positions = layout_nodes(nodes)
     icons_used = {"mapped": {}, "fallback": [], "unknown": []}
 
     # Build XML

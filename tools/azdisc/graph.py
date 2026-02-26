@@ -151,7 +151,7 @@ def build_graph(cfg: Config) -> Dict:
             nodes.append({
                 "id": uid,
                 "stableId": stable_id(uid),
-                "name": uid.split("/")[-1] if "/" in uid else uid,
+                "name": uid.split("/")[-1],
                 "type": "external/unknown",
                 "location": "",
                 "resourceGroup": "",

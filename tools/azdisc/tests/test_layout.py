@@ -3,7 +3,7 @@ import json
 import pytest
 from pathlib import Path
 from tools.azdisc.graph import build_node
-from tools.azdisc.drawio import _layout_nodes, CELL_W, CELL_H, H_GAP, V_GAP
+from tools.azdisc.drawio import layout_nodes, CELL_W, CELL_H, H_GAP, V_GAP
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -15,15 +15,15 @@ def load_fixture(name: str):
 def test_layout_is_deterministic():
     inventory = load_fixture("inventory_small.json")
     nodes = [build_node(r) for r in inventory]
-    pos1 = _layout_nodes(nodes)
-    pos2 = _layout_nodes(nodes)
+    pos1 = layout_nodes(nodes)
+    pos2 = layout_nodes(nodes)
     assert pos1 == pos2
 
 
 def test_all_nodes_have_positions():
     inventory = load_fixture("inventory_small.json")
     nodes = [build_node(r) for r in inventory]
-    positions = _layout_nodes(nodes)
+    positions = layout_nodes(nodes)
     for n in nodes:
         assert n["id"] in positions, f"Node {n['id']} missing position"
 
@@ -33,7 +33,7 @@ def test_nodes_ordered_by_rg_type_name_id():
     nodes = [build_node(r) for r in inventory]
     # Sort nodes the same way the build_graph function does
     nodes.sort(key=lambda n: (n["resourceGroup"], n["type"], n["name"], n["id"]))
-    positions = _layout_nodes(nodes)
+    positions = layout_nodes(nodes)
     # All positions should be positive
     for nid, (x, y, w, h) in positions.items():
         assert x >= 0
@@ -45,7 +45,7 @@ def test_nodes_ordered_by_rg_type_name_id():
 def test_no_overlapping_nodes():
     inventory = load_fixture("inventory_small.json")
     nodes = [build_node(r) for r in inventory]
-    positions = _layout_nodes(nodes)
+    positions = layout_nodes(nodes)
     rects = list(positions.values())
     for i, (x1, y1, w1, h1) in enumerate(rects):
         for j, (x2, y2, w2, h2) in enumerate(rects):
