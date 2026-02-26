@@ -2,9 +2,14 @@ name: Tests
 
 on:
   pull_request:
-    branches: [master]
+    branches: [main]
   push:
-    branches: [master]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
 
 jobs:
   test:
@@ -31,14 +36,111 @@ jobs:
           printf '#!/bin/sh\nexec xvfb-run -a /usr/bin/drawio-real --no-sandbox "$@"\n' | sudo tee /usr/bin/drawio > /dev/null
           sudo chmod +x /usr/bin/drawio
 
-      - name: Run unit tests
+      - name: Run tests
         run: python -m pytest tools/azdisc/tests/ -v --tb=short
 
+      - name: Generate integration diagram
+        run: |
+          mkdir -p test-output
+          python -c "
+          from pathlib import Path
+          from tools.azdisc.config import Config
+          from tools.azdisc.graph import build_graph
+          from tools.azdisc.drawio import generate_drawio
+
+          out = Path('test-output')
+          fixture = Path('tools/azdisc/tests/fixtures/app_contoso.json')
+          (out / 'inventory.json').write_text(fixture.read_text())
+          (out / 'unresolved.json').write_text('[]')
+
+          cfg = Config(
+              app='contoso-app',
+              subscriptions=['00000000-0000-0000-0000-000000000001'],
+              seedResourceGroups=['rg-contoso-prod'],
+              outputDir=str(out),
+          )
+          build_graph(cfg)
+          generate_drawio(cfg)
+          print('Generated:', [f.name for f in out.iterdir()])
+          "
+
       - name: Upload diagram artifacts
-        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-diagrams
-          path: |
-            /tmp/pytest-*/**/diagram.*
-          if-no-files-found: ignore
+          path: test-output/diagram.*
+
+      - name: Post diagram to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            if (!fs.existsSync('test-output/diagram.png')) {
+              console.log('No diagram.png found, skipping PR comment.');
+              return;
+            }
+
+            // Collect stats from graph.json
+            let stats = '';
+            try {
+              const graph = JSON.parse(fs.readFileSync('test-output/graph.json', 'utf8'));
+              stats = `**${graph.nodes.length} nodes**, **${graph.edges.length} edges**`;
+            } catch (e) {
+              stats = '_(stats unavailable)_';
+            }
+
+            const pngSize = Math.round(fs.statSync('test-output/diagram.png').size / 1024);
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            const sha = context.payload.pull_request.head.sha.substring(0, 7);
+
+            const body = [
+              '## Integration Test Diagram',
+              '',
+              `Generated from \`app_contoso.json\` fixture at ${sha} — ${stats} | PNG: ${pngSize} KB`,
+              '',
+              `[**Download test-diagrams artifact**](${runUrl}) (contains \`.drawio\`, \`.png\`, \`.svg\`)`,
+              '',
+              '<details>',
+              '<summary>Diagram contents</summary>',
+              '',
+              '| Layer | Resources |',
+              '|-------|-----------|',
+              '| **Network** | VNet, 3 subnets, 3 NSGs, route table, LB, public IP |',
+              '| **Compute** | 2 VMs (web + app), 3 disks, 2 NICs |',
+              '| **Data** | SQL Server + database, private endpoint |',
+              '| **Support** | Key Vault, storage account |',
+              '',
+              'To view the diagram, download the `.drawio` file and open it at [app.diagrams.net](https://app.diagrams.net), or view the `.png` directly.',
+              '',
+              '</details>',
+            ].join('\n');
+
+            // Find existing comment to update (avoids spam on re-runs)
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const marker = '## Integration Test Diagram';
+            const existing = comments.find(c => c.body && c.body.startsWith(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+              console.log(`Updated existing comment ${existing.id}`);
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+              console.log('Created new PR comment');
+            }
