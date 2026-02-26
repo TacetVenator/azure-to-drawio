@@ -28,9 +28,10 @@ REGION_PADDING = 60
 EDGE_STYLE = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=0.5;exitY=1;exitDx=0;exitDy=0;"
 GROUP_STYLE = "points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];shape=mxgraph.azure.groups.subscription;labelPosition=top;verticalLabelPosition=top;align=center;verticalAlign=bottom;fillColor=#dae8fc;strokeColor=#6c8ebf;fontColor=#000000;"
 RG_STYLE = "points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];shape=mxgraph.azure.groups.resource_group;labelPosition=top;verticalLabelPosition=top;align=center;verticalAlign=bottom;fillColor=#fff2cc;strokeColor=#d6b656;fontColor=#000000;"
-UNKNOWN_STYLE = "shape=mxgraph.azure.virtual_machine;sketch=0;html=1;pointerEvents=1;dashed=0;fillColor=#dae8fc;strokeColor=#6c8ebf;align=center;aspect=fixed;"
-EXTERNAL_STYLE = "ellipse;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;"
+UNKNOWN_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalLabelPosition=bottom;verticalAlign=top;align=center;"
+EXTERNAL_STYLE = "ellipse;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;verticalLabelPosition=bottom;verticalAlign=top;align=center;"
 UDR_CALLOUT_STYLE = "shape=callout;fillColor=#fff2cc;strokeColor=#d6b656;align=left;verticalAlign=top;spacingLeft=5;fontSize=10;"
+ATTR_BOX_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;fontSize=10;"
 
 
 def _get(obj: Any, *keys) -> Any:
@@ -281,6 +282,56 @@ def generate_drawio(cfg: Config) -> None:
             eg = ET.SubElement(ec, "mxGeometry")
             eg.set("relative", "1")
             eg.set("as", "geometry")
+
+    # Add attribute info boxes for resources that have metadata
+    ATTR_EDGE_STYLE = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeColor=#9673a6;dashed=1;"
+    for node in nodes:
+        attrs = node.get("attributes", [])
+        if not attrs:
+            continue
+        nid = node["id"]
+        sid = node_id_map.get(nid)
+        if not sid:
+            continue
+        pos = positions.get(nid)
+        if not pos:
+            continue
+        x, y, w, h = pos
+        # Place attribute box to the left of the resource icon
+        box_w = 180
+        line_h = 16
+        box_h = max(40, 12 + line_h * len(attrs))
+        box_x = x - box_w - 10
+        box_y = y
+
+        attr_label = "\n".join(attrs)
+        attr_id = "attr_" + stable_id(nid)
+        ab = ET.SubElement(root, "mxCell")
+        ab.set("id", attr_id)
+        ab.set("value", attr_label)
+        ab.set("style", ATTR_BOX_STYLE)
+        ab.set("vertex", "1")
+        ab.set("parent", "1")
+        abg = ET.SubElement(ab, "mxGeometry")
+        abg.set("x", str(box_x))
+        abg.set("y", str(box_y))
+        abg.set("width", str(box_w))
+        abg.set("height", str(box_h))
+        abg.set("as", "geometry")
+
+        # Connect attribute box to resource
+        ae_id = "attr_edge_" + stable_id(nid)
+        ae = ET.SubElement(root, "mxCell")
+        ae.set("id", ae_id)
+        ae.set("value", "")
+        ae.set("style", ATTR_EDGE_STYLE)
+        ae.set("edge", "1")
+        ae.set("source", attr_id)
+        ae.set("target", sid)
+        ae.set("parent", "1")
+        aeg = ET.SubElement(ae, "mxGeometry")
+        aeg.set("relative", "1")
+        aeg.set("as", "geometry")
 
     # Add edges
     for i, e in enumerate(edges):

@@ -9,6 +9,18 @@ ARM_ID_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Patterns for ARM-like IDs that are NOT actual deployable resources.
+# These are marketplace references, location-scoped metadata, etc.
+_NON_RESOURCE_PATTERNS = re.compile(
+    r'/providers/microsoft\.compute/locations/'
+    r'|/providers/microsoft\.compute/galleries/'
+    r'|/providers/microsoft\.marketplace/'
+    r'|/providers/microsoft\.compute/images/'
+    r'|/providers/microsoft\.authorization/roleDefinitions/'
+    r'|/providers/microsoft\.authorization/policyDefinitions/',
+    re.IGNORECASE,
+)
+
 
 def setup_logging(verbose: bool = False) -> None:
     level = logging.DEBUG if verbose else logging.INFO
@@ -30,6 +42,11 @@ def normalize_id(arm_id: str) -> str:
     return arm_id.lower().rstrip('/')
 
 
+def _is_resource_id(arm_id: str) -> bool:
+    """Return False for ARM-like IDs that are not actual deployable resources."""
+    return not _NON_RESOURCE_PATTERNS.search(arm_id)
+
+
 def extract_arm_ids(obj, seen=None):
     """Recursively walk obj (dict/list/str) and yield normalized ARM IDs."""
     if seen is None:
@@ -37,7 +54,7 @@ def extract_arm_ids(obj, seen=None):
     if isinstance(obj, str):
         for m in ARM_ID_RE.finditer(obj):
             nid = normalize_id(m.group(0))
-            if nid not in seen:
+            if nid not in seen and _is_resource_id(nid):
                 seen.add(nid)
                 yield nid
     elif isinstance(obj, dict):
