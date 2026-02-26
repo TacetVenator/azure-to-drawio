@@ -1,0 +1,256 @@
+[
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Compute/virtualMachines/vm1",
+    "name": "vm1",
+    "type": "Microsoft.Compute/virtualMachines",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-dev",
+    "properties": {
+      "networkProfile": {
+        "networkInterfaces": [
+          {"id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/networkInterfaces/nic1"}
+        ]
+      },
+      "storageProfile": {
+        "osDisk": {
+          "managedDisk": {
+            "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Compute/disks/disk1"
+          }
+        },
+        "dataDisks": [
+          {
+            "managedDisk": {
+              "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Compute/disks/disk2"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/networkInterfaces/nic1",
+    "name": "nic1",
+    "type": "Microsoft.Network/networkInterfaces",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-dev",
+    "properties": {
+      "networkSecurityGroup": {
+        "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/networkSecurityGroups/nsg1"
+      },
+      "ipConfigurations": [
+        {
+          "properties": {
+            "subnet": {
+              "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/virtualNetworks/vnet1/subnets/subnet1"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Compute/disks/disk1",
+    "name": "disk1",
+    "type": "Microsoft.Compute/disks",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-dev",
+    "properties": {}
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Compute/disks/disk2",
+    "name": "disk2",
+    "type": "Microsoft.Compute/disks",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-dev",
+    "properties": {}
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/virtualNetworks/vnet1",
+    "name": "vnet1",
+    "type": "Microsoft.Network/virtualNetworks",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-dev",
+    "properties": {
+      "virtualNetworkPeerings": [
+        {
+          "properties": {
+            "remoteVirtualNetwork": {
+              "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/virtualNetworks/vnet2"
+            }
+          }
+        }
+      ],
+      "subnets": [
+        {
+          "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/virtualNetworks/vnet1/subnets/subnet1",
+          "name": "subnet1",
+          "properties": {
+            "networkSecurityGroup": {
+              "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/networkSecurityGroups/nsg1"
+            },
+            "routeTable": {
+              "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/routeTables/rt1"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/virtualNetworks/vnet1/subnets/subnet1",
+    "name": "subnet1",
+    "type": "Microsoft.Network/virtualNetworks/subnets",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-dev",
+    "properties": {
+      "networkSecurityGroup": {
+        "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/networkSecurityGroups/nsg1"
+      },
+      "routeTable": {
+        "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/routeTables/rt1"
+      }
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/virtualNetworks/vnet2",
+    "name": "vnet2",
+    "type": "Microsoft.Network/virtualNetworks",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-dev",
+    "properties": {}
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/networkSecurityGroups/nsg1",
+    "name": "nsg1",
+    "type": "Microsoft.Network/networkSecurityGroups",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-dev",
+    "properties": {
+      "securityRules": [
+        {
+          "name": "allow-https",
+          "properties": {
+            "priority": 100,
+            "protocol": "TCP",
+            "direction": "Inbound",
+            "sourceAddressPrefix": "*",
+            "destinationAddressPrefix": "*",
+            "access": "Allow"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/routeTables/rt1",
+    "name": "rt1",
+    "type": "Microsoft.Network/routeTables",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-dev",
+    "properties": {
+      "routes": [
+        {
+          "name": "default-route",
+          "properties": {
+            "addressPrefix": "0.0.0.0/0",
+            "nextHopType": "VirtualAppliance",
+            "nextHopIpAddress": "10.0.0.4"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Web/sites/webapp1",
+    "name": "webapp1",
+    "type": "Microsoft.Web/sites",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-dev",
+    "properties": {
+      "serverFarmId": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Web/serverfarms/plan1",
+      "virtualNetworkSubnetId": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/virtualNetworks/vnet1/subnets/subnet1"
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Web/serverfarms/plan1",
+    "name": "plan1",
+    "type": "Microsoft.Web/serverfarms",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-dev",
+    "properties": {}
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/privateEndpoints/pe1",
+    "name": "pe1",
+    "type": "Microsoft.Network/privateEndpoints",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-dev",
+    "properties": {
+      "subnet": {
+        "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/virtualNetworks/vnet1/subnets/subnet1"
+      },
+      "privateLinkServiceConnections": [
+        {
+          "properties": {
+            "privateLinkServiceId": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Storage/storageAccounts/sa1"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Storage/storageAccounts/sa1",
+    "name": "sa1",
+    "type": "Microsoft.Storage/storageAccounts",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-dev",
+    "properties": {}
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/loadBalancers/lb1",
+    "name": "lb1",
+    "type": "Microsoft.Network/loadBalancers",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-dev",
+    "properties": {
+      "backendAddressPools": [
+        {
+          "properties": {
+            "backendIPConfigurations": [
+              {
+                "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/networkInterfaces/nic1/ipConfigurations/ipconfig1"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/publicIPAddresses/pip1",
+    "name": "pip1",
+    "type": "Microsoft.Network/publicIPAddresses",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-dev",
+    "properties": {
+      "ipConfiguration": {
+        "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/networkInterfaces/nic1/ipConfigurations/ipconfig1"
+      }
+    }
+  }
+]
