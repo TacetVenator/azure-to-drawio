@@ -916,6 +916,106 @@ def generate_drawio(cfg: Config) -> None:
     _try_export(cfg, out_path, "png")
 
 
+# ---------------------------------------------------------------------------
+# UDR / Route Table helpers
+# ---------------------------------------------------------------------------
+
+MAX_UDR_ROUTES_SHOWN = 8
+
+
+def extract_route_summaries(
+    nodes: List[Dict], edges: List[Dict],
+) -> Tuple[
+    Dict[str, Dict],            # subnet_id -> {rt_name, rt_id, routes: [...]}
+    Dict[str, List[str]],       # vnet_id -> [subnet_names_with_udr]
+]:
+    """Extract UDR summaries for subnets and VNets.
+
+    Returns:
+      subnet_udr: subnet_id -> route table summary dict
+      vnet_udr_rollup: vnet_id -> list of subnet names that have UDRs
+    """
+    node_by_id: Dict[str, Dict] = {n["id"]: n for n in nodes}
+
+    # Build subnet -> routeTable mapping from edges
+    subnet_to_rt: Dict[str, str] = {}
+    for e in edges:
+        if e["kind"] == "subnet->routeTable":
+            subnet_to_rt[normalize_id(e["source"])] = normalize_id(e["target"])
+
+    # Build subnet -> vnet mapping
+    subnet_to_vnet: Dict[str, str] = {}
+    for e in edges:
+        if e["kind"] == "subnet->vnet":
+            subnet_to_vnet[normalize_id(e["source"])] = normalize_id(e["target"])
+    for n in nodes:
+        if n["type"] == "microsoft.network/virtualnetworks/subnets":
+            nid = n["id"]
+            if nid not in subnet_to_vnet and "/subnets/" in nid:
+                subnet_to_vnet[nid] = nid.split("/subnets/")[0]
+
+    subnet_udr: Dict[str, Dict] = {}
+    vnet_udr_subnets: Dict[str, List[str]] = defaultdict(list)
+
+    for subnet_id in sorted(subnet_to_rt.keys()):
+        rt_id = subnet_to_rt[subnet_id]
+        rt_node = node_by_id.get(rt_id)
+        if not rt_node:
+            continue
+
+        rt_name = rt_node.get("name", rt_id.split("/")[-1])
+        raw_routes = _get(rt_node.get("properties", {}), "routes") or []
+
+        # Sort routes deterministically
+        routes = []
+        for r in raw_routes:
+            rp = _get(r, "properties") or {}
+            routes.append({
+                "name": r.get("name", ""),
+                "addressPrefix": rp.get("addressPrefix", "?"),
+                "nextHopType": rp.get("nextHopType", "?"),
+                "nextHopIpAddress": rp.get("nextHopIpAddress", ""),
+            })
+        routes.sort(key=lambda r: (
+            r["addressPrefix"], r["nextHopType"],
+            r["nextHopIpAddress"], r["name"],
+        ))
+
+        subnet_udr[subnet_id] = {
+            "rt_name": rt_name,
+            "rt_id": rt_id,
+            "routes": routes,
+        }
+
+        # VNet rollup
+        vnet_id = subnet_to_vnet.get(subnet_id)
+        subnet_name = node_by_id.get(subnet_id, {}).get("name", subnet_id.split("/")[-1])
+        if vnet_id:
+            vnet_udr_subnets[vnet_id].append(subnet_name)
+
+    # Sort VNet rollup lists
+    for vid in vnet_udr_subnets:
+        vnet_udr_subnets[vid].sort()
+
+    return subnet_udr, dict(vnet_udr_subnets)
+
+
+def _format_udr_panel_label(summary: Dict) -> str:
+    """Build the text label for a UDR panel node."""
+    lines = [f"UDR: {summary['rt_name']}"]
+    routes = summary["routes"]
+    shown = routes[:MAX_UDR_ROUTES_SHOWN]
+    for r in shown:
+        hop = r["nextHopType"]
+        if r["nextHopIpAddress"]:
+            hop = f"{hop} ({r['nextHopIpAddress']})"
+        lines.append(f"{r['addressPrefix']} \u2192 {hop}")
+    remaining = len(routes) - len(shown)
+    if remaining > 0:
+        lines.append(f"\u2026(+{remaining} more)")
+    return "\n".join(lines)
+
+
 def _build_mxfile_root(cfg: Config) -> Tuple[ET.Element, ET.Element]:
     """Create the mxfile/diagram/mxGraphModel/root skeleton and return (mxfile, root)."""
     mxfile = ET.Element("mxfile")
@@ -950,6 +1050,7 @@ def _render_msft_mode(
     with true hierarchical parenting via the `parent` attribute.
     """
     positions, containers, type_headers, node_parents = layout_nodes_msft(nodes)
+    node_by_id: Dict[str, Dict] = {n["id"]: n for n in nodes}
 
     icons_used: Dict[str, Any] = {"mapped": {}, "fallback": [], "unknown": []}
 
@@ -1025,6 +1126,58 @@ def _render_msft_mode(
         geo.set("height", str(h))
         geo.set("as", "geometry")
 
+    # Add UDR panels for subnets with route tables
+    subnet_udr, vnet_udr_rollup = extract_route_summaries(nodes, edges)
+
+    # Find the rightmost region container to position UDR panels to the right
+    region_containers_list = [c for c in containers if c["parent"] == "1"]
+    panel_base_x = 0
+    for rc in region_containers_list:
+        panel_base_x = max(panel_base_x, rc["x"] + rc["w"] + 40)
+
+    panel_cursor_y = MSFT_REGION_PAD
+    for subnet_id in sorted(subnet_udr.keys(), key=lambda s: (
+        (node_by_id.get(s) or {}).get("name", ""), s,
+    )):
+        summary = subnet_udr[subnet_id]
+        panel_label = _format_udr_panel_label(summary)
+        panel_id = "msft_udr_" + stable_id(subnet_id)
+
+        n_lines = panel_label.count("\n") + 1
+        panel_w = 220
+        panel_h = max(60, 18 * n_lines + 16)
+
+        pc = ET.SubElement(root, "mxCell")
+        pc.set("id", panel_id)
+        pc.set("value", panel_label)
+        pc.set("style", MSFT_UDR_PANEL_STYLE)
+        pc.set("vertex", "1")
+        pc.set("parent", "1")
+        pg = ET.SubElement(pc, "mxGeometry")
+        pg.set("x", str(panel_base_x))
+        pg.set("y", str(panel_cursor_y))
+        pg.set("width", str(panel_w))
+        pg.set("height", str(panel_h))
+        pg.set("as", "geometry")
+
+        # Connect subnet -> UDR panel
+        subnet_sid = node_id_map.get(subnet_id)
+        if subnet_sid:
+            udr_edge_id = "msft_udr_edge_" + stable_id(subnet_id)
+            ue = ET.SubElement(root, "mxCell")
+            ue.set("id", udr_edge_id)
+            ue.set("value", "udr_detail")
+            ue.set("style", MSFT_EDGE_STYLE)
+            ue.set("edge", "1")
+            ue.set("source", subnet_sid)
+            ue.set("target", panel_id)
+            ue.set("parent", "1")
+            ueg = ET.SubElement(ue, "mxGeometry")
+            ueg.set("relative", "1")
+            ueg.set("as", "geometry")
+
+        panel_cursor_y += panel_h + 15
+
     # Emit edges with orthogonal style
     for e in edges:
         src = node_id_map.get(e["source"])
@@ -1032,7 +1185,7 @@ def _render_msft_mode(
         if not src or not tgt:
             continue
         if e["kind"] == "subnet->routeTable":
-            continue  # will be shown via UDR panel in commit 3
+            continue  # shown via UDR panels above
         edge_id = f"e_{stable_id(e['source'] + e['target'] + e['kind'])}"
         ec = ET.SubElement(root, "mxCell")
         ec.set("id", edge_id)

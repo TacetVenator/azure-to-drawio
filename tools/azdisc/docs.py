@@ -111,35 +111,65 @@ def _write_routing(cfg: Config, nodes: List[Dict], edges: List[Dict]) -> None:
         elif e["kind"] == "subnet->nsg":
             subnet_to_nsg[e["source"]] = e["target"]
 
+    rt_nodes = [n for n in nodes if n["type"] == "microsoft.network/routetables"]
+    subnets = sorted(
+        [n for n in nodes if "/subnets/" in n["id"]],
+        key=lambda n: (n.get("name", ""), n["id"]),
+    )
+    subnets_with_udr = [s for s in subnets if s["id"] in subnet_to_rt]
+
     lines = [f"# Routing & NSG Details — {cfg.app}\n"]
 
-    # UDR section
-    lines.append("## User-Defined Routes (UDR)\n")
-    subnets = [n for n in nodes if "/subnets/" in n["id"]]
-    if not subnets:
-        lines.append("_No subnets found._\n")
+    # Summary
+    lines.append("## Summary\n")
+    lines.append(f"- Route tables: {len(rt_nodes)}")
+    lines.append(f"- Subnets with UDRs: {len(subnets_with_udr)}")
+    if subnets_with_udr:
+        for s in subnets_with_udr:
+            lines.append(f"  - `{s['name']}`")
+    lines.append("")
+
+    # UDR section — each route table with deterministic route ordering
+    lines.append("## Route Tables\n")
+    if not rt_nodes:
+        lines.append("_No route tables found._\n")
     else:
-        for subnet in sorted(subnets, key=lambda n: n["id"]):
-            rt_id = subnet_to_rt.get(subnet["id"])
-            if not rt_id:
-                continue
+        for rt in sorted(rt_nodes, key=lambda n: (n.get("name", ""), n["id"])):
+            lines.append(f"### Route Table: `{rt['name']}` (`{rt['id']}`)\n")
+            raw_routes = (rt.get("properties") or {}).get("routes") or []
+            if raw_routes:
+                # Sort routes deterministically
+                sorted_routes = sorted(raw_routes, key=lambda r: (
+                    (r.get("properties") or {}).get("addressPrefix", ""),
+                    (r.get("properties") or {}).get("nextHopType", ""),
+                    (r.get("properties") or {}).get("nextHopIpAddress", ""),
+                    r.get("name", ""),
+                ))
+                lines.append("| name | destination | nextHopType | nextHopIp |")
+                lines.append("|------|-------------|-------------|-----------|")
+                for r in sorted_routes:
+                    rp = r.get("properties") or {}
+                    lines.append(
+                        f"| {r.get('name','')} "
+                        f"| {rp.get('addressPrefix','?')} "
+                        f"| {rp.get('nextHopType','?')} "
+                        f"| {rp.get('nextHopIpAddress','')} |"
+                    )
+            else:
+                lines.append("_No route entries._\n")
+            lines.append("")
+
+    # Subnet-to-route-table associations
+    lines.append("## Subnet UDR Associations\n")
+    if not subnets_with_udr:
+        lines.append("_No subnets with UDRs._\n")
+    else:
+        for subnet in subnets_with_udr:
+            rt_id = subnet_to_rt[subnet["id"]]
             rt_node = id_to_node.get(rt_id)
-            lines.append(f"### Subnet: `{subnet['name']}` (`{subnet['id']}`)\n")
-            lines.append(f"Route Table: `{rt_id}`\n")
-            if rt_node:
-                routes = (rt_node.get("properties") or {}).get("routes") or []
-                if routes:
-                    lines.append("| destination | nextHopType | nextHopIp |")
-                    lines.append("|-------------|-------------|-----------|")
-                    for r in routes:
-                        rp = r.get("properties") or {}
-                        lines.append(
-                            f"| {rp.get('addressPrefix','?')} "
-                            f"| {rp.get('nextHopType','?')} "
-                            f"| {rp.get('nextHopIpAddress','')} |"
-                        )
-                else:
-                    lines.append("_No route entries._\n")
+            rt_name = rt_node["name"] if rt_node else rt_id.split("/")[-1]
+            lines.append(f"- `{subnet['name']}` → `{rt_name}` (`{rt_id}`)")
+        lines.append("")
 
     # NSG section
     lines.append("\n## Network Security Groups\n")
