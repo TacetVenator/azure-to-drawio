@@ -7,13 +7,23 @@
     "subscriptionId": "sub1",
     "resourceGroup": "rg-app-dev",
     "properties": {
+      "hardwareProfile": {
+        "vmSize": "Standard_D4s_v3"
+      },
       "networkProfile": {
         "networkInterfaces": [
           {"id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/networkInterfaces/nic1"}
         ]
       },
       "storageProfile": {
+        "imageReference": {
+          "publisher": "Canonical",
+          "offer": "UbuntuServer",
+          "sku": "18.04-LTS",
+          "version": "latest"
+        },
         "osDisk": {
+          "osType": "Linux",
           "managedDisk": {
             "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Compute/disks/disk1"
           }
@@ -26,6 +36,32 @@
           }
         ]
       }
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Compute/virtualMachines/vm1/extensions/MDE.Linux",
+    "name": "MDE.Linux",
+    "type": "Microsoft.Compute/virtualMachines/extensions",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-dev",
+    "properties": {
+      "publisher": "Microsoft.Azure.AzureDefenderForServers",
+      "type": "MDE.Linux",
+      "autoUpgradeMinorVersion": true
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Compute/virtualMachines/vm1/extensions/AzureMonitorLinuxAgent",
+    "name": "AzureMonitorLinuxAgent",
+    "type": "Microsoft.Compute/virtualMachines/extensions",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-dev",
+    "properties": {
+      "publisher": "Microsoft.Azure.Monitor",
+      "type": "AzureMonitorLinuxAgent",
+      "autoUpgradeMinorVersion": true
     }
   },
   {
