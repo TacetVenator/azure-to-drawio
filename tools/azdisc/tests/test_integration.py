@@ -267,9 +267,10 @@ class TestPngExport:
         _seed_output_files(tmp_path)
         cfg = _make_config(tmp_path)
         build_graph(cfg)
-        generate_drawio(cfg)
-        # Explicitly call _try_export with a missing binary
+        # Patch before generate_drawio so the CLI is never invoked and no PNG is created
         monkeypatch.setattr(shutil, "which", lambda _name: None)
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: None)
+        generate_drawio(cfg)
         drawio_path = tmp_path / "diagram.drawio"
         _try_export(cfg, drawio_path, "png")
         # No exception is success; PNG should not exist
