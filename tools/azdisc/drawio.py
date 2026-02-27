@@ -34,6 +34,19 @@ SUBNET_H_GAP = 30
 VNET_H_GAP = 60
 UNATTACHED_PADDING = 40
 
+# MSFT mode layout constants
+MSFT_CELL_W = 110
+MSFT_CELL_H = 70
+MSFT_X_STEP = 140
+MSFT_Y_STEP = 95
+MSFT_COLS = 6
+MSFT_RG_PAD = 20
+MSFT_RG_HEADER = 35
+MSFT_TYPE_HEADER_H = 22
+MSFT_RG_V_GAP = 30
+MSFT_REGION_PAD = 40
+MSFT_REGION_HEADER = 35
+
 # Default style strings
 EDGE_STYLE = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=0.5;exitY=1;exitDx=0;exitDy=0;"
 GROUP_STYLE = "points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];shape=mxgraph.azure.groups.subscription;labelPosition=top;verticalLabelPosition=top;align=center;verticalAlign=bottom;fillColor=#dae8fc;strokeColor=#6c8ebf;fontColor=#000000;"
@@ -45,6 +58,14 @@ ATTR_BOX_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor
 VNET_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=top;align=left;spacingLeft=10;spacingTop=5;fontSize=13;fontStyle=1;arcSize=6;opacity=50;"
 SUBNET_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;verticalAlign=top;align=left;spacingLeft=8;spacingTop=4;fontSize=11;dashed=1;dashPattern=5 5;arcSize=8;opacity=60;"
 UNATTACHED_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;verticalAlign=top;align=left;spacingLeft=10;spacingTop=5;fontSize=13;fontStyle=1;arcSize=6;dashed=1;dashPattern=8 4;"
+
+# MSFT mode styles
+MSFT_REGION_STYLE = "shape=rectangle;dashed=1;fillColor=none;strokeColor=#6E6E6E;rounded=0;whiteSpace=wrap;html=1;"
+MSFT_RG_STYLE = "rounded=1;fillColor=#F5F5F5;strokeColor=#888888;whiteSpace=wrap;html=1;"
+MSFT_NODE_STYLE_EXTRA = "whiteSpace=wrap;html=1;align=center;verticalAlign=top;"
+MSFT_UDR_PANEL_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#888888;"
+MSFT_EDGE_STYLE = "edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;"
+MSFT_TYPE_HEADER_STYLE = "text;html=1;align=left;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=11;fontStyle=1;fontColor=#666666;"
 
 
 def _get(obj: Any, *keys) -> Any:
@@ -449,6 +470,182 @@ def layout_nodes_vnet(
     return positions, containers
 
 
+# ---------------------------------------------------------------------------
+# MSFT (Microsoft Architecture Center) layout
+# ---------------------------------------------------------------------------
+
+# Map Azure provider prefixes to friendly display names for type section headers
+_TYPE_CATEGORY_MAP = {
+    "microsoft.compute": "Compute",
+    "microsoft.network": "Networking",
+    "microsoft.storage": "Storage",
+    "microsoft.sql": "Databases",
+    "microsoft.documentdb": "Databases",
+    "microsoft.dbformysql": "Databases",
+    "microsoft.dbforpostgresql": "Databases",
+    "microsoft.cache": "Databases",
+    "microsoft.web": "Web",
+    "microsoft.keyvault": "Security",
+    "microsoft.authorization": "Security",
+    "microsoft.managedidentity": "Identity",
+    "microsoft.containerservice": "Containers",
+    "microsoft.containerregistry": "Containers",
+    "microsoft.operationalinsights": "Monitoring",
+    "microsoft.insights": "Monitoring",
+    "microsoft.logic": "Integration",
+    "microsoft.servicebus": "Integration",
+    "microsoft.eventhub": "Integration",
+}
+
+
+def _type_category(resource_type: str) -> str:
+    """Return a friendly category name for a resource type."""
+    t = resource_type.lower()
+    # Try exact provider prefix match
+    provider = t.split("/")[0] if "/" in t else t
+    cat = _TYPE_CATEGORY_MAP.get(provider)
+    if cat:
+        return cat
+    return provider.replace("microsoft.", "").capitalize()
+
+
+def layout_nodes_msft(
+    nodes: List[Dict],
+    cols: int = MSFT_COLS,
+) -> Tuple[
+    Dict[str, Tuple[int, int, int, int]],   # node positions (relative to parent RG)
+    List[Dict],                               # containers (regions + RGs)
+    List[Dict],                               # type section headers
+    Dict[str, str],                           # node_id -> parent container id
+]:
+    """Compute MSFT-mode layout: Region > RG > typed sections > resource grid.
+
+    All resource coordinates are relative to their parent RG container.
+    RG container coordinates are relative to their parent region container.
+    Region container coordinates are absolute.
+
+    Returns:
+      positions: node_id -> (x, y, w, h) relative to parent
+      containers: list of region + RG container dicts
+      type_headers: list of type section header dicts
+      node_parents: node_id -> parent container id (the RG container)
+    """
+    node_by_id: Dict[str, Dict] = {n["id"]: n for n in nodes}
+
+    # Group by (region, rg, type)
+    groups: Dict[Tuple[str, str, str], List[Dict]] = defaultdict(list)
+    for n in nodes:
+        key = (
+            n.get("location", "") or "unknown",
+            n.get("resourceGroup", "") or "unknown",
+            n.get("type", ""),
+        )
+        groups[key].append(n)
+
+    # Sort within each group by (type, name, id) all lowercase
+    for key in groups:
+        groups[key].sort(key=lambda n: (n.get("type", "").lower(), n.get("name", "").lower(), n["id"].lower()))
+
+    # Organize: region -> rg -> [(type, nodes)]
+    region_rg_types: Dict[str, Dict[str, List[Tuple[str, List[Dict]]]]] = defaultdict(lambda: defaultdict(list))
+    for key in sorted(groups.keys()):
+        region, rg, rtype = key
+        region_rg_types[region][rg].append((rtype, groups[key]))
+
+    positions: Dict[str, Tuple[int, int, int, int]] = {}
+    containers: List[Dict] = []
+    type_headers: List[Dict] = []
+    node_parents: Dict[str, str] = {}
+
+    region_cursor_y = MSFT_REGION_PAD
+
+    for region in sorted(region_rg_types.keys()):
+        region_id = "msft_region_" + stable_id(region)
+        rgs = region_rg_types[region]
+
+        rg_cursor_y = MSFT_REGION_HEADER + MSFT_REGION_PAD
+        max_rg_w = 0
+
+        for rg in sorted(rgs.keys()):
+            rg_id = "msft_rg_" + stable_id(region + "/" + rg)
+            type_groups = rgs[rg]
+
+            # Sort type groups by category then type
+            type_groups.sort(key=lambda t: (_type_category(t[0]).lower(), t[0].lower()))
+
+            # Layout resources inside RG
+            cursor_y = MSFT_RG_HEADER + MSFT_RG_PAD
+            rg_content_w = 0
+
+            for rtype, type_nodes in type_groups:
+                category = _type_category(rtype)
+
+                # Add type section header
+                th_id = "msft_th_" + stable_id(rg_id + "/" + rtype)
+                type_headers.append({
+                    "id": th_id,
+                    "label": category,
+                    "x": MSFT_RG_PAD,
+                    "y": cursor_y,
+                    "w": 120,
+                    "h": MSFT_TYPE_HEADER_H,
+                    "parent": rg_id,
+                })
+                cursor_y += MSFT_TYPE_HEADER_H
+
+                # Layout type_nodes in grid
+                n_in_row = min(cols, len(type_nodes)) if type_nodes else 1
+                for i, node in enumerate(type_nodes):
+                    col = i % cols
+                    row = i // cols
+                    nx = MSFT_RG_PAD + col * MSFT_X_STEP
+                    ny = cursor_y + row * MSFT_Y_STEP
+                    positions[node["id"]] = (nx, ny, MSFT_CELL_W, MSFT_CELL_H)
+                    node_parents[node["id"]] = rg_id
+
+                rows = (len(type_nodes) + cols - 1) // cols
+                band_w = min(len(type_nodes), cols) * MSFT_X_STEP - (MSFT_X_STEP - MSFT_CELL_W)
+                rg_content_w = max(rg_content_w, band_w)
+                cursor_y += rows * MSFT_Y_STEP
+
+            # RG container size
+            rg_w = max(rg_content_w, MSFT_CELL_W) + 2 * MSFT_RG_PAD
+            rg_h = cursor_y + MSFT_RG_PAD
+
+            containers.append({
+                "id": rg_id,
+                "label": rg,
+                "style": MSFT_RG_STYLE,
+                "x": MSFT_REGION_PAD,
+                "y": rg_cursor_y,
+                "w": rg_w,
+                "h": rg_h,
+                "parent": region_id,
+            })
+
+            max_rg_w = max(max_rg_w, rg_w)
+            rg_cursor_y += rg_h + MSFT_RG_V_GAP
+
+        # Region container size
+        region_w = max_rg_w + 2 * MSFT_REGION_PAD
+        region_h = rg_cursor_y - MSFT_RG_V_GAP + MSFT_REGION_PAD
+
+        containers.append({
+            "id": region_id,
+            "label": region,
+            "style": MSFT_REGION_STYLE,
+            "x": MSFT_REGION_PAD,
+            "y": region_cursor_y,
+            "w": region_w,
+            "h": region_h,
+            "parent": "1",
+        })
+
+        region_cursor_y += region_h + MSFT_REGION_PAD
+
+    return positions, containers, type_headers, node_parents
+
+
 def generate_drawio(cfg: Config) -> None:
     graph_path = cfg.out("graph.json")
     if not graph_path.exists():
@@ -460,6 +657,11 @@ def generate_drawio(cfg: Config) -> None:
     # Find assets dir relative to this file
     assets_dir = Path(__file__).parent.parent.parent / "assets"
     icon_map = _load_icon_map(assets_dir)
+
+    # MSFT mode uses its own rendering path
+    if cfg.diagramMode == "MSFT":
+        _render_msft_mode(cfg, nodes, edges, icon_map)
+        return
 
     containers: List[Dict] = []
     if cfg.layout == "VNET>SUBNET":
@@ -705,6 +907,152 @@ def generate_drawio(cfg: Config) -> None:
     cfg.ensure_output_dir()
     tree.write(str(out_path), xml_declaration=True, encoding="utf-8")
     log.info("Wrote %s", out_path)
+
+    # Write icons_used.json
+    cfg.out("icons_used.json").write_text(json.dumps(icons_used, indent=2, sort_keys=True))
+
+    # Optional image exports
+    _try_export(cfg, out_path, "svg")
+    _try_export(cfg, out_path, "png")
+
+
+def _build_mxfile_root(cfg: Config) -> Tuple[ET.Element, ET.Element]:
+    """Create the mxfile/diagram/mxGraphModel/root skeleton and return (mxfile, root)."""
+    mxfile = ET.Element("mxfile")
+    diagram = ET.SubElement(mxfile, "diagram")
+    diagram.set("name", cfg.app)
+    diagram.set("id", stable_id(cfg.app))
+    model = ET.SubElement(diagram, "mxGraphModel")
+    for k, v in [("dx", "1422"), ("dy", "762"), ("grid", "1"), ("gridSize", "10"),
+                 ("guides", "1"), ("tooltips", "1"), ("connect", "1"), ("arrows", "1"),
+                 ("fold", "1"), ("page", "1"), ("pageScale", "1"),
+                 ("pageWidth", "1654"), ("pageHeight", "1169"),
+                 ("math", "0"), ("shadow", "0")]:
+        model.set(k, v)
+    root = ET.SubElement(model, "root")
+    cell0 = ET.SubElement(root, "mxCell")
+    cell0.set("id", "0")
+    cell1 = ET.SubElement(root, "mxCell")
+    cell1.set("id", "1")
+    cell1.set("parent", "0")
+    return mxfile, root
+
+
+def _render_msft_mode(
+    cfg: Config,
+    nodes: List[Dict],
+    edges: List[Dict],
+    icon_map: Dict[str, str],
+) -> None:
+    """Render the diagram in MSFT (Microsoft Architecture Center) style.
+
+    Creates region containers > RG containers > typed resource grids
+    with true hierarchical parenting via the `parent` attribute.
+    """
+    positions, containers, type_headers, node_parents = layout_nodes_msft(nodes)
+
+    icons_used: Dict[str, Any] = {"mapped": {}, "fallback": [], "unknown": []}
+
+    mxfile, root = _build_mxfile_root(cfg)
+
+    # Emit containers: regions first (lower z-order), then RGs
+    # Sort so that parent="1" (region) containers come before their child RGs
+    regions = [c for c in containers if c["parent"] == "1"]
+    rg_containers = [c for c in containers if c["parent"] != "1"]
+
+    for cont in regions + rg_containers:
+        cc = ET.SubElement(root, "mxCell")
+        cc.set("id", cont["id"])
+        cc.set("value", cont["label"])
+        cc.set("style", cont["style"])
+        cc.set("vertex", "1")
+        cc.set("parent", cont["parent"])
+        cc.set("connectable", "0")
+        cg = ET.SubElement(cc, "mxGeometry")
+        cg.set("x", str(cont["x"]))
+        cg.set("y", str(cont["y"]))
+        cg.set("width", str(cont["w"]))
+        cg.set("height", str(cont["h"]))
+        cg.set("as", "geometry")
+
+    # Emit type section headers
+    for th in type_headers:
+        tc = ET.SubElement(root, "mxCell")
+        tc.set("id", th["id"])
+        tc.set("value", th["label"])
+        tc.set("style", MSFT_TYPE_HEADER_STYLE)
+        tc.set("vertex", "1")
+        tc.set("parent", th["parent"])
+        tg = ET.SubElement(tc, "mxGeometry")
+        tg.set("x", str(th["x"]))
+        tg.set("y", str(th["y"]))
+        tg.set("width", str(th["w"]))
+        tg.set("height", str(th["h"]))
+        tg.set("as", "geometry")
+
+    # Emit resource nodes
+    node_id_map: Dict[str, str] = {}
+    for node in nodes:
+        nid = node["id"]
+        sid = stable_id(nid)
+        node_id_map[nid] = sid
+
+        if nid not in positions:
+            continue
+
+        x, y, w, h = positions[nid]
+        parent_id = node_parents.get(nid, "1")
+
+        style = _node_style(node, icon_map)
+        t = node.get("type", "")
+        if style != EXTERNAL_STYLE and style != UNKNOWN_STYLE:
+            icons_used["mapped"][t] = icons_used["mapped"].get(t, 0) + 1
+        elif not node.get("isExternal"):
+            if t not in icons_used["unknown"]:
+                icons_used["unknown"].append(t)
+
+        label = node.get("name", nid.split("/")[-1])
+        cell = ET.SubElement(root, "mxCell")
+        cell.set("id", sid)
+        cell.set("value", label)
+        cell.set("style", style)
+        cell.set("vertex", "1")
+        cell.set("parent", parent_id)
+        geo = ET.SubElement(cell, "mxGeometry")
+        geo.set("x", str(x))
+        geo.set("y", str(y))
+        geo.set("width", str(w))
+        geo.set("height", str(h))
+        geo.set("as", "geometry")
+
+    # Emit edges with orthogonal style
+    for e in edges:
+        src = node_id_map.get(e["source"])
+        tgt = node_id_map.get(e["target"])
+        if not src or not tgt:
+            continue
+        if e["kind"] == "subnet->routeTable":
+            continue  # will be shown via UDR panel in commit 3
+        edge_id = f"e_{stable_id(e['source'] + e['target'] + e['kind'])}"
+        ec = ET.SubElement(root, "mxCell")
+        ec.set("id", edge_id)
+        ec.set("value", e["kind"])
+        ec.set("style", MSFT_EDGE_STYLE)
+        ec.set("edge", "1")
+        ec.set("source", src)
+        ec.set("target", tgt)
+        ec.set("parent", "1")
+        eg = ET.SubElement(ec, "mxGeometry")
+        eg.set("relative", "1")
+        eg.set("as", "geometry")
+
+    # Write diagram.drawio
+    tree = ET.ElementTree(mxfile)
+    ET.indent(tree, space="  ")
+    out_path = cfg.out("diagram.drawio")
+    cfg.ensure_output_dir()
+    tree.write(str(out_path), xml_declaration=True, encoding="utf-8")
+    log.info("Wrote %s (MSFT mode)", out_path)
 
     # Write icons_used.json
     cfg.out("icons_used.json").write_text(json.dumps(icons_used, indent=2, sort_keys=True))
