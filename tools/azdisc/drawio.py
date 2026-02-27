@@ -6,11 +6,12 @@ import logging
 import os
 import subprocess
 import xml.etree.ElementTree as ET
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .config import Config
-from .util import stable_id
+from .util import normalize_id, stable_id
 
 log = logging.getLogger(__name__)
 
@@ -24,6 +25,15 @@ RG_PADDING = 40
 TYPE_V_GAP = 30
 REGION_PADDING = 60
 
+# VNET>SUBNET layout constants
+VNET_PADDING = 50
+VNET_HEADER = 40
+SUBNET_PADDING = 30
+SUBNET_HEADER = 30
+SUBNET_H_GAP = 30
+VNET_H_GAP = 60
+UNATTACHED_PADDING = 40
+
 # Default style strings
 EDGE_STYLE = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=0.5;exitY=1;exitDx=0;exitDy=0;"
 GROUP_STYLE = "points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.75],[1,1],[0.75,1],[0.5,1],[0.25,1],[0,1],[0,0.75],[0,0.5],[0,0.25]];shape=mxgraph.azure.groups.subscription;labelPosition=top;verticalLabelPosition=top;align=center;verticalAlign=bottom;fillColor=#dae8fc;strokeColor=#6c8ebf;fontColor=#000000;"
@@ -32,6 +42,9 @@ UNKNOWN_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=
 EXTERNAL_STYLE = "ellipse;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;verticalLabelPosition=bottom;verticalAlign=top;align=center;"
 UDR_CALLOUT_STYLE = "shape=callout;fillColor=#fff2cc;strokeColor=#d6b656;align=left;verticalAlign=top;spacingLeft=5;fontSize=10;"
 ATTR_BOX_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;fontSize=10;"
+VNET_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=top;align=left;spacingLeft=10;spacingTop=5;fontSize=13;fontStyle=1;arcSize=6;opacity=50;"
+SUBNET_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;verticalAlign=top;align=left;spacingLeft=8;spacingTop=4;fontSize=11;dashed=1;dashPattern=5 5;arcSize=8;opacity=60;"
+UNATTACHED_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;verticalAlign=top;align=left;spacingLeft=10;spacingTop=5;fontSize=13;fontStyle=1;arcSize=6;dashed=1;dashPattern=8 4;"
 
 
 def _get(obj: Any, *keys) -> Any:
@@ -144,6 +157,298 @@ def layout_nodes(nodes: List[Dict]) -> Dict[str, Tuple[int, int, int, int]]:
     return positions
 
 
+# ---------------------------------------------------------------------------
+# VNET>SUBNET layout
+# ---------------------------------------------------------------------------
+
+
+def _build_network_membership(
+    nodes: List[Dict], edges: List[Dict],
+) -> Tuple[
+    Dict[str, List[str]],   # vnet_id -> [subnet_ids]
+    Dict[str, List[str]],   # subnet_id -> [node_ids placed in this subnet]
+    List[str],               # unattached node ids
+]:
+    """Derive VNet/subnet membership from edge relationships.
+
+    Uses subnet->vnet, nic->subnet, privateEndpoint->subnet, webApp->subnet,
+    and vm->nic edges to place every resource into a subnet where possible.
+    """
+    node_by_id: Dict[str, Dict] = {n["id"]: n for n in nodes}
+
+    # 1. Map subnets to their parent VNet
+    vnet_subnets: Dict[str, List[str]] = defaultdict(list)
+    subnet_vnet: Dict[str, str] = {}
+    for e in edges:
+        if e["kind"] == "subnet->vnet":
+            sid = normalize_id(e["source"])
+            vid = normalize_id(e["target"])
+            if sid not in subnet_vnet:
+                subnet_vnet[sid] = vid
+                vnet_subnets[vid].append(sid)
+
+    # Also handle subnets whose VNet is derivable from their ARM id
+    for n in nodes:
+        if n["type"] == "microsoft.network/virtualnetworks/subnets":
+            nid = n["id"]
+            if nid not in subnet_vnet and "/subnets/" in nid:
+                vid = nid.split("/subnets/")[0]
+                subnet_vnet[nid] = vid
+                vnet_subnets[vid].append(nid)
+
+    # Sort subnet lists deterministically
+    for vid in vnet_subnets:
+        vnet_subnets[vid].sort()
+
+    # 2. Map NICs to their subnet
+    nic_subnet: Dict[str, str] = {}
+    for e in edges:
+        if e["kind"] == "nic->subnet":
+            nic_subnet[normalize_id(e["source"])] = normalize_id(e["target"])
+
+    # 3. Map resources to their subnet
+    subnet_members: Dict[str, List[str]] = defaultdict(list)
+    placed: set = set()
+
+    # Subnet nodes themselves belong to their VNet (not placed inside subnet boxes)
+    subnet_ids = set(subnet_vnet.keys())
+    vnet_ids = set(vnet_subnets.keys())
+
+    # Place VMs via vm->nic->subnet chain
+    for e in edges:
+        if e["kind"] == "vm->nic":
+            vm_id = normalize_id(e["source"])
+            nic_id = normalize_id(e["target"])
+            if nic_id in nic_subnet:
+                sid = nic_subnet[nic_id]
+                if vm_id not in placed:
+                    subnet_members[sid].append(vm_id)
+                    placed.add(vm_id)
+                # Also place the NIC in the same subnet
+                if nic_id not in placed:
+                    subnet_members[sid].append(nic_id)
+                    placed.add(nic_id)
+
+    # Place NICs that weren't placed via VM
+    for nic_id, sid in nic_subnet.items():
+        if nic_id not in placed:
+            subnet_members[sid].append(nic_id)
+            placed.add(nic_id)
+
+    # Place private endpoints
+    for e in edges:
+        if e["kind"] == "privateEndpoint->subnet":
+            pe_id = normalize_id(e["source"])
+            sid = normalize_id(e["target"])
+            if pe_id not in placed:
+                subnet_members[sid].append(pe_id)
+                placed.add(pe_id)
+
+    # Place web apps
+    for e in edges:
+        if e["kind"] == "webApp->subnet":
+            wa_id = normalize_id(e["source"])
+            sid = normalize_id(e["target"])
+            if wa_id not in placed:
+                subnet_members[sid].append(wa_id)
+                placed.add(wa_id)
+
+    # Place NSGs into their subnet (subnet->nsg)
+    for e in edges:
+        if e["kind"] == "subnet->nsg":
+            nsg_id = normalize_id(e["target"])
+            sid = normalize_id(e["source"])
+            if nsg_id not in placed:
+                subnet_members[sid].append(nsg_id)
+                placed.add(nsg_id)
+
+    # Place route tables into their subnet (subnet->routeTable)
+    for e in edges:
+        if e["kind"] == "subnet->routeTable":
+            rt_id = normalize_id(e["target"])
+            sid = normalize_id(e["source"])
+            if rt_id not in placed:
+                subnet_members[sid].append(rt_id)
+                placed.add(rt_id)
+
+    # Place load balancers near their backend NICs
+    for e in edges:
+        if e["kind"] == "loadBalancer->backendNic":
+            lb_id = normalize_id(e["source"])
+            nic_id = normalize_id(e["target"])
+            if lb_id not in placed and nic_id in nic_subnet:
+                sid = nic_subnet[nic_id]
+                subnet_members[sid].append(lb_id)
+                placed.add(lb_id)
+
+    # Place public IPs near their attachment
+    for e in edges:
+        if e["kind"] == "publicIp->attachment":
+            pip_id = normalize_id(e["source"])
+            nic_id = normalize_id(e["target"])
+            if pip_id not in placed and nic_id in nic_subnet:
+                sid = nic_subnet[nic_id]
+                subnet_members[sid].append(pip_id)
+                placed.add(pip_id)
+
+    # Place privateEndpoint targets (e.g. SQL servers) near their PE's subnet
+    for e in edges:
+        if e["kind"] == "privateEndpoint->target":
+            target_id = normalize_id(e["target"])
+            pe_id = normalize_id(e["source"])
+            if target_id not in placed:
+                # find which subnet the PE is in
+                for e2 in edges:
+                    if e2["kind"] == "privateEndpoint->subnet" and normalize_id(e2["source"]) == pe_id:
+                        sid = normalize_id(e2["target"])
+                        subnet_members[sid].append(target_id)
+                        placed.add(target_id)
+                        break
+
+    # Sort members deterministically
+    for sid in subnet_members:
+        subnet_members[sid].sort()
+
+    # Collect unattached nodes (not a VNet, not a subnet, not placed)
+    unattached = []
+    for n in nodes:
+        nid = n["id"]
+        if nid not in placed and nid not in subnet_ids and nid not in vnet_ids:
+            unattached.append(nid)
+    unattached.sort()
+
+    return dict(vnet_subnets), dict(subnet_members), unattached
+
+
+def _grid_layout(
+    node_ids: List[str], start_x: int, start_y: int, cols: int = COLS_PER_ROW,
+) -> Tuple[Dict[str, Tuple[int, int, int, int]], int, int]:
+    """Lay out a list of node IDs in a grid, returning positions and content size."""
+    positions: Dict[str, Tuple[int, int, int, int]] = {}
+    if not node_ids:
+        return positions, 0, 0
+    rows = (len(node_ids) + cols - 1) // cols
+    for i, nid in enumerate(node_ids):
+        col = i % cols
+        row = i // cols
+        x = start_x + col * (CELL_W + H_GAP)
+        y = start_y + row * (CELL_H + V_GAP)
+        positions[nid] = (x, y, CELL_W, CELL_H)
+    content_w = min(len(node_ids), cols) * (CELL_W + H_GAP) - H_GAP
+    content_h = rows * (CELL_H + V_GAP) - V_GAP
+    return positions, content_w, content_h
+
+
+def layout_nodes_vnet(
+    nodes: List[Dict], edges: List[Dict],
+) -> Tuple[
+    Dict[str, Tuple[int, int, int, int]],    # node positions
+    List[Dict],                                # container rects for VNets/subnets
+]:
+    """Compute positions for the VNET>SUBNET layout mode.
+
+    Returns:
+      positions: node_id -> (x, y, w, h)
+      containers: list of dicts with keys: id, label, style, x, y, w, h, parent
+    """
+    node_by_id: Dict[str, Dict] = {n["id"]: n for n in nodes}
+    vnet_subnets, subnet_members, unattached = _build_network_membership(nodes, edges)
+
+    positions: Dict[str, Tuple[int, int, int, int]] = {}
+    containers: List[Dict] = []
+
+    cursor_x = REGION_PADDING
+
+    # Sort VNets deterministically
+    all_vnets = sorted(vnet_subnets.keys())
+
+    for vnet_id in all_vnets:
+        subnet_ids = vnet_subnets[vnet_id]
+        vnet_label = node_by_id[vnet_id]["name"] if vnet_id in node_by_id else vnet_id.split("/")[-1]
+        vnet_container_id = "vnet_" + stable_id(vnet_id)
+
+        vnet_inner_x = cursor_x + VNET_PADDING
+        vnet_inner_y = REGION_PADDING + VNET_HEADER
+        subnet_cursor_x = vnet_inner_x
+        vnet_content_h = 0
+
+        for subnet_id in subnet_ids:
+            members = subnet_members.get(subnet_id, [])
+            subnet_label = node_by_id[subnet_id]["name"] if subnet_id in node_by_id else subnet_id.split("/")[-1]
+            subnet_container_id = "subnet_" + stable_id(subnet_id)
+
+            # Layout member nodes inside this subnet
+            inner_x = subnet_cursor_x + SUBNET_PADDING
+            inner_y = vnet_inner_y + SUBNET_HEADER
+            cols = max(2, min(COLS_PER_ROW, len(members))) if members else 2
+            member_pos, content_w, content_h = _grid_layout(members, inner_x, inner_y, cols)
+            positions.update(member_pos)
+
+            # Subnet box dimensions
+            subnet_w = max(content_w, CELL_W) + 2 * SUBNET_PADDING
+            subnet_h = max(content_h, CELL_H // 2) + SUBNET_HEADER + SUBNET_PADDING
+
+            containers.append({
+                "id": subnet_container_id,
+                "label": subnet_label,
+                "style": SUBNET_STYLE,
+                "x": subnet_cursor_x,
+                "y": vnet_inner_y,
+                "w": subnet_w,
+                "h": subnet_h,
+                "parent": vnet_container_id,
+            })
+
+            vnet_content_h = max(vnet_content_h, subnet_h)
+            subnet_cursor_x += subnet_w + SUBNET_H_GAP
+
+        # VNet box dimensions
+        vnet_w = (subnet_cursor_x - SUBNET_H_GAP) - cursor_x + VNET_PADDING
+        vnet_h = vnet_content_h + VNET_HEADER + VNET_PADDING + VNET_PADDING
+
+        # Ensure minimum width
+        vnet_w = max(vnet_w, 200)
+
+        containers.append({
+            "id": vnet_container_id,
+            "label": vnet_label,
+            "style": VNET_STYLE,
+            "x": cursor_x,
+            "y": REGION_PADDING,
+            "w": vnet_w,
+            "h": vnet_h,
+            "parent": "1",
+        })
+
+        cursor_x += vnet_w + VNET_H_GAP
+
+    # Layout unattached nodes
+    if unattached:
+        unattached_label = "Other Resources"
+        unattached_id = "unattached_group"
+        inner_x = cursor_x + UNATTACHED_PADDING
+        inner_y = REGION_PADDING + VNET_HEADER
+        cols = min(COLS_PER_ROW, len(unattached))
+        ua_pos, content_w, content_h = _grid_layout(unattached, inner_x, inner_y, cols)
+        positions.update(ua_pos)
+
+        ua_w = max(content_w, CELL_W) + 2 * UNATTACHED_PADDING
+        ua_h = content_h + VNET_HEADER + 2 * UNATTACHED_PADDING
+
+        containers.append({
+            "id": unattached_id,
+            "label": unattached_label,
+            "style": UNATTACHED_STYLE,
+            "x": cursor_x,
+            "y": REGION_PADDING,
+            "w": ua_w,
+            "h": ua_h,
+            "parent": "1",
+        })
+
+    return positions, containers
+
+
 def generate_drawio(cfg: Config) -> None:
     graph_path = cfg.out("graph.json")
     if not graph_path.exists():
@@ -156,7 +461,11 @@ def generate_drawio(cfg: Config) -> None:
     assets_dir = Path(__file__).parent.parent.parent / "assets"
     icon_map = _load_icon_map(assets_dir)
 
-    positions = layout_nodes(nodes)
+    containers: List[Dict] = []
+    if cfg.layout == "VNET>SUBNET":
+        positions, containers = layout_nodes_vnet(nodes, edges)
+    else:
+        positions = layout_nodes(nodes)
     icons_used = {"mapped": {}, "fallback": [], "unknown": []}
 
     # Build XML
@@ -189,13 +498,48 @@ def generate_drawio(cfg: Config) -> None:
     cell1.set("id", "1")
     cell1.set("parent", "0")
 
+    # Emit container group cells (VNet/subnet boxes) for VNET>SUBNET mode
+    container_id_set: set = set()
+    for cont in containers:
+        container_id_set.add(cont["id"])
+        cc = ET.SubElement(root, "mxCell")
+        cc.set("id", cont["id"])
+        cc.set("value", cont["label"])
+        cc.set("style", cont["style"])
+        cc.set("vertex", "1")
+        cc.set("parent", cont["parent"])
+        cc.set("connectable", "0")
+        cg = ET.SubElement(cc, "mxGeometry")
+        cg.set("x", str(cont["x"]))
+        cg.set("y", str(cont["y"]))
+        cg.set("width", str(cont["w"]))
+        cg.set("height", str(cont["h"]))
+        cg.set("as", "geometry")
+
     node_id_map: Dict[str, str] = {}
+
+    # In VNET>SUBNET mode, VNet and subnet nodes are represented as containers
+    # so they should not also be emitted as icon cells.
+    vnet_subnet_types = {
+        "microsoft.network/virtualnetworks",
+        "microsoft.network/virtualnetworks/subnets",
+    }
+    is_vnet_layout = cfg.layout == "VNET>SUBNET"
 
     for node in nodes:
         nid = node["id"]
         sid = stable_id(nid)
         node_id_map[nid] = sid
-        pos = positions.get(nid, (0, 0, CELL_W, CELL_H))
+
+        # Skip VNet/subnet nodes in VNET>SUBNET mode — shown as containers
+        if is_vnet_layout and node.get("type", "") in vnet_subnet_types:
+            continue
+
+        # Skip nodes with no computed position (shouldn't happen, but guard)
+        if nid not in positions:
+            continue
+
+        pos = positions[nid]
         x, y, w, h = pos
         style = _node_style(node, icon_map)
         t = node.get("type", "")
