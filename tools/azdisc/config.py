@@ -9,7 +9,7 @@ from typing import List
 
 log = logging.getLogger(__name__)
 
-VALID_LAYOUTS = {"REGION>RG>TYPE"}
+VALID_LAYOUTS = {"REGION>RG>TYPE", "VNET>SUBNET"}
 
 
 @dataclass
