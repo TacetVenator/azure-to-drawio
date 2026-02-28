@@ -1,9 +1,11 @@
 """Draw.io diagram generator."""
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
+import re
 import subprocess
 import xml.etree.ElementTree as ET
 from collections import defaultdict
@@ -86,7 +88,123 @@ def _load_icon_map(assets_dir: Path) -> Dict[str, str]:
     return {}
 
 
-def _node_style(node: Dict, icon_map: Dict[str, str]) -> str:
+def _normalize_name(s: str) -> str:
+    """Lowercase and strip all non-alphanumeric characters."""
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
+def _load_msft_icon_index(assets_dir: Path) -> Dict[str, Path]:
+    """Build a normalized keyword→path index from the Microsoft Azure icon set.
+
+    Scans assets/microsoft-azure-icons/ recursively for *.svg files.
+    Returns an empty dict if the directory does not exist.
+
+    Microsoft icon filenames follow the pattern:
+        {number}-icon-service-{Service-Name}.svg
+
+    The index maps lowercased alphanumeric keys extracted from the service name
+    to their SVG path, enabling fuzzy lookup from ARM resource type strings.
+    """
+    icons_dir = assets_dir / "microsoft-azure-icons"
+    if not icons_dir.exists():
+        return {}
+    index: Dict[str, Path] = {}
+    for svg in sorted(icons_dir.rglob("*.svg")):
+        stem = svg.stem
+        # Strip leading numeric prefix
+        clean = re.sub(r"^\d+-", "", stem)
+        # Strip "icon-service-" or "icon-" prefix
+        clean = re.sub(r"^icon-(service-)?", "", clean, flags=re.IGNORECASE)
+        # Full normalized key (e.g. "azurefunctions")
+        full_key = _normalize_name(clean)
+        if full_key and full_key not in index:
+            index[full_key] = svg
+        # Individual word tokens of ≥3 chars as secondary keys (first match wins)
+        for tok in re.split(r"[-_\s]+", clean):
+            tok_key = _normalize_name(tok)
+            if len(tok_key) >= 3 and tok_key not in index:
+                index[tok_key] = svg
+    return index
+
+
+def _match_msft_icon(arm_type: str, index: Dict[str, Path]) -> Optional[Path]:
+    """Find the best matching SVG from the Microsoft icon index for an ARM type.
+
+    Tries progressively looser matches against the normalized index keys:
+    1. Full normalized resource-type part (e.g. "storageaccounts")
+    2. Resource part with common suffixes stripped (e.g. "storage")
+    3. Normalized provider name (e.g. "documentdb")
+    """
+    if not index:
+        return None
+    cleaned = arm_type.lower().replace("microsoft.", "")
+    parts = cleaned.split("/")
+    provider = _normalize_name(parts[0]) if parts else ""
+    resource = _normalize_name(parts[-1]) if len(parts) > 1 else ""
+
+    candidates: List[str] = []
+    if resource:
+        candidates.append(resource)
+        for suffix in ("accounts", "services", "namespaces", "servers",
+                       "hubs", "vaults", "profiles", "workspaces", "clusters",
+                       "registries", "gateways", "policies", "zones"):
+            if resource != suffix and resource.endswith(suffix):
+                candidates.append(resource[: -len(suffix)])
+    if provider:
+        candidates.append(provider)
+
+    for c in candidates:
+        if c in index:
+            return index[c]
+    return None
+
+
+def _msft_svg_style(svg_path: Path) -> str:
+    """Generate a draw.io image cell style with the SVG embedded as a base64 data URI."""
+    b64 = base64.b64encode(svg_path.read_bytes()).decode("ascii")
+    data_uri = f"data:image/svg+xml;base64,{b64}"
+    return (
+        f"sketch=0;aspect=fixed;html=1;align=center;fontSize=12;"
+        f"pointerEvents=1;shape=image;image={data_uri};"
+        f"verticalLabelPosition=bottom;verticalAlign=top;"
+    )
+
+
+def _rebuild_fallback_library(assets_dir: Path, msft_icons: Dict[str, Path]) -> None:
+    """Write assets/azure-fallback.mxlibrary with icons from the Microsoft icon set.
+
+    The mxlibrary format is a JSON array that draw.io can import via
+    Extras > Edit Diagram or drag-and-drop. Each entry contains the XML
+    for one icon cell plus its display metadata.
+    """
+    if not msft_icons:
+        return
+    seen: set = set()
+    entries = []
+    for svg_path in sorted({str(p): p for p in msft_icons.values()}.values(),
+                           key=lambda p: p.name):
+        canonical = str(svg_path.resolve())
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        style = _msft_svg_style(svg_path)
+        title = svg_path.stem
+        title = re.sub(r"^\d+-", "", title)
+        title = re.sub(r"^icon-(service-)?", "", title, flags=re.IGNORECASE)
+        title = title.replace("-", " ")
+        cell_xml = (
+            f'<mxCell style="{style}" vertex="1" parent="1">'
+            f'<mxGeometry width="60" height="60" as="geometry"/></mxCell>'
+        )
+        entries.append({"xml": cell_xml, "w": 60, "h": 60,
+                        "aspect": "fixed", "title": title})
+    lib_path = assets_dir / "azure-fallback.mxlibrary"
+    lib_path.write_text(json.dumps(entries, indent=2))
+    log.info("Wrote %s (%d icons)", lib_path, len(entries))
+
+
+def _node_style(node: Dict, icon_map: Dict[str, str],
+                msft_icons: Optional[Dict[str, Path]] = None) -> str:
     if node.get("isExternal"):
         return EXTERNAL_STYLE
     t = node.get("type", "")
@@ -99,6 +217,11 @@ def _node_style(node: Dict, icon_map: Dict[str, str]) -> str:
         style = icon_map.get(parts[-1])
         if style:
             return style
+    # Microsoft icon ZIP fallback
+    if msft_icons is not None:
+        svg_path = _match_msft_icon(t, msft_icons)
+        if svg_path is not None:
+            return _msft_svg_style(svg_path)
     return UNKNOWN_STYLE
 
 
@@ -657,10 +780,11 @@ def generate_drawio(cfg: Config) -> None:
     # Find assets dir relative to this file
     assets_dir = Path(__file__).parent.parent.parent / "assets"
     icon_map = _load_icon_map(assets_dir)
+    msft_icons = _load_msft_icon_index(assets_dir)
 
     # MSFT mode uses its own rendering path
     if cfg.diagramMode == "MSFT":
-        _render_msft_mode(cfg, nodes, edges, icon_map)
+        _render_msft_mode(cfg, nodes, edges, icon_map, msft_icons)
         return
 
     containers: List[Dict] = []
@@ -743,15 +867,18 @@ def generate_drawio(cfg: Config) -> None:
 
         pos = positions[nid]
         x, y, w, h = pos
-        style = _node_style(node, icon_map)
+        style = _node_style(node, icon_map, msft_icons)
         t = node.get("type", "")
-        if style != EXTERNAL_STYLE and style != UNKNOWN_STYLE:
-            icons_used["mapped"][t] = icons_used["mapped"].get(t, 0) + 1
-        elif node.get("isExternal"):
+        if style == EXTERNAL_STYLE:
             pass
-        else:
+        elif style == UNKNOWN_STYLE:
             if t not in icons_used["unknown"]:
                 icons_used["unknown"].append(t)
+        elif "data:image/svg+xml" in style:
+            if t not in icons_used["fallback"]:
+                icons_used["fallback"].append(t)
+        else:
+            icons_used["mapped"][t] = icons_used["mapped"].get(t, 0) + 1
 
         label = node.get("name", nid.split("/")[-1])
         cell = ET.SubElement(root, "mxCell")
@@ -911,6 +1038,9 @@ def generate_drawio(cfg: Config) -> None:
     # Write icons_used.json
     cfg.out("icons_used.json").write_text(json.dumps(icons_used, indent=2, sort_keys=True))
 
+    # Regenerate fallback library whenever MSFT icons are present
+    _rebuild_fallback_library(assets_dir, msft_icons)
+
     # Optional image exports
     _try_export(cfg, out_path, "svg")
     _try_export(cfg, out_path, "png")
@@ -1043,6 +1173,7 @@ def _render_msft_mode(
     nodes: List[Dict],
     edges: List[Dict],
     icon_map: Dict[str, str],
+    msft_icons: Optional[Dict[str, Path]] = None,
 ) -> None:
     """Render the diagram in MSFT (Microsoft Architecture Center) style.
 
@@ -1104,13 +1235,18 @@ def _render_msft_mode(
         x, y, w, h = positions[nid]
         parent_id = node_parents.get(nid, "1")
 
-        style = _node_style(node, icon_map)
+        style = _node_style(node, icon_map, msft_icons)
         t = node.get("type", "")
-        if style != EXTERNAL_STYLE and style != UNKNOWN_STYLE:
-            icons_used["mapped"][t] = icons_used["mapped"].get(t, 0) + 1
-        elif not node.get("isExternal"):
+        if style == EXTERNAL_STYLE:
+            pass
+        elif style == UNKNOWN_STYLE:
             if t not in icons_used["unknown"]:
                 icons_used["unknown"].append(t)
+        elif "data:image/svg+xml" in style:
+            if t not in icons_used["fallback"]:
+                icons_used["fallback"].append(t)
+        else:
+            icons_used["mapped"][t] = icons_used["mapped"].get(t, 0) + 1
 
         label = node.get("name", nid.split("/")[-1])
         cell = ET.SubElement(root, "mxCell")
@@ -1209,6 +1345,10 @@ def _render_msft_mode(
 
     # Write icons_used.json
     cfg.out("icons_used.json").write_text(json.dumps(icons_used, indent=2, sort_keys=True))
+
+    # Regenerate fallback library whenever MSFT icons are present
+    assets_dir = Path(__file__).parent.parent.parent / "assets"
+    _rebuild_fallback_library(assets_dir, msft_icons or {})
 
     # Optional image exports
     _try_export(cfg, out_path, "svg")

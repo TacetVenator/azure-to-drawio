@@ -290,5 +290,7 @@
 
   "microsoft.compute/fleets": "sketch=0;aspect=fixed;html=1;align=center;fontSize=12;pointerEvents=1;shape=image;image=img/lib/azure2/other/Compute_Fleet.svg;verticalLabelPosition=bottom;verticalAlign=top;",
   "microsoft.scvmm/virtualmachines": "sketch=0;aspect=fixed;html=1;align=center;fontSize=12;pointerEvents=1;shape=image;image=img/lib/azure2/other/SCVMM_Management_Servers.svg;verticalLabelPosition=bottom;verticalAlign=top;",
-  "microsoft.connectedvmwarevsphere/virtualmachines": "sketch=0;aspect=fixed;html=1;align=center;fontSize=12;pointerEvents=1;shape=image;image=img/lib/azure2/compute/Virtual_Machine.svg;verticalLabelPosition=bottom;verticalAlign=top;"
+  "microsoft.connectedvmwarevsphere/virtualmachines": "sketch=0;aspect=fixed;html=1;align=center;fontSize=12;pointerEvents=1;shape=image;image=img/lib/azure2/compute/Virtual_Machine.svg;verticalLabelPosition=bottom;verticalAlign=top;",
+  "microsoft.web/functions": "sketch=0;aspect=fixed;html=1;align=center;fontSize=12;pointerEvents=1;shape=image;image=img/lib/azure2/compute/Function_Apps.svg;verticalLabelPosition=bottom;verticalAlign=top;",
+  "microsoft.network/vpngateways": "sketch=0;aspect=fixed;html=1;align=center;fontSize=12;pointerEvents=1;shape=image;image=img/lib/azure2/networking/Virtual_Network_Gateways.svg;verticalLabelPosition=bottom;verticalAlign=top;"
 }
