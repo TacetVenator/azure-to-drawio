@@ -4,5 +4,6 @@
   "seedResourceGroups": ["rg-app-dev", "rg-app-prod"],
   "outputDir": "app/myapp/out",
   "includeRbac": true,
-  "layout": "REGION>RG>TYPE"
+  "layout": "REGION>RG>TYPE",
+  "diagramMode": "BANDS"
 }

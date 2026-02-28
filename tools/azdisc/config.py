@@ -10,6 +10,7 @@ from typing import List
 log = logging.getLogger(__name__)
 
 VALID_LAYOUTS = {"REGION>RG>TYPE", "VNET>SUBNET"}
+VALID_DIAGRAM_MODES = {"BANDS", "MSFT"}
 
 
 @dataclass
@@ -20,6 +21,7 @@ class Config:
     outputDir: str
     includeRbac: bool = False
     layout: str = "REGION>RG>TYPE"
+    diagramMode: str = "BANDS"
 
     def out(self, filename: str) -> Path:
         return Path(self.outputDir) / filename
@@ -41,6 +43,9 @@ def load_config(path: str) -> Config:
     layout = data.get("layout", "REGION>RG>TYPE")
     if layout not in VALID_LAYOUTS:
         raise ValueError(f"Unsupported layout: {layout!r}. Valid: {VALID_LAYOUTS}")
+    diagram_mode = data.get("diagramMode", "BANDS")
+    if diagram_mode not in VALID_DIAGRAM_MODES:
+        raise ValueError(f"Unsupported diagramMode: {diagram_mode!r}. Valid: {VALID_DIAGRAM_MODES}")
     cfg = Config(
         app=data["app"],
         subscriptions=data["subscriptions"],
@@ -48,6 +53,7 @@ def load_config(path: str) -> Config:
         outputDir=data["outputDir"],
         includeRbac=data.get("includeRbac", False),
         layout=layout,
+        diagramMode=diagram_mode,
     )
     log.info("Loaded config for app=%s, subs=%d, seedRGs=%d", cfg.app, len(cfg.subscriptions), len(cfg.seedResourceGroups))
     return cfg
