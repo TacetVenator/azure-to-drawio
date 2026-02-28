@@ -119,6 +119,34 @@ Compare two `inventory.json` snapshots and produce a diagram that highlights add
 
 ---
 
+## RBAC Enhancements
+
+### Resolve role definition IDs to role names
+
+**Priority:** Medium
+
+When `includeRbac` is enabled, the tool queries `authorizationresources` for role assignments and creates `rbac_assignment` edges in the graph. However, the role assignments only contain the raw role definition ID (e.g., `/subscriptions/.../providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7`), not the human-readable role name (e.g., "Reader").
+
+**Work:**
+- Query `authorizationresources` for `microsoft.authorization/roledefinitions` to build a role definition ID → role name lookup table
+- Enrich each role assignment node with the resolved role name (e.g., "Contributor", "Reader", "Network Contributor")
+- Display the role name as a node label or attribute in the diagram instead of the raw GUID
+- Include role names in `rbac.json` output
+
+### Generate a Markdown RBAC report
+
+**Priority:** Medium
+
+Add a dedicated section in `docs.py` that generates a Markdown RBAC summary (similar to how `routing.md` documents UDRs and NSGs). This would make role assignments easy to review without inspecting raw JSON.
+
+**Work:**
+- Add an `_write_rbac()` function in `docs.py` that reads `rbac.json` and produces `rbac.md`
+- Include a summary (total assignments, unique principals, unique roles)
+- Group assignments by scope (resource group or resource) with a table showing principal ID, role name, and assignment type (direct vs inherited)
+- Depends on role definition ID resolution (above) for human-readable role names
+
+---
+
 ## Data Enrichment
 
 ### Cost annotations
