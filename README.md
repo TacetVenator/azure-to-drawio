@@ -637,27 +637,12 @@ The workflow at `.github/workflows/tests.yml` runs on every push and pull reques
 
 ---
 
-## Next Steps and Future Improvements
+## Backlog
 
-### Near-Term
+See [Backlog.md](Backlog.md) for planned improvements and future work, including:
 
-- **More icon mappings** — Expand `azure_icon_map.json` to cover Cosmos DB, Event Hubs, Service Bus, Azure Functions, API Management, Front Door, Azure Firewall, Bastion, Azure Monitor, and more
-- **Subscription/region grouping in VNET>SUBNET mode** — Wrap VNets in subscription or region containers for multi-subscription environments
-- **Auto-generated legend** — Add a legend box to the diagram mapping icons to resource types
-- **Configurable grid columns** — Allow `config.json` to override the default 6-column wrap limit
-
-### Medium-Term
-
-- **Additional layout modes** — `SUBSCRIPTION>RG` for subscription-centric views; force-directed layout for complex topologies
-- **Diff mode** — Compare two inventory snapshots and highlight added/removed/changed resources
-- **Cost annotations** — Integrate Azure Cost Management data to annotate resources with monthly spend
-- **Tag-based filtering and coloring** — Filter resources by Azure tags or apply color-coding based on tag values
-- **Custom edge rules** — User-defined edge extraction rules in config for resource types not yet supported
-
-### Long-Term Vision
-
-- **Live sync** — Watch for Azure resource changes and auto-update diagrams
-- **Multi-format export** — Generate Mermaid, PlantUML, or Terraform-graph-compatible output
-- **Web UI** — Browser-based interface for configuring, previewing, and editing diagrams
-- **Policy visualization** — Overlay Azure Policy assignments and compliance state
-- **Private link topology** — Dedicated view showing private endpoint chains across VNets and subscriptions
+- Expanding icon coverage to all draw.io `azure2` icons and Microsoft's official icon ZIP fallback
+- Additional layout modes (`SUBSCRIPTION>RG`, force-directed)
+- Diff mode, cost annotations, tag-based filtering
+- Multi-format export (Mermaid, PlantUML, Visio)
+- Web UI, live sync, policy visualization
