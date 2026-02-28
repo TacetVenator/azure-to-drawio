@@ -189,7 +189,8 @@ The tool reads a JSON configuration file. An example is provided at `app/myapp/c
   "seedResourceGroups": ["rg-app-dev", "rg-app-prod"],
   "outputDir": "app/myapp/out",
   "includeRbac": true,
-  "layout": "REGION>RG>TYPE"
+  "layout": "REGION>RG>TYPE",
+  "diagramMode": "BANDS"
 }
 ```
 
@@ -203,6 +204,7 @@ The tool reads a JSON configuration file. An example is provided at `app/myapp/c
 | `outputDir` | `string` | Yes | — | Directory where all output files are written. Created automatically if it does not exist. |
 | `includeRbac` | `bool` | No | `false` | When `true`, the RBAC stage queries `authorizationresources` for role assignments and adds `rbac_assignment` edges to the graph. |
 | `layout` | `string` | No | `"REGION>RG>TYPE"` | Diagram layout mode. Must be one of: `"REGION>RG>TYPE"`, `"VNET>SUBNET"`. See [Layout Modes](#layout-modes). |
+| `diagramMode` | `string` | No | `"BANDS"` | Diagram rendering mode. Must be one of: `"BANDS"`, `"MSFT"`. See [Diagram Modes](#diagram-modes). |
 
 ---
 
@@ -259,6 +261,52 @@ Resources not attached to any subnet are collected into an "Other Resources" con
 In this mode, VNet and subnet nodes are rendered as containers rather than icons — they do not appear as separate icon cells.
 
 **Best for:** Network architecture diagrams, security reviews, subnet capacity planning.
+
+---
+
+## Diagram Modes
+
+The `diagramMode` config field controls the visual rendering style. This is independent of the `layout` field — `layout` determines how resources are grouped, while `diagramMode` determines the visual style of containers, edges, and UDR presentation.
+
+### `BANDS` (Default)
+
+The original rendering mode. Resources are placed directly on the canvas with orthogonal connector edges, UDR callout boxes, and purple attribute info boxes. Works with both `REGION>RG>TYPE` and `VNET>SUBNET` layouts.
+
+### `MSFT`
+
+Microsoft Architecture Center style rendering. Resources are organized inside hierarchical containers with true draw.io parenting:
+
+```
+┌── Region: eastus ──────────────────────────────────────┐    ┌─────────────────────┐
+│  ┌── RG: rg-prod ───────────────────────────────────┐  │    │ UDR: rt-web         │
+│  │  Compute                                          │  │    │ 10.0.0.0/8 → VNet   │
+│  │  ┌──────────┐ ┌──────────┐                        │  │    │ 0.0.0.0/0 → FW      │
+│  │  │ vm-web   │ │ vm-app   │                        │  │    └─────────────────────┘
+│  │  └──────────┘ └──────────┘                        │  │
+│  │  Networking                                       │  │
+│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐          │  │
+│  │  │ vnet     │ │ nic-web  │ │ nsg-web  │          │  │
+│  │  └──────────┘ └──────────┘ └──────────┘          │  │
+│  └───────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────┘
+```
+
+Key differences from `BANDS` mode:
+
+| Feature | BANDS | MSFT |
+|---------|-------|------|
+| Region grouping | Implicit (layout only) | Explicit dashed container |
+| Resource group grouping | Implicit (layout only) | Rounded, filled container |
+| Node parenting | All nodes parent to root | Hierarchical: region → RG → node |
+| Type sections | Type bands (layout) | Labeled headers (Compute, Networking, …) |
+| UDR display | Callout boxes inline | Side panels with route details |
+| Edge style | Labeled orthogonal | Orthogonal without labels |
+
+Within each resource group container, resources are organized by type category (Compute, Networking, Storage, Databases, etc.) with section headers. Resources are laid out in a 6-column grid within each section.
+
+UDR side panels are placed to the right of the region containers and connected to subnet nodes with `udr_detail` edges. Each panel shows the route table name and up to 8 routes (with a truncation indicator for larger tables).
+
+**Best for:** Architecture documentation, presentations, Microsoft Architecture Center-style diagrams.
 
 ---
 
@@ -452,8 +500,10 @@ Edge analysis report containing:
 
 Network routing and security details:
 
-1. **User-Defined Routes (UDR)** — For each subnet that has an associated route table, lists the route table ID and a table of all routes with `destination`, `nextHopType`, and `nextHopIp`.
-2. **Network Security Groups** — For each NSG, lists inbound and outbound security rules in a table with `name`, `priority`, `protocol`, `src`, `dst`, and `action`. Rules are sorted by priority.
+1. **Summary** — Counts of route tables and subnets with UDRs, with a list of affected subnet names.
+2. **Route Tables** — For each route table, lists all routes in a table with `name`, `destination`, `nextHopType`, and `nextHopIp`. Routes are sorted deterministically by address prefix, hop type, hop IP, and name.
+3. **Subnet UDR Associations** — Maps each subnet to its associated route table.
+4. **Network Security Groups** — For each NSG, lists inbound and outbound security rules in a table with `name`, `priority`, `protocol`, `src`, `dst`, and `action`. Rules are sorted by priority.
 
 ---
 
@@ -525,8 +575,9 @@ For each resource, the draw.io style is resolved in this order:
 
 1. **Exact match** — The full lowercase type string is looked up in `assets/azure_icon_map.json`.
 2. **Suffix match** — If no exact match, the last path segment of the type is tried (e.g., for `microsoft.foo/bar/loadbalancers`, it tries `loadbalancers`).
-3. **Fallback** — If neither matches, a generic blue rounded rectangle is used.
-4. **External** — Unresolved/external nodes use a red ellipse style.
+3. **Microsoft icon fallback** — If no draw.io `azure2` icon matches, the tool attempts a fuzzy match against SVGs in `assets/microsoft-azure-icons/` (if present). Matched icons are embedded as base64 data URIs.
+4. **Generic fallback** — If no icon matches at all, a generic blue rounded rectangle is used.
+5. **External** — Unresolved/external nodes use a red ellipse style.
 
 ### Transitive Discovery
 
@@ -543,30 +594,34 @@ The expand stage follows ARM ID references recursively (up to 50 iterations) unt
 
 ## Supported Azure Resource Types (Icons)
 
-The tool discovers and renders any Azure resource type. The following 18 types have dedicated Azure icons mapped in `assets/azure_icon_map.json`:
+The tool discovers and renders any Azure resource type. **248 resource types** have dedicated Azure icons mapped in `assets/azure_icon_map.json`, covering the following categories:
 
-| Resource Type | Icon | Category |
-|---------------|------|----------|
-| `microsoft.compute/virtualmachines` | Virtual Machine | Compute |
-| `microsoft.compute/disks` | Managed Disk | Compute |
-| `microsoft.containerservice/managedclusters` | Kubernetes Service (AKS) | Containers |
-| `microsoft.network/virtualnetworks` | Virtual Network | Networking |
-| `microsoft.network/virtualnetworks/subnets` | Subnet | Networking |
-| `microsoft.network/networkinterfaces` | Network Interface | Networking |
-| `microsoft.network/networksecuritygroups` | Network Security Group | Networking |
-| `microsoft.network/routetables` | Route Table | Networking |
-| `microsoft.network/loadbalancers` | Load Balancer | Networking |
-| `microsoft.network/publicipaddresses` | Public IP Address | Networking |
-| `microsoft.network/privateendpoints` | Private Endpoint | Networking |
-| `microsoft.network/applicationgateways` | Application Gateway | Networking |
-| `microsoft.web/sites` | App Service | App Services |
-| `microsoft.web/serverfarms` | App Service Plan | App Services |
-| `microsoft.storage/storageaccounts` | Storage Account | Storage |
-| `microsoft.keyvault/vaults` | Key Vault | Security |
-| `microsoft.sql/servers` | SQL Server | Databases |
-| `microsoft.sql/servers/databases` | SQL Database | Databases |
+| Category | Types | Examples |
+|----------|-------|---------|
+| Networking | 41 | Virtual Networks, Subnets, NICs, NSGs, Load Balancers, Application Gateways, Firewalls, DNS Zones, ExpressRoute, VPN Gateways, Private Endpoints, Traffic Manager, Front Door, NAT Gateways, Bastion, Private Link, … |
+| Compute | 21 | Virtual Machines, VM Scale Sets, Disks, Snapshots, Images, Availability Sets, Host Groups, Galleries, SSH Keys, … |
+| Web | 9 | App Services, App Service Plans, Function Apps, Static Web Apps, App Service Environments, … |
+| SQL & Databases | 7 | SQL Servers, SQL Databases, Elastic Pools, Managed Instances, … |
+| Monitoring | 7 | Application Insights, Log Analytics, Alerts, Autoscale, Action Groups, Dashboards, … |
+| Storage | 5 | Storage Accounts, Data Lake, NetApp Files, Storage Movers, … |
+| Event Grid | 5 | Topics, Subscriptions, Domains, System Topics, Partner Namespaces |
+| Containers | 3 | AKS, Container Registry, Container Instances, … |
+| Integration | 3 | Logic Apps, Service Bus, Event Hubs, … |
+| Other | 147 | Key Vault, Cosmos DB, Redis Cache, API Management, Cognitive Services, Machine Learning, IoT Hub, DevTest Labs, Managed Identity, and many more |
 
 To add icons for additional resource types, add entries to `assets/azure_icon_map.json`. The key is the lowercase ARM resource type; the value is a draw.io style string referencing an SVG from the built-in `azure2` shape library. Check `icons_used.json` after a run to see which types have `"unknown"` mappings.
+
+### Microsoft Icon ZIP Fallback
+
+For resource types not covered by `azure_icon_map.json`, the tool supports an optional fallback using Microsoft's official Azure icon SVGs. Place the extracted icon files in `assets/microsoft-azure-icons/` (SVG files following Microsoft's naming pattern: `{number}-icon-service-{Service-Name}.svg`).
+
+When this directory exists, the tool:
+1. Builds a normalized keyword index from all SVG filenames
+2. Attempts fuzzy matching against ARM resource type strings (full resource type, suffix-stripped variants, provider name)
+3. Embeds matched SVGs as base64 data URIs in the draw.io cell style
+4. Regenerates `assets/azure-fallback.mxlibrary` — a draw.io-importable library of all discovered Microsoft icons
+
+Types resolved via this fallback are reported as `"fallback"` (rather than `"mapped"`) in `icons_used.json`.
 
 ---
 
@@ -577,10 +632,10 @@ azure-to-drawio/
 ├── tools/azdisc/                      # Main Python package
 │   ├── __main__.py                    # CLI entry point: argument parsing and subcommand dispatch
 │   ├── arg.py                         # Azure Resource Graph query wrapper (paging, batching via az CLI)
-│   ├── config.py                      # Config dataclass, JSON loader, layout validation
+│   ├── config.py                      # Config dataclass, JSON loader, layout/diagramMode validation
 │   ├── discover.py                    # Seed, transitive expand, and RBAC discovery stages
 │   ├── graph.py                       # Graph model: node/edge extraction, child merging, attributes
-│   ├── drawio.py                      # Draw.io XML generation, both layout engines, image export
+│   ├── drawio.py                      # Draw.io XML generation, all layout engines + MSFT mode, image export
 │   ├── docs.py                        # Markdown documentation generators (catalog, edges, routing)
 │   ├── util.py                        # ARM ID regex, normalization, stable ID hashing, logging setup
 │   └── tests/
@@ -592,14 +647,17 @@ azure-to-drawio/
 │       ├── test_child_resources.py    # Child resource detection, parent merging, attribute collection
 │       ├── test_layout.py             # REGION>RG>TYPE: determinism, positive coords, no overlaps
 │       ├── test_vnet_layout.py        # VNET>SUBNET: containers, nesting, labels, determinism
+│       ├── test_msft_layout.py        # MSFT mode: region/RG containers, type headers, UDR panels
+│       ├── test_msft_icon_fallback.py # Microsoft icon ZIP fallback: index building, fuzzy matching
 │       └── test_integration.py        # Full pipeline: graph build → drawio XML → PNG export
 ├── assets/
-│   ├── azure_icon_map.json            # Azure resource type → draw.io style string mapping (18 types)
-│   └── azure-fallback.mxlibrary       # Fallback icon library (placeholder for future use)
+│   ├── azure_icon_map.json            # Azure resource type → draw.io style string mapping (248 types)
+│   ├── azure-fallback.mxlibrary       # Auto-generated draw.io library from Microsoft icon SVGs
+│   └── microsoft-azure-icons/         # (optional) Microsoft official Azure icon SVGs for fallback
 ├── app/myapp/
 │   └── config.json                    # Example configuration file
 └── .github/workflows/
-    └── tests.yml                      # CI: pytest, diagram generation, artifact upload, PR comment
+    └── tests.yml                      # CI: pytest, BANDS + MSFT diagram generation, artifact upload, PR comments
 ```
 
 ---
@@ -617,8 +675,10 @@ All tests run entirely offline using fixture data — no Azure credentials or ne
 - **Stable IDs** — Determinism, fixed length (16 hex chars), case insensitivity
 - **Edge extraction** — All 15 edge kinds individually, sort order, no duplicates
 - **Child resources** — Type detection heuristic, parent ID derivation, attribute collection (VM SKU/image, SQL SKU)
-- **Layout engines** — Both `REGION>RG>TYPE` and `VNET>SUBNET`: determinism, positive coordinates, no overlapping nodes, correct cell dimensions
+- **Layout engines** — `REGION>RG>TYPE`, `VNET>SUBNET`, and `MSFT` mode: determinism, positive coordinates, no overlapping nodes, correct cell dimensions
 - **VNET>SUBNET containers** — VNet/subnet container cells exist, correct parent nesting, expected labels
+- **MSFT mode** — Region/RG container hierarchy, type section headers, hierarchical parenting via `parent` attribute, UDR side panels with route details, deterministic layout
+- **Microsoft icon fallback** — Index building from SVG filenames, normalized keyword matching, fuzzy lookup for ARM types, base64 data URI style generation, fallback library regeneration
 - **Full integration** — Fixture → `build_graph` → `generate_drawio` → validates XML structure, vertex/edge cell counts, geometry, node labels
 - **PNG/SVG export** — When the `drawio` CLI is available: valid PNG header, SVG file created. Graceful skip when CLI is absent.
 
@@ -631,9 +691,11 @@ The workflow at `.github/workflows/tests.yml` runs on every push and pull reques
 1. Sets up Python 3.11 and installs `pytest`
 2. Installs the draw.io Desktop CLI (with an `xvfb-run` wrapper for headless export)
 3. Runs the full pytest suite
-4. Generates an integration diagram from the `app_contoso.json` fixture
-5. Uploads `diagram.drawio`, `diagram.svg`, and `diagram.png` as GitHub Actions artifacts
-6. On pull requests, posts (or updates) a comment with diagram statistics (node/edge count, PNG size) and a link to download the artifacts
+4. Generates integration diagrams from the `app_contoso.json` fixture in **both** `BANDS` and `MSFT` diagram modes
+5. Uploads separate artifact bundles for each mode:
+   - `test-diagrams-bands` — `diagram.drawio`, `diagram.svg`, `diagram.png`
+   - `test-diagrams-msft` — `diagram.drawio`, `diagram.svg`, `diagram.png`, `routing.md`, `icons_used.json`
+6. On pull requests, posts (or updates) two separate PR comments — one for each diagram mode — with statistics (node/edge count, icon coverage, UDR counts, PNG size) and download links
 
 ---
 
@@ -641,7 +703,6 @@ The workflow at `.github/workflows/tests.yml` runs on every push and pull reques
 
 See [Backlog.md](Backlog.md) for planned improvements and future work, including:
 
-- Expanding icon coverage to all draw.io `azure2` icons and Microsoft's official icon ZIP fallback
 - Additional layout modes (`SUBSCRIPTION>RG`, force-directed)
 - Diff mode, cost annotations, tag-based filtering
 - Multi-format export (Mermaid, PlantUML, Visio)
