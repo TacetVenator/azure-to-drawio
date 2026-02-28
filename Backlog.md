@@ -119,6 +119,22 @@ Compare two `inventory.json` snapshots and produce a diagram that highlights add
 
 ---
 
+## RBAC Enhancements
+
+### Resolve role definition IDs to role names
+
+**Priority:** Medium
+
+When `includeRbac` is enabled, the tool queries `authorizationresources` for role assignments and creates `rbac_assignment` edges in the graph. However, the role assignments only contain the raw role definition ID (e.g., `/subscriptions/.../providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7`), not the human-readable role name (e.g., "Reader").
+
+**Work:**
+- Query `authorizationresources` for `microsoft.authorization/roledefinitions` to build a role definition ID → role name lookup table
+- Enrich each role assignment node with the resolved role name (e.g., "Contributor", "Reader", "Network Contributor")
+- Display the role name as a node label or attribute in the diagram instead of the raw GUID
+- Include role names in `rbac.json` output and any future RBAC summary documentation
+
+---
+
 ## Data Enrichment
 
 ### Cost annotations
