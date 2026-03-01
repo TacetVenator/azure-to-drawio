@@ -39,122 +39,59 @@ jobs:
       - name: Run tests
         run: python -m pytest tools/azdisc/tests/ -v --tb=short
 
-      - name: Generate integration diagram (BANDS mode)
-        run: |
-          mkdir -p test-output/bands
-          python -c "
-          from pathlib import Path
-          from tools.azdisc.config import Config
-          from tools.azdisc.graph import build_graph
-          from tools.azdisc.drawio import generate_drawio
+      - name: Generate all layout × mode combinations (test-all)
+        run: python -m tools.azdisc -v test-all -o out/test-all
 
-          out = Path('test-output/bands')
-          fixture = Path('tools/azdisc/tests/fixtures/app_contoso.json')
-          (out / 'inventory.json').write_text(fixture.read_text())
-          (out / 'unresolved.json').write_text('[]')
-
-          cfg = Config(
-              app='contoso-app',
-              subscriptions=['00000000-0000-0000-0000-000000000001'],
-              seedResourceGroups=['rg-contoso-prod'],
-              outputDir=str(out),
-              diagramMode='BANDS',
-          )
-          build_graph(cfg)
-          generate_drawio(cfg)
-          print('BANDS:', [f.name for f in out.iterdir()])
-          "
-
-      - name: Generate integration diagram (MSFT mode)
-        run: |
-          mkdir -p test-output/msft
-          python -c "
-          from pathlib import Path
-          from tools.azdisc.config import Config
-          from tools.azdisc.graph import build_graph
-          from tools.azdisc.drawio import generate_drawio
-          from tools.azdisc.docs import generate_docs
-
-          out = Path('test-output/msft')
-          fixture = Path('tools/azdisc/tests/fixtures/app_contoso.json')
-          (out / 'inventory.json').write_text(fixture.read_text())
-          (out / 'unresolved.json').write_text('[]')
-
-          cfg = Config(
-              app='contoso-app-msft',
-              subscriptions=['00000000-0000-0000-0000-000000000001'],
-              seedResourceGroups=['rg-contoso-prod'],
-              outputDir=str(out),
-              diagramMode='MSFT',
-          )
-          build_graph(cfg)
-          generate_drawio(cfg)
-          generate_docs(cfg)
-          print('MSFT:', [f.name for f in out.iterdir()])
-          "
-
-      - name: Upload BANDS diagram artifacts
+      - name: Upload test-all artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: test-diagrams-bands
-          path: test-output/bands/diagram.*
+          name: test-diagrams-all-combinations
+          path: out/test-all/
 
-      - name: Upload MSFT diagram artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-diagrams-msft
-          path: |
-            test-output/msft/diagram.*
-            test-output/msft/routing.md
-            test-output/msft/icons_used.json
-
-      - name: Post BANDS diagram to PR
+      - name: Post combination summary to PR
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
+            const path = require('path');
 
-            if (!fs.existsSync('test-output/bands/diagram.png')) {
-              console.log('No BANDS diagram.png found, skipping PR comment.');
-              return;
-            }
-
-            let stats = '';
-            try {
-              const graph = JSON.parse(fs.readFileSync('test-output/bands/graph.json', 'utf8'));
-              stats = `**${graph.nodes.length} nodes**, **${graph.edges.length} edges**`;
-            } catch (e) {
-              stats = '_(stats unavailable)_';
-            }
-
-            const pngSize = Math.round(fs.statSync('test-output/bands/diagram.png').size / 1024);
+            const root = 'out/test-all';
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
             const sha = context.payload.pull_request.head.sha.substring(0, 7);
 
+            // Walk fixture/combo directories and collect stats
+            const rows = [];
+            for (const fixture of fs.readdirSync(root).sort()) {
+              const fixtureDir = path.join(root, fixture);
+              if (!fs.statSync(fixtureDir).isDirectory()) continue;
+              for (const combo of fs.readdirSync(fixtureDir).sort()) {
+                const comboDir = path.join(fixtureDir, combo);
+                if (!fs.statSync(comboDir).isDirectory()) continue;
+                let nodes = '?', edges = '?';
+                try {
+                  const g = JSON.parse(fs.readFileSync(path.join(comboDir, 'graph.json'), 'utf8'));
+                  nodes = g.nodes.length;
+                  edges = g.edges.length;
+                } catch (e) {}
+                const hasPng = fs.existsSync(path.join(comboDir, 'diagram.png'));
+                rows.push(`| \`${fixture}\` | \`${combo}\` | ${nodes} | ${edges} | ${hasPng ? 'yes' : 'no'} |`);
+              }
+            }
+
             const body = [
-              '## Integration Test Diagram — BANDS mode',
+              '## Integration Test — all layout × mode combinations',
               '',
-              `Generated from \`app_contoso.json\` fixture at ${sha} — ${stats} | PNG: ${pngSize} KB`,
+              `Generated at ${sha} from all fixture files × all layouts × all diagram modes.`,
               '',
-              `\`diagramMode: "BANDS"\` (REGION > RG > TYPE band layout)`,
+              `[**Download test-diagrams-all-combinations artifact**](${runUrl})`,
               '',
-              `[**Download test-diagrams-bands artifact**](${runUrl}) (contains \`.drawio\`, \`.png\`, \`.svg\`)`,
-              '',
-              '<details>',
-              '<summary>Diagram contents</summary>',
-              '',
-              '| Layer | Resources |',
-              '|-------|-----------|',
-              '| **Network** | VNet, 3 subnets, 3 NSGs, route table, LB, public IP |',
-              '| **Compute** | 2 VMs (web + app), 3 disks, 2 NICs |',
-              '| **Data** | SQL Server + database, private endpoint |',
-              '| **Support** | Key Vault, storage account |',
-              '',
-              '</details>',
+              '| Fixture | Combination | Nodes | Edges | PNG |',
+              '|---------|-------------|------:|------:|-----|',
+              ...rows,
             ].join('\n');
 
-            const marker = '## Integration Test Diagram — BANDS mode';
+            const marker = '## Integration Test — all layout × mode combinations';
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -162,118 +99,14 @@ jobs:
             });
 
             const existing = comments.find(c => c.body && c.body.startsWith(marker));
-
             if (existing) {
               await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: existing.id, body,
               });
-              console.log(`Updated existing BANDS comment ${existing.id}`);
             } else {
               await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body,
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: context.issue.number, body,
               });
-              console.log('Created new BANDS PR comment');
-            }
-
-      - name: Post MSFT diagram to PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-
-            if (!fs.existsSync('test-output/msft/diagram.png')) {
-              console.log('No MSFT diagram.png found, skipping PR comment.');
-              return;
-            }
-
-            let stats = '';
-            try {
-              const graph = JSON.parse(fs.readFileSync('test-output/msft/graph.json', 'utf8'));
-              stats = `**${graph.nodes.length} nodes**, **${graph.edges.length} edges**`;
-            } catch (e) {
-              stats = '_(stats unavailable)_';
-            }
-
-            let iconsInfo = '';
-            try {
-              const icons = JSON.parse(fs.readFileSync('test-output/msft/icons_used.json', 'utf8'));
-              const mappedCount = Object.keys(icons.mapped).length;
-              const unknownCount = icons.unknown.length;
-              iconsInfo = ` | Icons: ${mappedCount} mapped, ${unknownCount} unmapped`;
-              if (unknownCount > 0) {
-                iconsInfo += ` (${icons.unknown.join(', ')})`;
-              }
-            } catch (e) { /* ignore */ }
-
-            let routingSummary = '';
-            try {
-              const routing = fs.readFileSync('test-output/msft/routing.md', 'utf8');
-              const rtMatch = routing.match(/Route tables: (\d+)/);
-              const udrMatch = routing.match(/Subnets with UDRs: (\d+)/);
-              if (rtMatch && udrMatch) {
-                routingSummary = ` | UDR: ${rtMatch[1]} route tables, ${udrMatch[1]} subnets`;
-              }
-            } catch (e) { /* ignore */ }
-
-            const pngSize = Math.round(fs.statSync('test-output/msft/diagram.png').size / 1024);
-            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
-            const sha = context.payload.pull_request.head.sha.substring(0, 7);
-
-            const body = [
-              '## Integration Test Diagram — MSFT mode',
-              '',
-              `Generated from \`app_contoso.json\` fixture at ${sha} — ${stats}${iconsInfo}${routingSummary} | PNG: ${pngSize} KB`,
-              '',
-              '`diagramMode: "MSFT"` (Microsoft Architecture Center style: region containers → RG containers → typed grids + UDR side panels)',
-              '',
-              `[**Download test-diagrams-msft artifact**](${runUrl}) (contains \`.drawio\`, \`.png\`, \`.svg\`, \`routing.md\`, \`icons_used.json\`)`,
-              '',
-              '<details>',
-              '<summary>MSFT mode features exercised</summary>',
-              '',
-              '| Feature | Status |',
-              '|---------|--------|',
-              '| Region container (dashed rectangle) | Rendered |',
-              '| RG container (rounded, filled) | Rendered |',
-              '| Hierarchical parenting (region → RG → node) | Verified via `parent` attribute |',
-              '| Type section headers (Compute, Networking, …) | Rendered |',
-              '| Deterministic grid layout | Stable positions across runs |',
-              '| UDR side panels with route details | Rendered + connected |',
-              '| Orthogonal edge style | Applied to all connectors |',
-              '',
-              '</details>',
-            ].join('\n');
-
-            const marker = '## Integration Test Diagram — MSFT mode';
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-
-            const existing = comments.find(c => c.body && c.body.startsWith(marker));
-
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-              console.log(`Updated existing MSFT comment ${existing.id}`);
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body,
-              });
-              console.log('Created new MSFT PR comment');
             }
