@@ -361,7 +361,7 @@ class TestMsftDrawioGeneration:
         containers = tree.findall(".//mxCell[@connectable='0']")
         rg_containers = [
             c for c in containers
-            if "#F5F5F5" in (c.get("style") or "")
+            if (c.get("id") or "").startswith("msft_rg_")
         ]
         assert len(rg_containers) >= 1
 
@@ -371,14 +371,14 @@ class TestMsftDrawioGeneration:
         tree = ET.parse(str(tmp_path / "diagram.drawio"))
         containers = tree.findall(".//mxCell[@connectable='0']")
 
-        region_ids = set()
-        rg_containers_list = []
-        for c in containers:
-            style = c.get("style", "")
-            if "dashed=1" in style and "fillColor=none" in style:
-                region_ids.add(c.get("id"))
-            elif "#F5F5F5" in style:
-                rg_containers_list.append(c)
+        region_ids = {
+            c.get("id") for c in containers
+            if (c.get("id") or "").startswith("msft_region_")
+        }
+        rg_containers_list = [
+            c for c in containers
+            if (c.get("id") or "").startswith("msft_rg_")
+        ]
 
         for rg in rg_containers_list:
             assert rg.get("parent") in region_ids, (
@@ -393,7 +393,7 @@ class TestMsftDrawioGeneration:
         containers = tree.findall(".//mxCell[@connectable='0']")
         rg_ids = {
             c.get("id") for c in containers
-            if "#F5F5F5" in (c.get("style") or "")
+            if (c.get("id") or "").startswith("msft_rg_")
         }
 
         # Non-container vertex cells (excluding id=0, id=1, containers, headers)
