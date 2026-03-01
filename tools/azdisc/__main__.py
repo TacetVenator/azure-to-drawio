@@ -10,6 +10,7 @@ from .discover import run_seed, run_expand, run_rbac
 from .drawio import generate_drawio
 from .docs import generate_docs
 from .graph import build_graph
+from .test_all import run_test_all
 from .util import setup_logging
 
 log = logging.getLogger(__name__)
@@ -38,6 +39,10 @@ def cmd_drawio(args) -> None:
 def cmd_docs(args) -> None:
     cfg = load_config(args.config)
     generate_docs(cfg)
+
+
+def cmd_test_all(args) -> None:
+    run_test_all(args.output)
 
 
 def cmd_run(args) -> None:
@@ -70,6 +75,14 @@ def main() -> None:
         p = sub.add_parser(name, help=help_text)
         p.add_argument("config", help="Path to config.json")
         p.set_defaults(func=func)
+
+    # test-all has its own argument (output dir, not a config file)
+    p_test_all = sub.add_parser("test-all", help="Generate all layout × mode combinations from fixtures")
+    p_test_all.add_argument(
+        "-o", "--output", default="out/test-all",
+        help="Root output directory (default: out/test-all)",
+    )
+    p_test_all.set_defaults(func=cmd_test_all)
 
     args = parser.parse_args()
     setup_logging(args.verbose)
