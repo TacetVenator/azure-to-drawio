@@ -62,12 +62,12 @@ SUBNET_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#
 UNATTACHED_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;verticalAlign=top;align=left;spacingLeft=10;spacingTop=5;fontSize=13;fontStyle=1;arcSize=6;dashed=1;dashPattern=8 4;"
 
 # MSFT mode styles
-MSFT_REGION_STYLE = "shape=rectangle;dashed=1;fillColor=none;strokeColor=#6E6E6E;rounded=0;whiteSpace=wrap;html=1;"
-MSFT_RG_STYLE = "rounded=1;fillColor=#F5F5F5;strokeColor=#888888;whiteSpace=wrap;html=1;"
+MSFT_REGION_STYLE = "shape=rectangle;dashed=1;fillColor=none;strokeColor=default;rounded=0;whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=8;spacingTop=5;"
+MSFT_RG_STYLE = "rounded=1;fillColor=default;strokeColor=default;whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=8;spacingTop=5;"
 MSFT_NODE_STYLE_EXTRA = "whiteSpace=wrap;html=1;align=center;verticalAlign=top;"
-MSFT_UDR_PANEL_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#888888;"
+MSFT_UDR_PANEL_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=default;strokeColor=default;"
 MSFT_EDGE_STYLE = "edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;"
-MSFT_TYPE_HEADER_STYLE = "text;html=1;align=left;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=11;fontStyle=1;fontColor=#666666;"
+MSFT_TYPE_HEADER_STYLE = "text;html=1;align=left;verticalAlign=top;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=11;fontStyle=1;fontColor=default;"
 
 
 def _get(obj: Any, *keys) -> Any:
