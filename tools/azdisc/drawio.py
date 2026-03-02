@@ -17,6 +17,12 @@ from .util import normalize_id, stable_id
 
 log = logging.getLogger(__name__)
 
+
+def _spacing_factor(spacing: str) -> float:
+    """Return the gap/padding multiplier for a named spacing preset."""
+    return {"compact": 1.0, "spacious": 1.8}.get(spacing, 1.0)
+
+
 # Grid layout constants
 CELL_W = 120
 CELL_H = 80
@@ -244,12 +250,22 @@ def _make_cell(parent, cell_id: str, label: str, style: str,
     return cell
 
 
-def layout_nodes(nodes: List[Dict]) -> Dict[str, Tuple[int, int, int, int]]:
+def layout_nodes(nodes: List[Dict], spacing: float = 1.0) -> Dict[str, Tuple[int, int, int, int]]:
     """
     Compute deterministic (x, y, w, h) positions.
     Hierarchy: REGION > RG > TYPE band (left-to-right grid with wrapping).
     Returns dict: node_id -> (x, y, w, h).
+
+    The *spacing* multiplier scales gaps and padding (≥1.0 = more whitespace).
+    Cell sizes (CELL_W, CELL_H) are unchanged.
     """
+    s = lambda v: round(v * spacing)
+    h_gap = s(H_GAP)
+    v_gap = s(V_GAP)
+    rg_padding = s(RG_PADDING)
+    type_v_gap = s(TYPE_V_GAP)
+    region_padding = s(REGION_PADDING)
+
     # Group by (region, rg, type)
     from collections import defaultdict
     groups: Dict[Tuple[str, str, str], List[Dict]] = defaultdict(list)
@@ -268,35 +284,35 @@ def layout_nodes(nodes: List[Dict]) -> Dict[str, Tuple[int, int, int, int]]:
         region_rg[region][rg].append(key)
 
     positions: Dict[str, Tuple[int, int, int, int]] = {}
-    region_y = REGION_PADDING
+    region_y = region_padding
 
     for region in sorted(region_rg.keys()):
-        rg_x = REGION_PADDING
+        rg_x = region_padding
         rg_max_height = 0
 
         for rg in sorted(region_rg[region].keys()):
             type_keys = region_rg[region][rg]
-            type_y = RG_PADDING
+            type_y = rg_padding
             rg_width = 0
 
             for key in sorted(type_keys):
                 nodes_in_band = groups[key]
                 rows = (len(nodes_in_band) + COLS_PER_ROW - 1) // COLS_PER_ROW
-                band_w = min(len(nodes_in_band), COLS_PER_ROW) * (CELL_W + H_GAP) - H_GAP
+                band_w = min(len(nodes_in_band), COLS_PER_ROW) * (CELL_W + h_gap) - h_gap
                 for i, node in enumerate(nodes_in_band):
                     col = i % COLS_PER_ROW
                     row = i // COLS_PER_ROW
-                    nx = rg_x + RG_PADDING + col * (CELL_W + H_GAP)
-                    ny = region_y + type_y + row * (CELL_H + V_GAP)
+                    nx = rg_x + rg_padding + col * (CELL_W + h_gap)
+                    ny = region_y + type_y + row * (CELL_H + v_gap)
                     positions[node["id"]] = (nx, ny, CELL_W, CELL_H)
-                type_y += rows * (CELL_H + V_GAP) + TYPE_V_GAP
+                type_y += rows * (CELL_H + v_gap) + type_v_gap
                 rg_width = max(rg_width, band_w)
 
-            rg_height = type_y + RG_PADDING
+            rg_height = type_y + rg_padding
             rg_max_height = max(rg_max_height, rg_height)
-            rg_x += rg_width + 2 * RG_PADDING + H_GAP
+            rg_x += rg_width + 2 * rg_padding + h_gap
 
-        region_y += rg_max_height + REGION_PADDING
+        region_y += rg_max_height + region_padding
 
     return positions
 
@@ -466,8 +482,12 @@ def _build_network_membership(
 
 def _grid_layout(
     node_ids: List[str], start_x: int, start_y: int, cols: int = COLS_PER_ROW,
+    spacing: float = 1.0,
 ) -> Tuple[Dict[str, Tuple[int, int, int, int]], int, int]:
     """Lay out a list of node IDs in a grid, returning positions and content size."""
+    s = lambda v: round(v * spacing)
+    h_gap = s(H_GAP)
+    v_gap = s(V_GAP)
     positions: Dict[str, Tuple[int, int, int, int]] = {}
     if not node_ids:
         return positions, 0, 0
@@ -475,33 +495,45 @@ def _grid_layout(
     for i, nid in enumerate(node_ids):
         col = i % cols
         row = i // cols
-        x = start_x + col * (CELL_W + H_GAP)
-        y = start_y + row * (CELL_H + V_GAP)
+        x = start_x + col * (CELL_W + h_gap)
+        y = start_y + row * (CELL_H + v_gap)
         positions[nid] = (x, y, CELL_W, CELL_H)
-    content_w = min(len(node_ids), cols) * (CELL_W + H_GAP) - H_GAP
-    content_h = rows * (CELL_H + V_GAP) - V_GAP
+    content_w = min(len(node_ids), cols) * (CELL_W + h_gap) - h_gap
+    content_h = rows * (CELL_H + v_gap) - v_gap
     return positions, content_w, content_h
 
 
 def layout_nodes_vnet(
-    nodes: List[Dict], edges: List[Dict],
+    nodes: List[Dict], edges: List[Dict], spacing: float = 1.0,
 ) -> Tuple[
     Dict[str, Tuple[int, int, int, int]],    # node positions
     List[Dict],                                # container rects for VNets/subnets
 ]:
     """Compute positions for the VNET>SUBNET layout mode.
 
+    The *spacing* multiplier scales gaps and padding (≥1.0 = more whitespace).
+
     Returns:
       positions: node_id -> (x, y, w, h)
       containers: list of dicts with keys: id, label, style, x, y, w, h, parent
     """
+    s = lambda v: round(v * spacing)
+    vnet_padding = s(VNET_PADDING)
+    vnet_header = s(VNET_HEADER)
+    subnet_padding = s(SUBNET_PADDING)
+    subnet_header = s(SUBNET_HEADER)
+    subnet_h_gap = s(SUBNET_H_GAP)
+    vnet_h_gap = s(VNET_H_GAP)
+    region_padding = s(REGION_PADDING)
+    unattached_padding = s(UNATTACHED_PADDING)
+
     node_by_id: Dict[str, Dict] = {n["id"]: n for n in nodes}
     vnet_subnets, subnet_members, unattached = _build_network_membership(nodes, edges)
 
     positions: Dict[str, Tuple[int, int, int, int]] = {}
     containers: List[Dict] = []
 
-    cursor_x = REGION_PADDING
+    cursor_x = region_padding
 
     # Sort VNets deterministically
     all_vnets = sorted(vnet_subnets.keys())
@@ -511,8 +543,8 @@ def layout_nodes_vnet(
         vnet_label = node_by_id[vnet_id]["name"] if vnet_id in node_by_id else vnet_id.split("/")[-1]
         vnet_container_id = "vnet_" + stable_id(vnet_id)
 
-        vnet_inner_x = cursor_x + VNET_PADDING
-        vnet_inner_y = REGION_PADDING + VNET_HEADER
+        vnet_inner_x = cursor_x + vnet_padding
+        vnet_inner_y = region_padding + vnet_header
         subnet_cursor_x = vnet_inner_x
         vnet_content_h = 0
 
@@ -522,15 +554,15 @@ def layout_nodes_vnet(
             subnet_container_id = "subnet_" + stable_id(subnet_id)
 
             # Layout member nodes inside this subnet
-            inner_x = subnet_cursor_x + SUBNET_PADDING
-            inner_y = vnet_inner_y + SUBNET_HEADER
+            inner_x = subnet_cursor_x + subnet_padding
+            inner_y = vnet_inner_y + subnet_header
             cols = max(2, min(COLS_PER_ROW, len(members))) if members else 2
-            member_pos, content_w, content_h = _grid_layout(members, inner_x, inner_y, cols)
+            member_pos, content_w, content_h = _grid_layout(members, inner_x, inner_y, cols, spacing=spacing)
             positions.update(member_pos)
 
             # Subnet box dimensions
-            subnet_w = max(content_w, CELL_W) + 2 * SUBNET_PADDING
-            subnet_h = max(content_h, CELL_H // 2) + SUBNET_HEADER + SUBNET_PADDING
+            subnet_w = max(content_w, CELL_W) + 2 * subnet_padding
+            subnet_h = max(content_h, CELL_H // 2) + subnet_header + subnet_padding
 
             containers.append({
                 "id": subnet_container_id,
@@ -544,11 +576,11 @@ def layout_nodes_vnet(
             })
 
             vnet_content_h = max(vnet_content_h, subnet_h)
-            subnet_cursor_x += subnet_w + SUBNET_H_GAP
+            subnet_cursor_x += subnet_w + subnet_h_gap
 
         # VNet box dimensions
-        vnet_w = (subnet_cursor_x - SUBNET_H_GAP) - cursor_x + VNET_PADDING
-        vnet_h = vnet_content_h + VNET_HEADER + VNET_PADDING + VNET_PADDING
+        vnet_w = (subnet_cursor_x - subnet_h_gap) - cursor_x + vnet_padding
+        vnet_h = vnet_content_h + vnet_header + vnet_padding + vnet_padding
 
         # Ensure minimum width
         vnet_w = max(vnet_w, 200)
@@ -558,33 +590,33 @@ def layout_nodes_vnet(
             "label": vnet_label,
             "style": VNET_STYLE,
             "x": cursor_x,
-            "y": REGION_PADDING,
+            "y": region_padding,
             "w": vnet_w,
             "h": vnet_h,
             "parent": "1",
         })
 
-        cursor_x += vnet_w + VNET_H_GAP
+        cursor_x += vnet_w + vnet_h_gap
 
     # Layout unattached nodes
     if unattached:
         unattached_label = "Other Resources"
         unattached_id = "unattached_group"
-        inner_x = cursor_x + UNATTACHED_PADDING
-        inner_y = REGION_PADDING + VNET_HEADER
+        inner_x = cursor_x + unattached_padding
+        inner_y = region_padding + vnet_header
         cols = min(COLS_PER_ROW, len(unattached))
-        ua_pos, content_w, content_h = _grid_layout(unattached, inner_x, inner_y, cols)
+        ua_pos, content_w, content_h = _grid_layout(unattached, inner_x, inner_y, cols, spacing=spacing)
         positions.update(ua_pos)
 
-        ua_w = max(content_w, CELL_W) + 2 * UNATTACHED_PADDING
-        ua_h = content_h + VNET_HEADER + 2 * UNATTACHED_PADDING
+        ua_w = max(content_w, CELL_W) + 2 * unattached_padding
+        ua_h = content_h + vnet_header + 2 * unattached_padding
 
         containers.append({
             "id": unattached_id,
             "label": unattached_label,
             "style": UNATTACHED_STYLE,
             "x": cursor_x,
-            "y": REGION_PADDING,
+            "y": region_padding,
             "w": ua_w,
             "h": ua_h,
             "parent": "1",
@@ -613,6 +645,9 @@ _TYPE_CATEGORY_MAP = {
     "microsoft.managedidentity": "Identity",
     "microsoft.containerservice": "Containers",
     "microsoft.containerregistry": "Containers",
+    "microsoft.app": "Containers",
+    "microsoft.cognitiveservices": "AI + Machine Learning",
+    "microsoft.search": "AI + Machine Learning",
     "microsoft.operationalinsights": "Monitoring",
     "microsoft.insights": "Monitoring",
     "microsoft.logic": "Integration",
@@ -635,6 +670,7 @@ def _type_category(resource_type: str) -> str:
 def layout_nodes_msft(
     nodes: List[Dict],
     cols: int = MSFT_COLS,
+    spacing: float = 1.0,
 ) -> Tuple[
     Dict[str, Tuple[int, int, int, int]],   # node positions (relative to parent RG)
     List[Dict],                               # containers (regions + RGs)
@@ -647,12 +683,28 @@ def layout_nodes_msft(
     RG container coordinates are relative to their parent region container.
     Region container coordinates are absolute.
 
+    The *spacing* multiplier scales gaps and padding (≥1.0 = more whitespace).
+    Cell sizes (MSFT_CELL_W, MSFT_CELL_H) are unchanged.
+
     Returns:
       positions: node_id -> (x, y, w, h) relative to parent
       containers: list of region + RG container dicts
       type_headers: list of type section header dicts
       node_parents: node_id -> parent container id (the RG container)
     """
+    s = lambda v: round(v * spacing)
+    # Gaps/padding are scaled; cell sizes stay fixed
+    x_gap = MSFT_X_STEP - MSFT_CELL_W          # base gap between cells
+    y_gap = MSFT_Y_STEP - MSFT_CELL_H
+    msft_x_step = MSFT_CELL_W + s(x_gap)       # scaled step
+    msft_y_step = MSFT_CELL_H + s(y_gap)
+    msft_rg_pad = s(MSFT_RG_PAD)
+    msft_rg_header = s(MSFT_RG_HEADER)
+    msft_type_header_h = s(MSFT_TYPE_HEADER_H)
+    msft_rg_v_gap = s(MSFT_RG_V_GAP)
+    msft_region_pad = s(MSFT_REGION_PAD)
+    msft_region_header = s(MSFT_REGION_HEADER)
+
     node_by_id: Dict[str, Dict] = {n["id"]: n for n in nodes}
 
     # Group by (region, rg, type)
@@ -680,13 +732,13 @@ def layout_nodes_msft(
     type_headers: List[Dict] = []
     node_parents: Dict[str, str] = {}
 
-    region_cursor_y = MSFT_REGION_PAD
+    region_cursor_y = msft_region_pad
 
     for region in sorted(region_rg_types.keys()):
         region_id = "msft_region_" + stable_id(region)
         rgs = region_rg_types[region]
 
-        rg_cursor_y = MSFT_REGION_HEADER + MSFT_REGION_PAD
+        rg_cursor_y = msft_region_header + msft_region_pad
         max_rg_w = 0
 
         for rg in sorted(rgs.keys()):
@@ -697,7 +749,7 @@ def layout_nodes_msft(
             type_groups.sort(key=lambda t: (_type_category(t[0]).lower(), t[0].lower()))
 
             # Layout resources inside RG
-            cursor_y = MSFT_RG_HEADER + MSFT_RG_PAD
+            cursor_y = msft_rg_header + msft_rg_pad
             rg_content_w = 0
 
             for rtype, type_nodes in type_groups:
@@ -708,38 +760,38 @@ def layout_nodes_msft(
                 type_headers.append({
                     "id": th_id,
                     "label": category,
-                    "x": MSFT_RG_PAD,
+                    "x": msft_rg_pad,
                     "y": cursor_y,
                     "w": 120,
-                    "h": MSFT_TYPE_HEADER_H,
+                    "h": msft_type_header_h,
                     "parent": rg_id,
                 })
-                cursor_y += MSFT_TYPE_HEADER_H
+                cursor_y += msft_type_header_h
 
                 # Layout type_nodes in grid
                 n_in_row = min(cols, len(type_nodes)) if type_nodes else 1
                 for i, node in enumerate(type_nodes):
                     col = i % cols
                     row = i // cols
-                    nx = MSFT_RG_PAD + col * MSFT_X_STEP
-                    ny = cursor_y + row * MSFT_Y_STEP
+                    nx = msft_rg_pad + col * msft_x_step
+                    ny = cursor_y + row * msft_y_step
                     positions[node["id"]] = (nx, ny, MSFT_CELL_W, MSFT_CELL_H)
                     node_parents[node["id"]] = rg_id
 
                 rows = (len(type_nodes) + cols - 1) // cols
-                band_w = min(len(type_nodes), cols) * MSFT_X_STEP - (MSFT_X_STEP - MSFT_CELL_W)
+                band_w = min(len(type_nodes), cols) * msft_x_step - (msft_x_step - MSFT_CELL_W)
                 rg_content_w = max(rg_content_w, band_w)
-                cursor_y += rows * MSFT_Y_STEP
+                cursor_y += rows * msft_y_step
 
             # RG container size
-            rg_w = max(rg_content_w, MSFT_CELL_W) + 2 * MSFT_RG_PAD
-            rg_h = cursor_y + MSFT_RG_PAD
+            rg_w = max(rg_content_w, MSFT_CELL_W) + 2 * msft_rg_pad
+            rg_h = cursor_y + msft_rg_pad
 
             containers.append({
                 "id": rg_id,
                 "label": rg,
                 "style": MSFT_RG_STYLE,
-                "x": MSFT_REGION_PAD,
+                "x": msft_region_pad,
                 "y": rg_cursor_y,
                 "w": rg_w,
                 "h": rg_h,
@@ -747,24 +799,24 @@ def layout_nodes_msft(
             })
 
             max_rg_w = max(max_rg_w, rg_w)
-            rg_cursor_y += rg_h + MSFT_RG_V_GAP
+            rg_cursor_y += rg_h + msft_rg_v_gap
 
         # Region container size
-        region_w = max_rg_w + 2 * MSFT_REGION_PAD
-        region_h = rg_cursor_y - MSFT_RG_V_GAP + MSFT_REGION_PAD
+        region_w = max_rg_w + 2 * msft_region_pad
+        region_h = rg_cursor_y - msft_rg_v_gap + msft_region_pad
 
         containers.append({
             "id": region_id,
             "label": region,
             "style": MSFT_REGION_STYLE,
-            "x": MSFT_REGION_PAD,
+            "x": msft_region_pad,
             "y": region_cursor_y,
             "w": region_w,
             "h": region_h,
             "parent": "1",
         })
 
-        region_cursor_y += region_h + MSFT_REGION_PAD
+        region_cursor_y += region_h + msft_region_pad
 
     return positions, containers, type_headers, node_parents
 
@@ -788,10 +840,11 @@ def generate_drawio(cfg: Config) -> None:
         return
 
     containers: List[Dict] = []
+    sp = _spacing_factor(cfg.spacing)
     if cfg.layout == "VNET>SUBNET":
-        positions, containers = layout_nodes_vnet(nodes, edges)
+        positions, containers = layout_nodes_vnet(nodes, edges, spacing=sp)
     else:
-        positions = layout_nodes(nodes)
+        positions = layout_nodes(nodes, spacing=sp)
     icons_used = {"mapped": {}, "fallback": [], "unknown": []}
 
     # Build XML
@@ -1180,7 +1233,8 @@ def _render_msft_mode(
     Creates region containers > RG containers > typed resource grids
     with true hierarchical parenting via the `parent` attribute.
     """
-    positions, containers, type_headers, node_parents = layout_nodes_msft(nodes)
+    sp = _spacing_factor(cfg.spacing)
+    positions, containers, type_headers, node_parents = layout_nodes_msft(nodes, spacing=sp)
     node_by_id: Dict[str, Dict] = {n["id"]: n for n in nodes}
 
     icons_used: Dict[str, Any] = {"mapped": {}, "fallback": [], "unknown": []}
