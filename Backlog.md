@@ -89,11 +89,32 @@ For complex topologies with many cross-cutting edges, a force-directed (spring) 
 
 ## Diagram Enhancements
 
+### ~~Spacing presets to fix label overlap~~ (Done)
+
+**Priority:** ~~High~~ Completed
+
+Added a `spacing` config field accepting `"compact"` (default) or `"spacious"` (1.8x gaps/padding). Spacious mode increases whitespace between icons in all three layout modes (BANDS, VNET>SUBNET, MSFT) without changing icon sizes. Tested with 50+ new tests covering config validation, gap scaling, label gap sufficiency, and no-overlap guarantees.
+
+### ~~Production-grade AI architecture test fixture~~ (Done)
+
+**Priority:** ~~High~~ Completed
+
+Added `app_ai_chatbot.json` fixture modeling a Container Apps + Azure OpenAI + hub-spoke networking architecture (~30 resources across 2 resource groups). Exercises private endpoints, VNet peering, route tables, NSGs, and AI-specific resource types. Includes 31 tests covering graph construction, edge extraction, and diagram generation across all layout modes.
+
 ### Auto-generated legend
 
 **Priority:** Medium
 
 Add a legend box to the generated diagram that maps each icon to its resource type. Should be auto-generated from the icons actually used in the diagram (from `icons_used.json`).
+
+### Additional spacing presets
+
+**Priority:** Low
+
+The current `spacing` field supports `"compact"` and `"spacious"`. Future presets could include:
+- `"presentation"` — Extra-wide gaps optimized for slides and screen-sharing (e.g., 2.5x)
+- `"wide"` — Wider horizontal gaps only, keeping vertical gaps compact (useful for very long resource names)
+- Custom numeric multiplier override for power users (e.g., `"spacing": 1.5`)
 
 ### Configurable grid column count
 
