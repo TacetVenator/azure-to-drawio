@@ -11,6 +11,7 @@ log = logging.getLogger(__name__)
 
 VALID_LAYOUTS = {"REGION>RG>TYPE", "VNET>SUBNET"}
 VALID_DIAGRAM_MODES = {"BANDS", "MSFT"}
+VALID_SPACINGS = {"compact", "spacious"}
 
 
 @dataclass
@@ -22,6 +23,7 @@ class Config:
     includeRbac: bool = False
     layout: str = "REGION>RG>TYPE"
     diagramMode: str = "BANDS"
+    spacing: str = "compact"
 
     def out(self, filename: str) -> Path:
         return Path(self.outputDir) / filename
@@ -46,6 +48,9 @@ def load_config(path: str) -> Config:
     diagram_mode = data.get("diagramMode", "BANDS")
     if diagram_mode not in VALID_DIAGRAM_MODES:
         raise ValueError(f"Unsupported diagramMode: {diagram_mode!r}. Valid: {VALID_DIAGRAM_MODES}")
+    spacing = data.get("spacing", "compact")
+    if spacing not in VALID_SPACINGS:
+        raise ValueError(f"Unsupported spacing: {spacing!r}. Valid: {VALID_SPACINGS}")
     cfg = Config(
         app=data["app"],
         subscriptions=data["subscriptions"],
@@ -54,6 +59,7 @@ def load_config(path: str) -> Config:
         includeRbac=data.get("includeRbac", False),
         layout=layout,
         diagramMode=diagram_mode,
+        spacing=spacing,
     )
     log.info("Loaded config for app=%s, subs=%d, seedRGs=%d", cfg.app, len(cfg.subscriptions), len(cfg.seedResourceGroups))
     return cfg

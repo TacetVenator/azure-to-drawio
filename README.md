@@ -190,7 +190,8 @@ The tool reads a JSON configuration file. An example is provided at `app/myapp/c
   "outputDir": "app/myapp/out",
   "includeRbac": true,
   "layout": "REGION>RG>TYPE",
-  "diagramMode": "BANDS"
+  "diagramMode": "BANDS",
+  "spacing": "compact"
 }
 ```
 
@@ -205,6 +206,7 @@ The tool reads a JSON configuration file. An example is provided at `app/myapp/c
 | `includeRbac` | `bool` | No | `false` | When `true`, the RBAC stage queries `authorizationresources` for role assignments and adds `rbac_assignment` edges to the graph. |
 | `layout` | `string` | No | `"REGION>RG>TYPE"` | Diagram layout mode. Must be one of: `"REGION>RG>TYPE"`, `"VNET>SUBNET"`. See [Layout Modes](#layout-modes). |
 | `diagramMode` | `string` | No | `"BANDS"` | Diagram rendering mode. Must be one of: `"BANDS"`, `"MSFT"`. See [Diagram Modes](#diagram-modes). |
+| `spacing` | `string` | No | `"compact"` | Diagram spacing preset. Must be one of: `"compact"`, `"spacious"`. See [Spacing](#spacing). |
 
 ---
 
@@ -307,6 +309,40 @@ Within each resource group container, resources are organized by type category (
 UDR side panels are placed to the right of the region containers and connected to subnet nodes with `udr_detail` edges. Each panel shows the route table name and up to 8 routes (with a truncation indicator for larger tables).
 
 **Best for:** Architecture documentation, presentations, Microsoft Architecture Center-style diagrams.
+
+---
+
+## Spacing
+
+The `spacing` config field controls whitespace between icons in the diagram. When icon labels overlap or the diagram feels cramped, switching to `"spacious"` adds breathing room without changing icon sizes.
+
+| Preset | Description |
+|--------|-------------|
+| `"compact"` | Default. Current behavior — tightest layout. |
+| `"spacious"` | 1.8x gaps and padding between icons. Labels no longer overlap. |
+
+Only the whitespace between icons is scaled. Icon cell sizes (`120x80` in BANDS, `110x70` in MSFT) remain unchanged, so icons look the same — they're just further apart.
+
+**Example — enable spacious layout:**
+
+```json
+{
+  "app": "myapp",
+  "subscriptions": ["<sub>"],
+  "seedResourceGroups": ["rg-prod"],
+  "outputDir": "app/myapp/out",
+  "layout": "VNET>SUBNET",
+  "diagramMode": "MSFT",
+  "spacing": "spacious"
+}
+```
+
+The spacing option works with all layout modes (`REGION>RG>TYPE`, `VNET>SUBNET`) and all diagram modes (`BANDS`, `MSFT`). In `VNET>SUBNET` mode, container padding (VNet boxes, subnet boxes) is also scaled so inner resources have more room. In `MSFT` mode, RG containers, region containers, and type section headers all grow proportionally.
+
+**When to use spacious:**
+- Diagrams with long resource names (labels overlap their neighbors)
+- Presentation or documentation contexts where readability matters more than compactness
+- Large architectures where the default grid feels too dense
 
 ---
 
@@ -641,6 +677,7 @@ azure-to-drawio/
 │   └── tests/
 │       ├── fixtures/
 │       │   ├── app_contoso.json       # Realistic 3-tier app: VNet, subnets, VMs, SQL, LB, PE, NSGs
+│       │   ├── app_ai_chatbot.json    # AI chatbot: Container Apps, OpenAI, Cosmos DB, hub-spoke networking
 │       │   └── inventory_small.json   # Smaller fixture covering all edge types
 │       ├── test_ids.py                # ARM ID parsing, normalization, stable ID determinism
 │       ├── test_graph_edges.py        # Edge extraction: all 15 edge kinds
@@ -649,6 +686,8 @@ azure-to-drawio/
 │       ├── test_vnet_layout.py        # VNET>SUBNET: containers, nesting, labels, determinism
 │       ├── test_msft_layout.py        # MSFT mode: region/RG containers, type headers, UDR panels
 │       ├── test_msft_icon_fallback.py # Microsoft icon ZIP fallback: index building, fuzzy matching
+│       ├── test_spacing.py            # Spacing presets: config validation, gap scaling, label overlap
+│       ├── test_ai_chatbot_fixture.py # AI chatbot fixture: graph edges, all layout modes, determinism
 │       └── test_integration.py        # Full pipeline: graph build → drawio XML → PNG export
 ├── assets/
 │   ├── azure_icon_map.json            # Azure resource type → draw.io style string mapping (248 types)
@@ -676,9 +715,11 @@ All tests run entirely offline using fixture data — no Azure credentials or ne
 - **Edge extraction** — All 15 edge kinds individually, sort order, no duplicates
 - **Child resources** — Type detection heuristic, parent ID derivation, attribute collection (VM SKU/image, SQL SKU)
 - **Layout engines** — `REGION>RG>TYPE`, `VNET>SUBNET`, and `MSFT` mode: determinism, positive coordinates, no overlapping nodes, correct cell dimensions
+- **Spacing presets** — `compact` (default, backward compatible) and `spacious` (1.8x gaps): config validation, bounding box growth, cell sizes unchanged, label gap sufficiency, no overlaps, integration with all layout/diagram mode combinations
 - **VNET>SUBNET containers** — VNet/subnet container cells exist, correct parent nesting, expected labels
 - **MSFT mode** — Region/RG container hierarchy, type section headers, hierarchical parenting via `parent` attribute, UDR side panels with route details, deterministic layout
 - **Microsoft icon fallback** — Index building from SVG filenames, normalized keyword matching, fuzzy lookup for ARM types, base64 data URI style generation, fallback library regeneration
+- **AI chatbot fixture** — Production-grade Container Apps + OpenAI + hub-spoke architecture: graph construction, private endpoint chains, VNet peering, all 3 layout modes, spacious mode, determinism
 - **Full integration** — Fixture → `build_graph` → `generate_drawio` → validates XML structure, vertex/edge cell counts, geometry, node labels
 - **PNG/SVG export** — When the `drawio` CLI is available: valid PNG header, SVG file created. Graceful skip when CLI is absent.
 
