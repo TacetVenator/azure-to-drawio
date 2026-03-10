@@ -821,6 +821,289 @@ def layout_nodes_msft(
     return positions, containers, type_headers, node_parents
 
 
+# ---------------------------------------------------------------------------
+# SUB>REGION>RG>NET layout
+# ---------------------------------------------------------------------------
+
+# Layout constants for SUB>REGION>RG>NET mode
+SUB_PAD = 50
+SUB_HEADER = 40
+SUB_V_GAP = 40
+
+# Network types that get grouped into the "Networking" section inside an RG
+_NETWORK_TYPES = {
+    "microsoft.network/virtualnetworks",
+    "microsoft.network/virtualnetworks/subnets",
+    "microsoft.network/networksecuritygroups",
+    "microsoft.network/routetables",
+    "microsoft.network/azurefirewalls",
+    "microsoft.network/bastionhosts",
+    "microsoft.network/applicationgateways",
+    "microsoft.network/loadbalancers",
+    "microsoft.network/publicipaddresses",
+    "microsoft.network/privateendpoints",
+    "microsoft.network/networkinterfaces",
+    "microsoft.network/natgateways",
+    "microsoft.network/firewallpolicies",
+    "microsoft.network/virtualnetworkgateways",
+    "microsoft.network/localnetworkgateways",
+    "microsoft.network/connections",
+}
+
+# Style for subscription container
+MSFT_SUB_STYLE = "shape=rectangle;rounded=1;fillColor=none;strokeColor=#0078D4;strokeWidth=2;whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=8;spacingTop=5;arcSize=4;"
+
+# Style for "Networking" section header inside an RG
+MSFT_NET_SECTION_STYLE = "text;html=1;align=left;verticalAlign=top;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=11;fontStyle=3;fontColor=#0078D4;"
+
+
+def _subscription_label(sub_id: str, nodes: List[Dict]) -> str:
+    """Derive a display label for a subscription from its ID or first matching node."""
+    if not sub_id or sub_id == "unknown":
+        return "Unknown Subscription"
+    # Use last 8 chars of subscription GUID as short label
+    short = sub_id[-8:] if len(sub_id) > 8 else sub_id
+    return f"Subscription ...{short}"
+
+
+def layout_nodes_sub_rg_net(
+    nodes: List[Dict],
+    edges: List[Dict],
+    cols: int = MSFT_COLS,
+    spacing: float = 1.0,
+) -> Tuple[
+    Dict[str, Tuple[int, int, int, int]],   # node positions (relative to parent RG)
+    List[Dict],                               # containers (subs + regions + RGs)
+    List[Dict],                               # section headers
+    Dict[str, str],                           # node_id -> parent container id
+]:
+    """Compute SUB>REGION>RG>NET layout: Subscription > Region > RG > Net|Other.
+
+    Inside each RG, resources are split into two sections:
+    - **Networking**: VNets, subnets, NSGs, route tables, firewalls, etc.
+    - **Resources**: Everything else, grouped by type category.
+
+    Returns same shape as layout_nodes_msft for rendering compatibility.
+    """
+    s = lambda v: round(v * spacing)
+    x_gap = MSFT_X_STEP - MSFT_CELL_W
+    y_gap = MSFT_Y_STEP - MSFT_CELL_H
+    msft_x_step = MSFT_CELL_W + s(x_gap)
+    msft_y_step = MSFT_CELL_H + s(y_gap)
+    msft_rg_pad = s(MSFT_RG_PAD)
+    msft_rg_header = s(MSFT_RG_HEADER)
+    msft_type_header_h = s(MSFT_TYPE_HEADER_H)
+    msft_rg_v_gap = s(MSFT_RG_V_GAP)
+    msft_region_pad = s(MSFT_REGION_PAD)
+    msft_region_header = s(MSFT_REGION_HEADER)
+    sub_pad = s(SUB_PAD)
+    sub_header = s(SUB_HEADER)
+    sub_v_gap = s(SUB_V_GAP)
+
+    node_by_id: Dict[str, Dict] = {n["id"]: n for n in nodes}
+
+    # Group by (sub, region, rg, type)
+    groups: Dict[Tuple[str, str, str, str], List[Dict]] = defaultdict(list)
+    for n in nodes:
+        key = (
+            n.get("subscriptionId", "") or "unknown",
+            n.get("location", "") or "unknown",
+            n.get("resourceGroup", "") or "unknown",
+            n.get("type", ""),
+        )
+        groups[key].append(n)
+
+    for key in groups:
+        groups[key].sort(key=lambda n: (n.get("type", "").lower(), n.get("name", "").lower(), n["id"].lower()))
+
+    # Organize: sub -> region -> rg -> [(type, nodes)]
+    hierarchy: Dict[str, Dict[str, Dict[str, List[Tuple[str, List[Dict]]]]]] = defaultdict(
+        lambda: defaultdict(lambda: defaultdict(list))
+    )
+    for key in sorted(groups.keys()):
+        sub, region, rg, rtype = key
+        hierarchy[sub][region][rg].append((rtype, groups[key]))
+
+    positions: Dict[str, Tuple[int, int, int, int]] = {}
+    containers: List[Dict] = []
+    type_headers: List[Dict] = []
+    node_parents: Dict[str, str] = {}
+
+    sub_cursor_y = sub_pad
+
+    for sub in sorted(hierarchy.keys()):
+        sub_id = "msft_sub_" + stable_id(sub)
+        regions = hierarchy[sub]
+
+        region_cursor_y = sub_header + sub_pad
+
+        max_region_w = 0
+
+        for region in sorted(regions.keys()):
+            region_id = "msft_region_" + stable_id(sub + "/" + region)
+            rgs = regions[region]
+
+            rg_cursor_y = msft_region_header + msft_region_pad
+            max_rg_w = 0
+
+            for rg in sorted(rgs.keys()):
+                rg_id = "msft_rg_" + stable_id(sub + "/" + region + "/" + rg)
+                type_groups = rgs[rg]
+
+                # Split into networking and other resource types
+                net_groups = [(t, ns) for t, ns in type_groups if t.lower() in _NETWORK_TYPES]
+                other_groups = [(t, ns) for t, ns in type_groups if t.lower() not in _NETWORK_TYPES]
+
+                # Sort each section
+                net_groups.sort(key=lambda t: (t[0].lower(),))
+                other_groups.sort(key=lambda t: (_type_category(t[0]).lower(), t[0].lower()))
+
+                cursor_y = msft_rg_header + msft_rg_pad
+                rg_content_w = 0
+
+                # Networking section
+                if net_groups:
+                    th_id = "msft_th_" + stable_id(rg_id + "/Networking")
+                    type_headers.append({
+                        "id": th_id,
+                        "label": "Networking",
+                        "x": msft_rg_pad,
+                        "y": cursor_y,
+                        "w": 120,
+                        "h": msft_type_header_h,
+                        "parent": rg_id,
+                        "style": MSFT_NET_SECTION_STYLE,
+                    })
+                    cursor_y += msft_type_header_h
+
+                    for rtype, type_nodes in net_groups:
+                        # Sub-header for specific network type
+                        sub_category = rtype.split("/")[-1] if "/" in rtype else rtype
+                        th_sub_id = "msft_th_" + stable_id(rg_id + "/" + rtype)
+                        type_headers.append({
+                            "id": th_sub_id,
+                            "label": sub_category,
+                            "x": msft_rg_pad + 10,
+                            "y": cursor_y,
+                            "w": 110,
+                            "h": msft_type_header_h,
+                            "parent": rg_id,
+                        })
+                        cursor_y += msft_type_header_h
+
+                        n_in_row = min(cols, len(type_nodes)) if type_nodes else 1
+                        for i, node in enumerate(type_nodes):
+                            col = i % cols
+                            row = i // cols
+                            nx = msft_rg_pad + col * msft_x_step
+                            ny = cursor_y + row * msft_y_step
+                            positions[node["id"]] = (nx, ny, MSFT_CELL_W, MSFT_CELL_H)
+                            node_parents[node["id"]] = rg_id
+
+                        rows = (len(type_nodes) + cols - 1) // cols
+                        band_w = min(len(type_nodes), cols) * msft_x_step - (msft_x_step - MSFT_CELL_W)
+                        rg_content_w = max(rg_content_w, band_w)
+                        cursor_y += rows * msft_y_step
+
+                # Other resources section
+                if other_groups:
+                    th_id = "msft_th_" + stable_id(rg_id + "/Resources")
+                    type_headers.append({
+                        "id": th_id,
+                        "label": "Resources",
+                        "x": msft_rg_pad,
+                        "y": cursor_y,
+                        "w": 120,
+                        "h": msft_type_header_h,
+                        "parent": rg_id,
+                    })
+                    cursor_y += msft_type_header_h
+
+                    for rtype, type_nodes in other_groups:
+                        category = _type_category(rtype)
+
+                        th_sub_id = "msft_th_" + stable_id(rg_id + "/" + rtype)
+                        type_headers.append({
+                            "id": th_sub_id,
+                            "label": category,
+                            "x": msft_rg_pad + 10,
+                            "y": cursor_y,
+                            "w": 110,
+                            "h": msft_type_header_h,
+                            "parent": rg_id,
+                        })
+                        cursor_y += msft_type_header_h
+
+                        n_in_row = min(cols, len(type_nodes)) if type_nodes else 1
+                        for i, node in enumerate(type_nodes):
+                            col = i % cols
+                            row = i // cols
+                            nx = msft_rg_pad + col * msft_x_step
+                            ny = cursor_y + row * msft_y_step
+                            positions[node["id"]] = (nx, ny, MSFT_CELL_W, MSFT_CELL_H)
+                            node_parents[node["id"]] = rg_id
+
+                        rows = (len(type_nodes) + cols - 1) // cols
+                        band_w = min(len(type_nodes), cols) * msft_x_step - (msft_x_step - MSFT_CELL_W)
+                        rg_content_w = max(rg_content_w, band_w)
+                        cursor_y += rows * msft_y_step
+
+                # RG container size
+                rg_w = max(rg_content_w, MSFT_CELL_W) + 2 * msft_rg_pad
+                rg_h = cursor_y + msft_rg_pad
+
+                containers.append({
+                    "id": rg_id,
+                    "label": rg,
+                    "style": MSFT_RG_STYLE,
+                    "x": msft_region_pad,
+                    "y": rg_cursor_y,
+                    "w": rg_w,
+                    "h": rg_h,
+                    "parent": region_id,
+                })
+
+                max_rg_w = max(max_rg_w, rg_w)
+                rg_cursor_y += rg_h + msft_rg_v_gap
+
+            # Region container
+            region_w = max_rg_w + 2 * msft_region_pad
+            region_h = rg_cursor_y - msft_rg_v_gap + msft_region_pad
+
+            containers.append({
+                "id": region_id,
+                "label": region,
+                "style": MSFT_REGION_STYLE,
+                "x": sub_pad,
+                "y": region_cursor_y,
+                "w": region_w,
+                "h": region_h,
+                "parent": sub_id,
+            })
+
+            max_region_w = max(max_region_w, region_w)
+            region_cursor_y += region_h + msft_region_pad
+
+        # Subscription container
+        sub_w = max_region_w + 2 * sub_pad
+        sub_h = region_cursor_y - msft_region_pad + sub_pad
+
+        containers.append({
+            "id": sub_id,
+            "label": _subscription_label(sub, nodes),
+            "style": MSFT_SUB_STYLE,
+            "x": sub_pad,
+            "y": sub_cursor_y,
+            "w": sub_w,
+            "h": sub_h,
+            "parent": "1",
+        })
+
+        sub_cursor_y += sub_h + sub_v_gap
+
+    return positions, containers, type_headers, node_parents
+
+
 def generate_drawio(cfg: Config) -> None:
     graph_path = cfg.out("graph.json")
     if not graph_path.exists():
@@ -834,8 +1117,8 @@ def generate_drawio(cfg: Config) -> None:
     icon_map = _load_icon_map(assets_dir)
     msft_icons = _load_msft_icon_index(assets_dir)
 
-    # MSFT mode uses its own rendering path
-    if cfg.diagramMode == "MSFT":
+    # MSFT mode and SUB>REGION>RG>NET layout use the hierarchical rendering path
+    if cfg.diagramMode == "MSFT" or cfg.layout == "SUB>REGION>RG>NET":
         _render_msft_mode(cfg, nodes, edges, icon_map, msft_icons)
         return
 
@@ -1232,21 +1515,32 @@ def _render_msft_mode(
 
     Creates region containers > RG containers > typed resource grids
     with true hierarchical parenting via the `parent` attribute.
+
+    When cfg.layout is SUB>REGION>RG>NET, uses the subscription-aware layout
+    with networking/resources split inside each RG.
     """
     sp = _spacing_factor(cfg.spacing)
-    positions, containers, type_headers, node_parents = layout_nodes_msft(nodes, spacing=sp)
+    if cfg.layout == "SUB>REGION>RG>NET":
+        positions, containers, type_headers, node_parents = layout_nodes_sub_rg_net(
+            nodes, edges, spacing=sp,
+        )
+    else:
+        positions, containers, type_headers, node_parents = layout_nodes_msft(nodes, spacing=sp)
     node_by_id: Dict[str, Dict] = {n["id"]: n for n in nodes}
 
     icons_used: Dict[str, Any] = {"mapped": {}, "fallback": [], "unknown": []}
 
     mxfile, root = _build_mxfile_root(cfg)
 
-    # Emit containers: regions first (lower z-order), then RGs
-    # Sort so that parent="1" (region) containers come before their child RGs
-    regions = [c for c in containers if c["parent"] == "1"]
-    rg_containers = [c for c in containers if c["parent"] != "1"]
+    # Emit containers ordered by depth: top-level first, then children, then RGs.
+    # For SUB>REGION>RG>NET: subs (parent="1") > regions (parent=sub) > RGs (parent=region)
+    # For REGION>RG>TYPE: regions (parent="1") > RGs (parent=region)
+    container_by_id = {c["id"]: c for c in containers}
+    top_level = [c for c in containers if c["parent"] == "1"]
+    mid_level = [c for c in containers if c["parent"] != "1" and c["parent"] in {t["id"] for t in top_level}]
+    leaf_level = [c for c in containers if c not in top_level and c not in mid_level]
 
-    for cont in regions + rg_containers:
+    for cont in top_level + mid_level + leaf_level:
         cc = ET.SubElement(root, "mxCell")
         cc.set("id", cont["id"])
         cc.set("value", cont["label"])
@@ -1266,7 +1560,7 @@ def _render_msft_mode(
         tc = ET.SubElement(root, "mxCell")
         tc.set("id", th["id"])
         tc.set("value", th["label"])
-        tc.set("style", MSFT_TYPE_HEADER_STYLE)
+        tc.set("style", th.get("style", MSFT_TYPE_HEADER_STYLE))
         tc.set("vertex", "1")
         tc.set("parent", th["parent"])
         tg = ET.SubElement(tc, "mxGeometry")

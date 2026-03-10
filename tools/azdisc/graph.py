@@ -145,6 +145,39 @@ def extract_edges(nodes: List[Dict]) -> List[Dict]:
             add_edge(nid, _get(p, "serverFarmId"), "webApp->appServicePlan")
             add_edge(nid, _get(p, "virtualNetworkSubnetId"), "webApp->subnet")
 
+        elif t == "microsoft.network/azurefirewalls":
+            for ipc in _get(p, "ipConfigurations") or []:
+                add_edge(nid, _get(ipc, "properties", "subnet", "id"), "firewall->subnet")
+                add_edge(nid, _get(ipc, "properties", "publicIPAddress", "id"), "firewall->publicIp")
+
+        elif t == "microsoft.network/bastionhosts":
+            for ipc in _get(p, "ipConfigurations") or []:
+                add_edge(nid, _get(ipc, "properties", "subnet", "id"), "bastion->subnet")
+                add_edge(nid, _get(ipc, "properties", "publicIPAddress", "id"), "bastion->publicIp")
+
+        elif t == "microsoft.app/containerapps":
+            add_edge(nid, _get(p, "managedEnvironmentId"), "containerApp->environment")
+
+        elif t == "microsoft.app/managedenvironments":
+            add_edge(nid, _get(p, "vnetConfiguration", "infrastructureSubnetId"), "containerEnv->subnet")
+
+        elif t == "microsoft.insights/components":
+            add_edge(nid, _get(p, "WorkspaceResourceId"), "appInsights->workspace")
+
+        elif t == "microsoft.logic/workflows":
+            for param in (_get(p, "parameters") or {}).values():
+                if isinstance(param, dict) and param.get("type") == "string":
+                    val = param.get("value", "")
+                    if isinstance(val, str) and "/providers/" in val:
+                        add_edge(nid, val, "logicApp->connection")
+
+        elif t == "microsoft.network/applicationgateways":
+            for ipc in _get(p, "gatewayIPConfigurations") or []:
+                add_edge(nid, _get(ipc, "properties", "subnet", "id"), "appGw->subnet")
+            for pool in _get(p, "backendAddressPools") or []:
+                for addr in _get(pool, "properties", "backendAddresses") or []:
+                    add_edge(nid, _get(addr, "fqdn"), "appGw->backend")
+
     # Deduplicate edges
     seen = set()
     unique = []

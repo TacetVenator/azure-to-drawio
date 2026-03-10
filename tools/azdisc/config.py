@@ -9,7 +9,7 @@ from typing import List
 
 log = logging.getLogger(__name__)
 
-VALID_LAYOUTS = {"REGION>RG>TYPE", "VNET>SUBNET"}
+VALID_LAYOUTS = {"REGION>RG>TYPE", "VNET>SUBNET", "SUB>REGION>RG>NET"}
 VALID_DIAGRAM_MODES = {"BANDS", "MSFT"}
 VALID_SPACINGS = {"compact", "spacious"}
 
