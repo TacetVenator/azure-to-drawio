@@ -15,6 +15,8 @@ from tools.azdisc.drawio import (
     MSFT_REGION_STYLE,
     MSFT_SUB_STYLE,
     _NETWORK_TYPES,
+    _edge_style,
+    _inject_boundary_nodes,
     _subscription_label,
     layout_nodes_sub_rg_net,
 )
@@ -478,6 +480,60 @@ class TestSubRgNetDrawioGeneration:
         generate_drawio(cfg)
         assert (tmp_path / "diagram.drawio").exists()
 
+    def test_bands_and_msft_produce_different_output(self, tmp_path):
+        """BANDS and MSFT modes should produce different diagrams for SUB>REGION>RG>NET."""
+        import tempfile
+
+        _seed_output_files(tmp_path)
+        cfg_msft = _make_sub_rg_net_config(tmp_path)
+        build_graph(cfg_msft)
+        from tools.azdisc.drawio import generate_drawio
+        generate_drawio(cfg_msft)
+        xml_msft = (tmp_path / "diagram.drawio").read_text()
+
+        with tempfile.TemporaryDirectory() as tmp2:
+            tmp2_path = Path(tmp2)
+            _seed_output_files(tmp2_path)
+            cfg_bands = Config(
+                app="landing-zone-bands",
+                subscriptions=cfg_msft.subscriptions,
+                seedResourceGroups=cfg_msft.seedResourceGroups,
+                outputDir=str(tmp2_path),
+                layout="SUB>REGION>RG>NET",
+                diagramMode="BANDS",
+            )
+            build_graph(cfg_bands)
+            generate_drawio(cfg_bands)
+            xml_bands = (tmp2_path / "diagram.drawio").read_text()
+
+        assert xml_msft != xml_bands, (
+            "BANDS and MSFT modes should produce different XML for SUB>REGION>RG>NET"
+        )
+
+    def test_bands_mode_has_flat_containers(self, tmp_path):
+        """BANDS mode containers should all be parented to root (flat)."""
+        _seed_output_files(tmp_path)
+        cfg = Config(
+            app="landing-zone-bands",
+            subscriptions=["00000000-aaaa-0000-0000-000000000001",
+                           "00000000-bbbb-0000-0000-000000000002",
+                           "00000000-cccc-0000-0000-000000000003"],
+            seedResourceGroups=["rg-connectivity-prod", "rg-app-prod", "rg-data-prod"],
+            outputDir=str(tmp_path),
+            layout="SUB>REGION>RG>NET",
+            diagramMode="BANDS",
+        )
+        build_graph(cfg)
+        from tools.azdisc.drawio import generate_drawio
+        generate_drawio(cfg)
+
+        tree = ET.parse(str(tmp_path / "diagram.drawio"))
+        containers = tree.findall(".//mxCell[@connectable='0']")
+        for c in containers:
+            assert c.get("parent") == "1", (
+                f"BANDS container {c.get('id')} should have parent='1', got '{c.get('parent')}'"
+            )
+
 
 # ── _subscription_label unit tests ───────────────────────────────────────
 
@@ -840,3 +896,101 @@ class TestEdgeCases:
                 assert len(x_vals) <= 3, (
                     f"Parent {parent} has {len(x_vals)} columns at y={y}, expected <=3"
                 )
+
+
+# ── Edge style differentiation tests ──────────────────────────────────
+
+
+class TestEdgeStyleDifferentiation:
+    """Verify edges use different styles based on semantic type."""
+
+    def test_traffic_edge_style(self):
+        style = _edge_style("vm->nic", msft=False)
+        assert "strokeColor=#333333" in style
+        assert "dashed" not in style
+
+    def test_association_edge_style(self):
+        style = _edge_style("subnet->nsg", msft=False)
+        assert "dashed=1" in style
+        assert "strokeColor=#999999" in style
+
+    def test_peering_edge_style(self):
+        style = _edge_style("vnet->peeredVnet", msft=False)
+        assert "strokeColor=#0078D4" in style
+        assert "strokeWidth=2" in style
+
+    def test_msft_traffic_edge_style(self):
+        style = _edge_style("firewall->subnet", msft=True)
+        assert "strokeColor=#333333" in style
+        assert "html=1" in style
+
+    def test_msft_association_edge_style(self):
+        style = _edge_style("subnet->routeTable", msft=True)
+        assert "dashed=1" in style
+        assert "html=1" in style
+
+    def test_msft_peering_edge_style(self):
+        style = _edge_style("vnet->peeredVnet", msft=True)
+        assert "strokeColor=#0078D4" in style
+        assert "html=1" in style
+
+    def test_edges_in_xml_have_differentiated_styles(self, tmp_path):
+        """Generated XML should have different styles for different edge kinds."""
+        _seed_output_files(tmp_path)
+        cfg = _make_sub_rg_net_config(tmp_path)
+        build_graph(cfg)
+        from tools.azdisc.drawio import generate_drawio
+        generate_drawio(cfg)
+
+        tree = ET.parse(str(tmp_path / "diagram.drawio"))
+        edge_cells = tree.findall(".//mxCell[@edge='1']")
+        styles = {ec.get("style") for ec in edge_cells}
+        # Should have at least 2 different edge styles
+        assert len(styles) >= 2, f"Expected >= 2 edge styles, got {len(styles)}: {styles}"
+
+
+# ── Boundary node tests ──────────────────────────────────────────────
+
+
+class TestBoundaryNodes:
+    """Verify Internet/On-Premises boundary nodes are injected correctly."""
+
+    def test_internet_boundary_added_when_pip_exists(self):
+        nodes, edges = _build_graph_from_fixture()
+        new_nodes, new_edges = _inject_boundary_nodes(nodes, edges)
+        internet_nodes = [n for n in new_nodes if n["type"] == "__boundary__/internet"]
+        assert len(internet_nodes) == 1
+
+    def test_internet_edges_connect_to_pips(self):
+        nodes, edges = _build_graph_from_fixture()
+        new_nodes, new_edges = _inject_boundary_nodes(nodes, edges)
+        internet_edges = [e for e in new_edges if e["kind"] == "internet->publicIp"]
+        pip_count = sum(1 for n in nodes if n["type"] == "microsoft.network/publicipaddresses")
+        assert len(internet_edges) == pip_count
+
+    def test_no_boundary_without_pip_or_gateway(self):
+        """Nodes without PIPs or VPN gateways should not get boundary nodes."""
+        nodes = [build_node({
+            "id": "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Compute/virtualMachines/vm1",
+            "name": "vm1",
+            "type": "Microsoft.Compute/virtualMachines",
+            "location": "westeurope",
+            "subscriptionId": "sub1",
+            "resourceGroup": "rg1",
+        })]
+        new_nodes, new_edges = _inject_boundary_nodes(nodes, [])
+        assert len(new_nodes) == 1  # No boundary nodes added
+        assert len(new_edges) == 0
+
+    def test_boundary_in_generated_xml(self, tmp_path):
+        """Boundary nodes should appear in the generated draw.io XML."""
+        _seed_output_files(tmp_path)
+        cfg = _make_sub_rg_net_config(tmp_path)
+        build_graph(cfg)
+        from tools.azdisc.drawio import generate_drawio
+        generate_drawio(cfg)
+
+        tree = ET.parse(str(tmp_path / "diagram.drawio"))
+        vertices = tree.findall(".//mxCell[@vertex='1']")
+        labels = {v.get("value") for v in vertices if v.get("value")}
+        assert "Internet" in labels, "Internet boundary node should be in diagram"
