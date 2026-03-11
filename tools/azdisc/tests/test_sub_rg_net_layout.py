@@ -14,10 +14,12 @@ from tools.azdisc.drawio import (
     MSFT_RG_STYLE,
     MSFT_REGION_STYLE,
     MSFT_SUB_STYLE,
+    NSG_CALLOUT_STYLE,
     _NETWORK_TYPES,
     _edge_style,
     _inject_boundary_nodes,
     _subscription_label,
+    extract_nsg_summaries,
     layout_nodes_sub_rg_net,
 )
 from tools.azdisc.graph import (
@@ -302,7 +304,7 @@ def _seed_output_files(tmp_path: Path, fixture: str = "app_landing_zone.json"):
     (tmp_path / "unresolved.json").write_text("[]")
 
 
-def _make_sub_rg_net_config(tmp_path: Path) -> Config:
+def _make_sub_rg_net_config(tmp_path: Path, diagram_mode: str = "MSFT") -> Config:
     return Config(
         app="landing-zone",
         subscriptions=[
@@ -313,7 +315,7 @@ def _make_sub_rg_net_config(tmp_path: Path) -> Config:
         seedResourceGroups=["rg-connectivity-prod", "rg-app-prod", "rg-data-prod"],
         outputDir=str(tmp_path),
         layout="SUB>REGION>RG>NET",
-        diagramMode="MSFT",
+        diagramMode=diagram_mode,
     )
 
 
@@ -994,3 +996,111 @@ class TestBoundaryNodes:
         vertices = tree.findall(".//mxCell[@vertex='1']")
         labels = {v.get("value") for v in vertices if v.get("value")}
         assert "Internet" in labels, "Internet boundary node should be in diagram"
+
+
+# ── NSG summary extraction tests ─────────────────────────────────────
+
+
+class TestNsgSummaries:
+    """Verify NSG rule extraction and formatting."""
+
+    def test_nsg_summaries_from_landing_zone(self):
+        """Landing zone fixture has NSGs with security rules."""
+        nodes, edges = _build_graph_from_fixture()
+        summaries = extract_nsg_summaries(nodes, edges)
+        assert len(summaries) >= 4, f"Expected at least 4 NSGs, got {len(summaries)}"
+
+    def test_nsg_summary_has_rules(self):
+        nodes, edges = _build_graph_from_fixture()
+        summaries = extract_nsg_summaries(nodes, edges)
+        for nsg_id, summary in summaries.items():
+            assert "nsg_name" in summary
+            assert "rules" in summary
+            assert isinstance(summary["rules"], list)
+
+    def test_nsg_rules_sorted_by_direction_priority(self):
+        nodes, edges = _build_graph_from_fixture()
+        summaries = extract_nsg_summaries(nodes, edges)
+        for nsg_id, summary in summaries.items():
+            rules = summary["rules"]
+            if len(rules) < 2:
+                continue
+            for i in range(len(rules) - 1):
+                a, b = rules[i], rules[i + 1]
+                assert (a["direction"], a["priority"]) <= (b["direction"], b["priority"]), \
+                    f"Rules not sorted in NSG {summary['nsg_name']}"
+
+    def test_nsg_attached_to_populated(self):
+        """NSGs with subnet/NIC edges should have attached_to list."""
+        nodes, edges = _build_graph_from_fixture()
+        summaries = extract_nsg_summaries(nodes, edges)
+        has_attached = any(s["attached_to"] for s in summaries.values())
+        assert has_attached, "Expected at least one NSG to have attached_to entries"
+
+    def test_nsg_panel_label_format(self):
+        from tools.azdisc.drawio import _format_nsg_panel_label
+        summary = {
+            "nsg_name": "nsg-test",
+            "attached_to": ["subnet-a"],
+            "rules": [
+                {"name": "r1", "priority": 100, "direction": "Inbound",
+                 "access": "Allow", "protocol": "TCP", "src": "*",
+                 "dst": "10.0.0.0/24", "dstPort": "443"},
+            ],
+        }
+        label = _format_nsg_panel_label(summary)
+        assert "NSG: nsg-test" in label
+        assert "Attached: subnet-a" in label
+        assert "443" in label
+
+
+class TestNsgInDiagram:
+    """Verify NSG callouts appear in generated diagrams."""
+
+    def _generate_msft(self, tmp_path):
+        _seed_output_files(tmp_path)
+        cfg = _make_sub_rg_net_config(tmp_path, diagram_mode="MSFT")
+        build_graph(cfg)
+        from tools.azdisc.drawio import generate_drawio
+        generate_drawio(cfg)
+        return ET.parse(str(tmp_path / "diagram.drawio"))
+
+    def _generate_bands(self, tmp_path):
+        _seed_output_files(tmp_path)
+        cfg = _make_sub_rg_net_config(tmp_path, diagram_mode="BANDS")
+        build_graph(cfg)
+        from tools.azdisc.drawio import generate_drawio
+        generate_drawio(cfg)
+        return ET.parse(str(tmp_path / "diagram.drawio"))
+
+    def test_msft_nsg_panels_present(self, tmp_path):
+        tree = self._generate_msft(tmp_path)
+        vertices = tree.findall(".//mxCell[@vertex='1']")
+        nsg_panels = [v for v in vertices if v.get("id", "").startswith("msft_nsg_")]
+        assert len(nsg_panels) >= 1, "Expected at least one NSG panel in MSFT mode"
+
+    def test_msft_nsg_panel_has_rules_content(self, tmp_path):
+        tree = self._generate_msft(tmp_path)
+        vertices = tree.findall(".//mxCell[@vertex='1']")
+        nsg_panels = [v for v in vertices if v.get("id", "").startswith("msft_nsg_")]
+        for panel in nsg_panels:
+            value = panel.get("value", "")
+            assert "NSG:" in value, f"NSG panel should have 'NSG:' label: {value}"
+
+    def test_msft_nsg_edges_exist(self, tmp_path):
+        tree = self._generate_msft(tmp_path)
+        edge_cells = tree.findall(".//mxCell[@edge='1']")
+        nsg_edges = [e for e in edge_cells if e.get("id", "").startswith("msft_nsg_edge_")]
+        assert len(nsg_edges) >= 1, "Expected NSG detail edges in MSFT mode"
+
+    def test_bands_nsg_panels_present(self, tmp_path):
+        tree = self._generate_bands(tmp_path)
+        vertices = tree.findall(".//mxCell[@vertex='1']")
+        nsg_panels = [v for v in vertices if v.get("id", "").startswith("nsg_panel_")]
+        assert len(nsg_panels) >= 1, "Expected at least one NSG panel in BANDS mode"
+
+    def test_bands_nsg_edges_exist(self, tmp_path):
+        tree = self._generate_bands(tmp_path)
+        edge_cells = tree.findall(".//mxCell[@edge='1']")
+        nsg_edges = [e for e in edge_cells if e.get("id", "").startswith("nsg_edge_")]
+        assert len(nsg_edges) >= 1, "Expected NSG detail edges in BANDS mode"

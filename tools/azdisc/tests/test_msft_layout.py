@@ -406,6 +406,7 @@ class TestMsftDrawioGeneration:
             and v.get("id") not in ("0", "1")
             and not v.get("id", "").startswith("msft_th_")
             and not v.get("id", "").startswith("msft_udr_")
+            and not v.get("id", "").startswith("msft_nsg_")
             and v.get("value") not in boundary_labels
         ]
 

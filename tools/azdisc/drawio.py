@@ -62,6 +62,11 @@ RG_STYLE = "points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.
 UNKNOWN_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalLabelPosition=bottom;verticalAlign=top;align=center;"
 EXTERNAL_STYLE = "ellipse;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;verticalLabelPosition=bottom;verticalAlign=top;align=center;"
 UDR_CALLOUT_STYLE = "shape=callout;fillColor=#fff2cc;strokeColor=#d6b656;align=left;verticalAlign=top;spacingLeft=5;fontSize=10;"
+NSG_CALLOUT_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;align=left;verticalAlign=top;spacingLeft=5;spacingTop=4;fontSize=10;"
+MSFT_NSG_PANEL_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=default;strokeColor=#b85450;dashed=1;"
+
+# Style for a small subnet icon decoration inside a container
+SUBNET_ICON_DECORATION_STYLE = "sketch=0;aspect=fixed;html=1;align=center;fontSize=1;pointerEvents=0;shape=image;image=img/lib/azure2/networking/Subnet.svg;"
 ATTR_BOX_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;fontSize=10;"
 VNET_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=top;align=left;spacingLeft=10;spacingTop=5;fontSize=13;fontStyle=1;arcSize=6;opacity=50;"
 SUBNET_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;verticalAlign=top;align=left;spacingLeft=8;spacingTop=4;fontSize=11;dashed=1;dashPattern=5 5;arcSize=8;opacity=60;"
@@ -77,7 +82,7 @@ MSFT_EDGE_STYLE = "edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;"
 # Edge kinds classified by semantic type for visual differentiation
 _ASSOCIATION_EDGE_KINDS = {
     "subnet->nsg", "subnet->routeTable", "nic->nsg",
-    "rbac_assignment", "appInsights->workspace", "udr_detail",
+    "rbac_assignment", "appInsights->workspace", "udr_detail", "nsg_detail",
 }
 _PEERING_EDGE_KINDS = {
     "vnet->peeredVnet",
@@ -1469,6 +1474,7 @@ def generate_drawio(cfg: Config) -> None:
 
     # Inject Internet / On-Premises boundary nodes
     nodes, edges = _inject_boundary_nodes(nodes, edges)
+    node_by_id: Dict[str, Dict] = {n["id"]: n for n in nodes}
 
     # Find assets dir relative to this file
     assets_dir = Path(__file__).parent.parent.parent / "assets"
@@ -1511,6 +1517,25 @@ def generate_drawio(cfg: Config) -> None:
         cg.set("width", str(cont["w"]))
         cg.set("height", str(cont["h"]))
         cg.set("as", "geometry")
+
+    # Add subnet icon decorations inside VNET>SUBNET subnet containers
+    if cfg.layout == "VNET>SUBNET":
+        for cont in containers:
+            if cont["id"].startswith("subnet_"):
+                icon_id = cont["id"] + "_icon"
+                ic = ET.SubElement(root, "mxCell")
+                ic.set("id", icon_id)
+                ic.set("value", "")
+                ic.set("style", SUBNET_ICON_DECORATION_STYLE)
+                ic.set("vertex", "1")
+                ic.set("parent", cont["id"])
+                ig = ET.SubElement(ic, "mxGeometry")
+                # Position at top-right of the subnet container
+                ig.set("x", str(cont["w"] - 30))
+                ig.set("y", "4")
+                ig.set("width", "24")
+                ig.set("height", "24")
+                ig.set("as", "geometry")
 
     node_id_map: Dict[str, str] = {}
 
@@ -1613,6 +1638,58 @@ def generate_drawio(cfg: Config) -> None:
             eg = ET.SubElement(ec, "mxGeometry")
             eg.set("relative", "1")
             eg.set("as", "geometry")
+
+    # Add NSG rule callouts
+    nsg_summaries = extract_nsg_summaries(nodes, edges)
+    for nsg_id in sorted(nsg_summaries.keys(), key=lambda s: (
+        (node_by_id.get(s) or {}).get("name", ""), s,
+    )):
+        summary = nsg_summaries[nsg_id]
+        if not summary["rules"]:
+            continue
+        nsg_sid = node_id_map.get(nsg_id)
+        if not nsg_sid:
+            continue
+        nsg_pos = positions.get(nsg_id)
+        if not nsg_pos:
+            continue
+
+        panel_label = _format_nsg_panel_label(summary)
+        panel_id = "nsg_panel_" + stable_id(nsg_id)
+        n_lines = panel_label.count("\n") + 1
+        panel_w = 220
+        panel_h = max(50, 16 * n_lines + 12)
+
+        # Position below the NSG node
+        cx = nsg_pos[0]
+        cy = nsg_pos[1] + nsg_pos[3] + 20
+
+        pc = ET.SubElement(root, "mxCell")
+        pc.set("id", panel_id)
+        pc.set("value", panel_label)
+        pc.set("style", NSG_CALLOUT_STYLE)
+        pc.set("vertex", "1")
+        pc.set("parent", "1")
+        pg = ET.SubElement(pc, "mxGeometry")
+        pg.set("x", str(cx))
+        pg.set("y", str(cy))
+        pg.set("width", str(panel_w))
+        pg.set("height", str(panel_h))
+        pg.set("as", "geometry")
+
+        # Connect NSG to its panel
+        nsg_edge_id = "nsg_edge_" + stable_id(nsg_id)
+        ne = ET.SubElement(root, "mxCell")
+        ne.set("id", nsg_edge_id)
+        ne.set("value", "")
+        ne.set("style", EDGE_STYLE_ASSOCIATION)
+        ne.set("edge", "1")
+        ne.set("source", nsg_sid)
+        ne.set("target", panel_id)
+        ne.set("parent", "1")
+        neg = ET.SubElement(ne, "mxGeometry")
+        neg.set("relative", "1")
+        neg.set("as", "geometry")
 
     # Add attribute info boxes for resources that have metadata
     ATTR_EDGE_STYLE = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeColor=#9673a6;dashed=1;"
@@ -1786,6 +1863,79 @@ def extract_route_summaries(
         vnet_udr_subnets[vid].sort()
 
     return subnet_udr, dict(vnet_udr_subnets)
+
+
+MAX_NSG_RULES_SHOWN = 6
+
+
+def extract_nsg_summaries(
+    nodes: List[Dict], edges: List[Dict],
+) -> Dict[str, Dict]:
+    """Extract NSG rule summaries for NSG nodes.
+
+    Returns:
+      nsg_id -> {nsg_name, rules: [{name, priority, direction, access, protocol,
+                                     src, dst, dstPort}]}
+    """
+    node_by_id: Dict[str, Dict] = {n["id"]: n for n in nodes}
+
+    # Identify which subnets/NICs reference which NSGs
+    nsg_refs: Dict[str, List[str]] = defaultdict(list)
+    for e in edges:
+        if e["kind"] in ("subnet->nsg", "nic->nsg"):
+            nsg_id = normalize_id(e["target"])
+            src_name = node_by_id.get(normalize_id(e["source"]), {}).get("name", "")
+            if src_name:
+                nsg_refs[nsg_id].append(src_name)
+
+    nsg_summaries: Dict[str, Dict] = {}
+
+    for n in nodes:
+        if n["type"] != "microsoft.network/networksecuritygroups":
+            continue
+        nid = n["id"]
+        raw_rules = _get(n.get("properties", {}), "securityRules") or []
+        rules = []
+        for r in raw_rules:
+            rp = _get(r, "properties") or {}
+            rules.append({
+                "name": r.get("name", ""),
+                "priority": rp.get("priority", 0),
+                "direction": rp.get("direction", ""),
+                "access": rp.get("access", ""),
+                "protocol": rp.get("protocol", "*"),
+                "src": rp.get("sourceAddressPrefix", "*"),
+                "dst": rp.get("destinationAddressPrefix", "*"),
+                "dstPort": rp.get("destinationPortRange", "*"),
+            })
+        rules.sort(key=lambda r: (r["direction"], r["priority"], r["name"]))
+
+        nsg_summaries[nid] = {
+            "nsg_name": n.get("name", nid.split("/")[-1]),
+            "rules": rules,
+            "attached_to": sorted(set(nsg_refs.get(nid, []))),
+        }
+
+    return nsg_summaries
+
+
+def _format_nsg_panel_label(summary: Dict) -> str:
+    """Build the text label for an NSG panel node."""
+    lines = [f"NSG: {summary['nsg_name']}"]
+    if summary.get("attached_to"):
+        lines.append(f"Attached: {', '.join(summary['attached_to'])}")
+    rules = summary["rules"]
+    shown = rules[:MAX_NSG_RULES_SHOWN]
+    for r in shown:
+        icon = "\u2705" if r["access"] == "Allow" else "\u274c"
+        lines.append(
+            f"{icon} {r['direction'][:2]} P{r['priority']} "
+            f"{r['protocol']} {r['src']}\u2192{r['dst']}:{r['dstPort']}"
+        )
+    remaining = len(rules) - len(shown)
+    if remaining > 0:
+        lines.append(f"\u2026(+{remaining} more)")
+    return "\n".join(lines)
 
 
 def _format_udr_panel_label(summary: Dict) -> str:
@@ -2032,6 +2182,54 @@ def _render_msft_mode(
             ueg.set("as", "geometry")
 
         panel_cursor_y += panel_h + 15
+
+    # Add NSG rule panels next to the UDR panels
+    nsg_summaries = extract_nsg_summaries(nodes, edges)
+    nsg_panel_x = panel_base_x + 240  # offset from UDR panels
+    nsg_cursor_y = MSFT_REGION_PAD
+    for nsg_id in sorted(nsg_summaries.keys(), key=lambda s: (
+        (node_by_id.get(s) or {}).get("name", ""), s,
+    )):
+        summary = nsg_summaries[nsg_id]
+        if not summary["rules"]:
+            continue
+        panel_label = _format_nsg_panel_label(summary)
+        panel_id = "msft_nsg_" + stable_id(nsg_id)
+
+        n_lines = panel_label.count("\n") + 1
+        nsg_panel_w = 260
+        nsg_panel_h = max(60, 18 * n_lines + 16)
+
+        pc = ET.SubElement(root, "mxCell")
+        pc.set("id", panel_id)
+        pc.set("value", panel_label)
+        pc.set("style", MSFT_NSG_PANEL_STYLE)
+        pc.set("vertex", "1")
+        pc.set("parent", "1")
+        pg = ET.SubElement(pc, "mxGeometry")
+        pg.set("x", str(nsg_panel_x))
+        pg.set("y", str(nsg_cursor_y))
+        pg.set("width", str(nsg_panel_w))
+        pg.set("height", str(nsg_panel_h))
+        pg.set("as", "geometry")
+
+        # Connect NSG node to panel
+        nsg_sid = node_id_map.get(nsg_id)
+        if nsg_sid:
+            nsg_edge_id = "msft_nsg_edge_" + stable_id(nsg_id)
+            ne = ET.SubElement(root, "mxCell")
+            ne.set("id", nsg_edge_id)
+            ne.set("value", "nsg_detail")
+            ne.set("style", _edge_style("udr_detail", msft=True))
+            ne.set("edge", "1")
+            ne.set("source", nsg_sid)
+            ne.set("target", panel_id)
+            ne.set("parent", "1")
+            neg = ET.SubElement(ne, "mxGeometry")
+            neg.set("relative", "1")
+            neg.set("as", "geometry")
+
+        nsg_cursor_y += nsg_panel_h + 15
 
     # Emit edges with differentiated styles
     for e in edges:
