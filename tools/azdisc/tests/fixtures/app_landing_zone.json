@@ -1,0 +1,687 @@
+[
+  {
+    "id": "/subscriptions/00000000-aaaa-0000-0000-000000000001/resourceGroups/rg-connectivity-prod/providers/Microsoft.Network/virtualNetworks/vnet-hub",
+    "name": "vnet-hub",
+    "type": "Microsoft.Network/virtualNetworks",
+    "location": "westeurope",
+    "subscriptionId": "00000000-aaaa-0000-0000-000000000001",
+    "resourceGroup": "rg-connectivity-prod",
+    "properties": {
+      "addressSpace": { "addressPrefixes": ["10.0.0.0/16"] },
+      "subnets": [
+        {
+          "id": "/subscriptions/00000000-aaaa-0000-0000-000000000001/resourceGroups/rg-connectivity-prod/providers/Microsoft.Network/virtualNetworks/vnet-hub/subnets/AzureFirewallSubnet",
+          "name": "AzureFirewallSubnet",
+          "properties": { "addressPrefix": "10.0.0.0/24" }
+        },
+        {
+          "id": "/subscriptions/00000000-aaaa-0000-0000-000000000001/resourceGroups/rg-connectivity-prod/providers/Microsoft.Network/virtualNetworks/vnet-hub/subnets/AzureBastionSubnet",
+          "name": "AzureBastionSubnet",
+          "properties": { "addressPrefix": "10.0.1.0/24" }
+        },
+        {
+          "id": "/subscriptions/00000000-aaaa-0000-0000-000000000001/resourceGroups/rg-connectivity-prod/providers/Microsoft.Network/virtualNetworks/vnet-hub/subnets/GatewaySubnet",
+          "name": "GatewaySubnet",
+          "properties": { "addressPrefix": "10.0.2.0/24" }
+        }
+      ],
+      "virtualNetworkPeerings": [
+        {
+          "name": "peer-to-spoke-app",
+          "properties": {
+            "remoteVirtualNetwork": {
+              "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.Network/virtualNetworks/vnet-app-spoke"
+            },
+            "allowForwardedTraffic": true,
+            "allowGatewayTransit": true
+          }
+        },
+        {
+          "name": "peer-to-spoke-data",
+          "properties": {
+            "remoteVirtualNetwork": {
+              "id": "/subscriptions/00000000-cccc-0000-0000-000000000003/resourceGroups/rg-data-prod/providers/Microsoft.Network/virtualNetworks/vnet-data-spoke"
+            },
+            "allowForwardedTraffic": true,
+            "allowGatewayTransit": true
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-aaaa-0000-0000-000000000001/resourceGroups/rg-connectivity-prod/providers/Microsoft.Network/virtualNetworks/vnet-hub/subnets/AzureFirewallSubnet",
+    "name": "AzureFirewallSubnet",
+    "type": "Microsoft.Network/virtualNetworks/subnets",
+    "location": "westeurope",
+    "subscriptionId": "00000000-aaaa-0000-0000-000000000001",
+    "resourceGroup": "rg-connectivity-prod",
+    "properties": { "addressPrefix": "10.0.0.0/24" }
+  },
+  {
+    "id": "/subscriptions/00000000-aaaa-0000-0000-000000000001/resourceGroups/rg-connectivity-prod/providers/Microsoft.Network/virtualNetworks/vnet-hub/subnets/AzureBastionSubnet",
+    "name": "AzureBastionSubnet",
+    "type": "Microsoft.Network/virtualNetworks/subnets",
+    "location": "westeurope",
+    "subscriptionId": "00000000-aaaa-0000-0000-000000000001",
+    "resourceGroup": "rg-connectivity-prod",
+    "properties": { "addressPrefix": "10.0.1.0/24" }
+  },
+  {
+    "id": "/subscriptions/00000000-aaaa-0000-0000-000000000001/resourceGroups/rg-connectivity-prod/providers/Microsoft.Network/virtualNetworks/vnet-hub/subnets/GatewaySubnet",
+    "name": "GatewaySubnet",
+    "type": "Microsoft.Network/virtualNetworks/subnets",
+    "location": "westeurope",
+    "subscriptionId": "00000000-aaaa-0000-0000-000000000001",
+    "resourceGroup": "rg-connectivity-prod",
+    "properties": { "addressPrefix": "10.0.2.0/24" }
+  },
+  {
+    "id": "/subscriptions/00000000-aaaa-0000-0000-000000000001/resourceGroups/rg-connectivity-prod/providers/Microsoft.Network/azureFirewalls/fw-hub",
+    "name": "fw-hub",
+    "type": "Microsoft.Network/azureFirewalls",
+    "location": "westeurope",
+    "subscriptionId": "00000000-aaaa-0000-0000-000000000001",
+    "resourceGroup": "rg-connectivity-prod",
+    "properties": {
+      "ipConfigurations": [
+        {
+          "name": "fw-ipconfig",
+          "properties": {
+            "subnet": {
+              "id": "/subscriptions/00000000-aaaa-0000-0000-000000000001/resourceGroups/rg-connectivity-prod/providers/Microsoft.Network/virtualNetworks/vnet-hub/subnets/AzureFirewallSubnet"
+            },
+            "publicIPAddress": {
+              "id": "/subscriptions/00000000-aaaa-0000-0000-000000000001/resourceGroups/rg-connectivity-prod/providers/Microsoft.Network/publicIPAddresses/pip-fw"
+            }
+          }
+        }
+      ],
+      "threatIntelMode": "Alert",
+      "sku": { "name": "AZFW_VNet", "tier": "Premium" }
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-aaaa-0000-0000-000000000001/resourceGroups/rg-connectivity-prod/providers/Microsoft.Network/bastionHosts/bastion-hub",
+    "name": "bastion-hub",
+    "type": "Microsoft.Network/bastionHosts",
+    "location": "westeurope",
+    "subscriptionId": "00000000-aaaa-0000-0000-000000000001",
+    "resourceGroup": "rg-connectivity-prod",
+    "properties": {
+      "ipConfigurations": [
+        {
+          "name": "bastion-ipconfig",
+          "properties": {
+            "subnet": {
+              "id": "/subscriptions/00000000-aaaa-0000-0000-000000000001/resourceGroups/rg-connectivity-prod/providers/Microsoft.Network/virtualNetworks/vnet-hub/subnets/AzureBastionSubnet"
+            },
+            "publicIPAddress": {
+              "id": "/subscriptions/00000000-aaaa-0000-0000-000000000001/resourceGroups/rg-connectivity-prod/providers/Microsoft.Network/publicIPAddresses/pip-bastion"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-aaaa-0000-0000-000000000001/resourceGroups/rg-connectivity-prod/providers/Microsoft.Network/publicIPAddresses/pip-fw",
+    "name": "pip-fw",
+    "type": "Microsoft.Network/publicIPAddresses",
+    "location": "westeurope",
+    "subscriptionId": "00000000-aaaa-0000-0000-000000000001",
+    "resourceGroup": "rg-connectivity-prod",
+    "properties": {
+      "publicIPAllocationMethod": "Static",
+      "ipAddress": "20.50.100.1"
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-aaaa-0000-0000-000000000001/resourceGroups/rg-connectivity-prod/providers/Microsoft.Network/publicIPAddresses/pip-bastion",
+    "name": "pip-bastion",
+    "type": "Microsoft.Network/publicIPAddresses",
+    "location": "westeurope",
+    "subscriptionId": "00000000-aaaa-0000-0000-000000000001",
+    "resourceGroup": "rg-connectivity-prod",
+    "properties": {
+      "publicIPAllocationMethod": "Static",
+      "ipAddress": "20.50.100.2"
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-aaaa-0000-0000-000000000001/resourceGroups/rg-connectivity-prod/providers/Microsoft.OperationalInsights/workspaces/law-platform",
+    "name": "law-platform",
+    "type": "Microsoft.OperationalInsights/workspaces",
+    "location": "westeurope",
+    "subscriptionId": "00000000-aaaa-0000-0000-000000000001",
+    "resourceGroup": "rg-connectivity-prod",
+    "properties": {
+      "sku": { "name": "PerGB2018" },
+      "retentionInDays": 90
+    }
+  },
+
+  {
+    "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.Network/virtualNetworks/vnet-app-spoke",
+    "name": "vnet-app-spoke",
+    "type": "Microsoft.Network/virtualNetworks",
+    "location": "westeurope",
+    "subscriptionId": "00000000-bbbb-0000-0000-000000000002",
+    "resourceGroup": "rg-app-prod",
+    "properties": {
+      "addressSpace": { "addressPrefixes": ["10.1.0.0/16"] },
+      "subnets": [
+        {
+          "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.Network/virtualNetworks/vnet-app-spoke/subnets/snet-aca",
+          "name": "snet-aca",
+          "properties": {
+            "addressPrefix": "10.1.1.0/24",
+            "networkSecurityGroup": {
+              "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.Network/networkSecurityGroups/nsg-aca"
+            },
+            "routeTable": {
+              "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.Network/routeTables/rt-app"
+            }
+          }
+        },
+        {
+          "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.Network/virtualNetworks/vnet-app-spoke/subnets/snet-pe",
+          "name": "snet-pe",
+          "properties": {
+            "addressPrefix": "10.1.2.0/24",
+            "networkSecurityGroup": {
+              "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.Network/networkSecurityGroups/nsg-pe"
+            }
+          }
+        }
+      ],
+      "virtualNetworkPeerings": [
+        {
+          "name": "peer-to-hub",
+          "properties": {
+            "remoteVirtualNetwork": {
+              "id": "/subscriptions/00000000-aaaa-0000-0000-000000000001/resourceGroups/rg-connectivity-prod/providers/Microsoft.Network/virtualNetworks/vnet-hub"
+            },
+            "allowForwardedTraffic": true,
+            "useRemoteGateways": true
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.Network/virtualNetworks/vnet-app-spoke/subnets/snet-aca",
+    "name": "snet-aca",
+    "type": "Microsoft.Network/virtualNetworks/subnets",
+    "location": "westeurope",
+    "subscriptionId": "00000000-bbbb-0000-0000-000000000002",
+    "resourceGroup": "rg-app-prod",
+    "properties": {
+      "addressPrefix": "10.1.1.0/24",
+      "networkSecurityGroup": {
+        "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.Network/networkSecurityGroups/nsg-aca"
+      },
+      "routeTable": {
+        "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.Network/routeTables/rt-app"
+      }
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.Network/virtualNetworks/vnet-app-spoke/subnets/snet-pe",
+    "name": "snet-pe",
+    "type": "Microsoft.Network/virtualNetworks/subnets",
+    "location": "westeurope",
+    "subscriptionId": "00000000-bbbb-0000-0000-000000000002",
+    "resourceGroup": "rg-app-prod",
+    "properties": {
+      "addressPrefix": "10.1.2.0/24",
+      "networkSecurityGroup": {
+        "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.Network/networkSecurityGroups/nsg-pe"
+      }
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.Network/networkSecurityGroups/nsg-aca",
+    "name": "nsg-aca",
+    "type": "Microsoft.Network/networkSecurityGroups",
+    "location": "westeurope",
+    "subscriptionId": "00000000-bbbb-0000-0000-000000000002",
+    "resourceGroup": "rg-app-prod",
+    "properties": {
+      "securityRules": [
+        {
+          "name": "allow-aca-internal",
+          "properties": {
+            "priority": 100,
+            "protocol": "TCP",
+            "direction": "Inbound",
+            "sourceAddressPrefix": "10.1.0.0/16",
+            "destinationPortRange": "443",
+            "destinationAddressPrefix": "10.1.1.0/24",
+            "access": "Allow"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.Network/networkSecurityGroups/nsg-pe",
+    "name": "nsg-pe",
+    "type": "Microsoft.Network/networkSecurityGroups",
+    "location": "westeurope",
+    "subscriptionId": "00000000-bbbb-0000-0000-000000000002",
+    "resourceGroup": "rg-app-prod",
+    "properties": {
+      "securityRules": [
+        {
+          "name": "allow-vnet-to-pe",
+          "properties": {
+            "priority": 100,
+            "protocol": "TCP",
+            "direction": "Inbound",
+            "sourceAddressPrefix": "10.1.0.0/16",
+            "destinationPortRange": "443",
+            "destinationAddressPrefix": "10.1.2.0/24",
+            "access": "Allow"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.Network/routeTables/rt-app",
+    "name": "rt-app",
+    "type": "Microsoft.Network/routeTables",
+    "location": "westeurope",
+    "subscriptionId": "00000000-bbbb-0000-0000-000000000002",
+    "resourceGroup": "rg-app-prod",
+    "properties": {
+      "routes": [
+        {
+          "name": "default-to-fw",
+          "properties": {
+            "addressPrefix": "0.0.0.0/0",
+            "nextHopType": "VirtualAppliance",
+            "nextHopIpAddress": "10.0.0.4"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.App/managedEnvironments/cae-app",
+    "name": "cae-app",
+    "type": "Microsoft.App/managedEnvironments",
+    "location": "westeurope",
+    "subscriptionId": "00000000-bbbb-0000-0000-000000000002",
+    "resourceGroup": "rg-app-prod",
+    "properties": {
+      "vnetConfiguration": {
+        "infrastructureSubnetId": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.Network/virtualNetworks/vnet-app-spoke/subnets/snet-aca"
+      }
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.App/containerApps/ca-api",
+    "name": "ca-api",
+    "type": "Microsoft.App/containerApps",
+    "location": "westeurope",
+    "subscriptionId": "00000000-bbbb-0000-0000-000000000002",
+    "resourceGroup": "rg-app-prod",
+    "properties": {
+      "managedEnvironmentId": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.App/managedEnvironments/cae-app",
+      "configuration": {
+        "ingress": { "external": false, "targetPort": 8000 }
+      },
+      "template": {
+        "containers": [
+          {
+            "name": "api",
+            "image": "acrapp.azurecr.io/api:latest",
+            "resources": { "cpu": 1.0, "memory": "2Gi" }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.App/containerApps/ca-frontend",
+    "name": "ca-frontend",
+    "type": "Microsoft.App/containerApps",
+    "location": "westeurope",
+    "subscriptionId": "00000000-bbbb-0000-0000-000000000002",
+    "resourceGroup": "rg-app-prod",
+    "properties": {
+      "managedEnvironmentId": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.App/managedEnvironments/cae-app",
+      "configuration": {
+        "ingress": { "external": true, "targetPort": 3000 }
+      },
+      "template": {
+        "containers": [
+          {
+            "name": "frontend",
+            "image": "acrapp.azurecr.io/frontend:latest",
+            "resources": { "cpu": 0.5, "memory": "1Gi" }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.ContainerRegistry/registries/acrapp",
+    "name": "acrapp",
+    "type": "Microsoft.ContainerRegistry/registries",
+    "location": "westeurope",
+    "subscriptionId": "00000000-bbbb-0000-0000-000000000002",
+    "resourceGroup": "rg-app-prod",
+    "properties": {
+      "loginServer": "acrapp.azurecr.io",
+      "adminUserEnabled": false
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.KeyVault/vaults/kv-app",
+    "name": "kv-app",
+    "type": "Microsoft.KeyVault/vaults",
+    "location": "westeurope",
+    "subscriptionId": "00000000-bbbb-0000-0000-000000000002",
+    "resourceGroup": "rg-app-prod",
+    "properties": {
+      "sku": { "family": "A", "name": "standard" },
+      "vaultUri": "https://kv-app.vault.azure.net/",
+      "enableSoftDelete": true,
+      "networkAcls": { "defaultAction": "Deny" }
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.Insights/components/ai-app",
+    "name": "ai-app",
+    "type": "Microsoft.Insights/components",
+    "location": "westeurope",
+    "subscriptionId": "00000000-bbbb-0000-0000-000000000002",
+    "resourceGroup": "rg-app-prod",
+    "properties": {
+      "Application_Type": "web",
+      "WorkspaceResourceId": "/subscriptions/00000000-aaaa-0000-0000-000000000001/resourceGroups/rg-connectivity-prod/providers/Microsoft.OperationalInsights/workspaces/law-platform",
+      "IngestionMode": "LogAnalytics"
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-app",
+    "name": "id-app",
+    "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+    "location": "westeurope",
+    "subscriptionId": "00000000-bbbb-0000-0000-000000000002",
+    "resourceGroup": "rg-app-prod",
+    "properties": {
+      "principalId": "aaaaaaaa-1111-2222-3333-444444444444",
+      "clientId": "bbbbbbbb-5555-6666-7777-888888888888"
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.Network/privateEndpoints/pe-acr",
+    "name": "pe-acr",
+    "type": "Microsoft.Network/privateEndpoints",
+    "location": "westeurope",
+    "subscriptionId": "00000000-bbbb-0000-0000-000000000002",
+    "resourceGroup": "rg-app-prod",
+    "properties": {
+      "subnet": {
+        "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.Network/virtualNetworks/vnet-app-spoke/subnets/snet-pe"
+      },
+      "privateLinkServiceConnections": [
+        {
+          "properties": {
+            "privateLinkServiceId": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.ContainerRegistry/registries/acrapp",
+            "groupIds": ["registry"]
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.Network/privateEndpoints/pe-kv",
+    "name": "pe-kv",
+    "type": "Microsoft.Network/privateEndpoints",
+    "location": "westeurope",
+    "subscriptionId": "00000000-bbbb-0000-0000-000000000002",
+    "resourceGroup": "rg-app-prod",
+    "properties": {
+      "subnet": {
+        "id": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.Network/virtualNetworks/vnet-app-spoke/subnets/snet-pe"
+      },
+      "privateLinkServiceConnections": [
+        {
+          "properties": {
+            "privateLinkServiceId": "/subscriptions/00000000-bbbb-0000-0000-000000000002/resourceGroups/rg-app-prod/providers/Microsoft.KeyVault/vaults/kv-app",
+            "groupIds": ["vault"]
+          }
+        }
+      ]
+    }
+  },
+
+  {
+    "id": "/subscriptions/00000000-cccc-0000-0000-000000000003/resourceGroups/rg-data-prod/providers/Microsoft.Network/virtualNetworks/vnet-data-spoke",
+    "name": "vnet-data-spoke",
+    "type": "Microsoft.Network/virtualNetworks",
+    "location": "westeurope",
+    "subscriptionId": "00000000-cccc-0000-0000-000000000003",
+    "resourceGroup": "rg-data-prod",
+    "properties": {
+      "addressSpace": { "addressPrefixes": ["10.2.0.0/16"] },
+      "subnets": [
+        {
+          "id": "/subscriptions/00000000-cccc-0000-0000-000000000003/resourceGroups/rg-data-prod/providers/Microsoft.Network/virtualNetworks/vnet-data-spoke/subnets/snet-sql",
+          "name": "snet-sql",
+          "properties": {
+            "addressPrefix": "10.2.1.0/24",
+            "networkSecurityGroup": {
+              "id": "/subscriptions/00000000-cccc-0000-0000-000000000003/resourceGroups/rg-data-prod/providers/Microsoft.Network/networkSecurityGroups/nsg-sql"
+            },
+            "routeTable": {
+              "id": "/subscriptions/00000000-cccc-0000-0000-000000000003/resourceGroups/rg-data-prod/providers/Microsoft.Network/routeTables/rt-data"
+            }
+          }
+        },
+        {
+          "id": "/subscriptions/00000000-cccc-0000-0000-000000000003/resourceGroups/rg-data-prod/providers/Microsoft.Network/virtualNetworks/vnet-data-spoke/subnets/snet-storage",
+          "name": "snet-storage",
+          "properties": {
+            "addressPrefix": "10.2.2.0/24",
+            "networkSecurityGroup": {
+              "id": "/subscriptions/00000000-cccc-0000-0000-000000000003/resourceGroups/rg-data-prod/providers/Microsoft.Network/networkSecurityGroups/nsg-storage"
+            }
+          }
+        }
+      ],
+      "virtualNetworkPeerings": [
+        {
+          "name": "peer-to-hub",
+          "properties": {
+            "remoteVirtualNetwork": {
+              "id": "/subscriptions/00000000-aaaa-0000-0000-000000000001/resourceGroups/rg-connectivity-prod/providers/Microsoft.Network/virtualNetworks/vnet-hub"
+            },
+            "allowForwardedTraffic": true,
+            "useRemoteGateways": true
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-cccc-0000-0000-000000000003/resourceGroups/rg-data-prod/providers/Microsoft.Network/virtualNetworks/vnet-data-spoke/subnets/snet-sql",
+    "name": "snet-sql",
+    "type": "Microsoft.Network/virtualNetworks/subnets",
+    "location": "westeurope",
+    "subscriptionId": "00000000-cccc-0000-0000-000000000003",
+    "resourceGroup": "rg-data-prod",
+    "properties": {
+      "addressPrefix": "10.2.1.0/24",
+      "networkSecurityGroup": {
+        "id": "/subscriptions/00000000-cccc-0000-0000-000000000003/resourceGroups/rg-data-prod/providers/Microsoft.Network/networkSecurityGroups/nsg-sql"
+      },
+      "routeTable": {
+        "id": "/subscriptions/00000000-cccc-0000-0000-000000000003/resourceGroups/rg-data-prod/providers/Microsoft.Network/routeTables/rt-data"
+      }
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-cccc-0000-0000-000000000003/resourceGroups/rg-data-prod/providers/Microsoft.Network/virtualNetworks/vnet-data-spoke/subnets/snet-storage",
+    "name": "snet-storage",
+    "type": "Microsoft.Network/virtualNetworks/subnets",
+    "location": "westeurope",
+    "subscriptionId": "00000000-cccc-0000-0000-000000000003",
+    "resourceGroup": "rg-data-prod",
+    "properties": {
+      "addressPrefix": "10.2.2.0/24",
+      "networkSecurityGroup": {
+        "id": "/subscriptions/00000000-cccc-0000-0000-000000000003/resourceGroups/rg-data-prod/providers/Microsoft.Network/networkSecurityGroups/nsg-storage"
+      }
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-cccc-0000-0000-000000000003/resourceGroups/rg-data-prod/providers/Microsoft.Network/networkSecurityGroups/nsg-sql",
+    "name": "nsg-sql",
+    "type": "Microsoft.Network/networkSecurityGroups",
+    "location": "westeurope",
+    "subscriptionId": "00000000-cccc-0000-0000-000000000003",
+    "resourceGroup": "rg-data-prod",
+    "properties": {
+      "securityRules": [
+        {
+          "name": "allow-app-to-sql",
+          "properties": {
+            "priority": 100, "protocol": "TCP", "direction": "Inbound",
+            "sourceAddressPrefix": "10.1.0.0/16",
+            "destinationPortRange": "1433",
+            "destinationAddressPrefix": "10.2.1.0/24",
+            "access": "Allow"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-cccc-0000-0000-000000000003/resourceGroups/rg-data-prod/providers/Microsoft.Network/networkSecurityGroups/nsg-storage",
+    "name": "nsg-storage",
+    "type": "Microsoft.Network/networkSecurityGroups",
+    "location": "westeurope",
+    "subscriptionId": "00000000-cccc-0000-0000-000000000003",
+    "resourceGroup": "rg-data-prod",
+    "properties": {
+      "securityRules": [
+        {
+          "name": "allow-vnet-to-storage",
+          "properties": {
+            "priority": 100, "protocol": "TCP", "direction": "Inbound",
+            "sourceAddressPrefix": "10.2.0.0/16",
+            "destinationPortRange": "443",
+            "destinationAddressPrefix": "10.2.2.0/24",
+            "access": "Allow"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-cccc-0000-0000-000000000003/resourceGroups/rg-data-prod/providers/Microsoft.Network/routeTables/rt-data",
+    "name": "rt-data",
+    "type": "Microsoft.Network/routeTables",
+    "location": "westeurope",
+    "subscriptionId": "00000000-cccc-0000-0000-000000000003",
+    "resourceGroup": "rg-data-prod",
+    "properties": {
+      "routes": [
+        {
+          "name": "default-to-fw",
+          "properties": {
+            "addressPrefix": "0.0.0.0/0",
+            "nextHopType": "VirtualAppliance",
+            "nextHopIpAddress": "10.0.0.4"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-cccc-0000-0000-000000000003/resourceGroups/rg-data-prod/providers/Microsoft.Sql/servers/sql-data",
+    "name": "sql-data",
+    "type": "Microsoft.Sql/servers",
+    "location": "westeurope",
+    "subscriptionId": "00000000-cccc-0000-0000-000000000003",
+    "resourceGroup": "rg-data-prod",
+    "properties": {
+      "fullyQualifiedDomainName": "sql-data.database.windows.net",
+      "administratorLogin": "sqladmin"
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-cccc-0000-0000-000000000003/resourceGroups/rg-data-prod/providers/Microsoft.Sql/servers/sql-data/databases/db-main",
+    "name": "db-main",
+    "type": "Microsoft.Sql/servers/databases",
+    "location": "westeurope",
+    "subscriptionId": "00000000-cccc-0000-0000-000000000003",
+    "resourceGroup": "rg-data-prod",
+    "properties": {
+      "sku": { "name": "GP_Gen5_8", "tier": "GeneralPurpose" },
+      "maxSizeBytes": 68719476736
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-cccc-0000-0000-000000000003/resourceGroups/rg-data-prod/providers/Microsoft.Storage/storageAccounts/stdata",
+    "name": "stdata",
+    "type": "Microsoft.Storage/storageAccounts",
+    "location": "westeurope",
+    "subscriptionId": "00000000-cccc-0000-0000-000000000003",
+    "resourceGroup": "rg-data-prod",
+    "properties": {
+      "primaryEndpoints": {
+        "blob": "https://stdata.blob.core.windows.net/"
+      },
+      "networkAcls": { "defaultAction": "Deny" }
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-cccc-0000-0000-000000000003/resourceGroups/rg-data-prod/providers/Microsoft.Network/privateEndpoints/pe-sql",
+    "name": "pe-sql",
+    "type": "Microsoft.Network/privateEndpoints",
+    "location": "westeurope",
+    "subscriptionId": "00000000-cccc-0000-0000-000000000003",
+    "resourceGroup": "rg-data-prod",
+    "properties": {
+      "subnet": {
+        "id": "/subscriptions/00000000-cccc-0000-0000-000000000003/resourceGroups/rg-data-prod/providers/Microsoft.Network/virtualNetworks/vnet-data-spoke/subnets/snet-sql"
+      },
+      "privateLinkServiceConnections": [
+        {
+          "properties": {
+            "privateLinkServiceId": "/subscriptions/00000000-cccc-0000-0000-000000000003/resourceGroups/rg-data-prod/providers/Microsoft.Sql/servers/sql-data",
+            "groupIds": ["sqlServer"]
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "/subscriptions/00000000-cccc-0000-0000-000000000003/resourceGroups/rg-data-prod/providers/Microsoft.Network/privateEndpoints/pe-storage",
+    "name": "pe-storage",
+    "type": "Microsoft.Network/privateEndpoints",
+    "location": "westeurope",
+    "subscriptionId": "00000000-cccc-0000-0000-000000000003",
+    "resourceGroup": "rg-data-prod",
+    "properties": {
+      "subnet": {
+        "id": "/subscriptions/00000000-cccc-0000-0000-000000000003/resourceGroups/rg-data-prod/providers/Microsoft.Network/virtualNetworks/vnet-data-spoke/subnets/snet-storage"
+      },
+      "privateLinkServiceConnections": [
+        {
+          "properties": {
+            "privateLinkServiceId": "/subscriptions/00000000-cccc-0000-0000-000000000003/resourceGroups/rg-data-prod/providers/Microsoft.Storage/storageAccounts/stdata",
+            "groupIds": ["blob"]
+          }
+        }
+      ]
+    }
+  }
+]

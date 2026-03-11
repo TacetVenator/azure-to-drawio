@@ -20,7 +20,7 @@ The tool runs a six-stage pipeline. Each stage reads the previous stage's output
 2. **Expand** — Reads `seed.json`, recursively extracts ARM ID references from resource properties, and fetches any resources not yet collected. Iterates up to 50 rounds until no new IDs are found. Writes `inventory.json` (the full resource set) and `unresolved.json` (IDs referenced but not found in Azure).
 3. **RBAC** *(optional, `includeRbac: true`)* — Reads `inventory.json`, queries `authorizationresources` for role assignments scoped to discovered resources, and writes `rbac.json`.
 4. **Graph** — Reads `inventory.json`, `unresolved.json`, and optionally `rbac.json`. Builds a normalized graph model: separates parent and child resources, merges children (VM extensions, SQL firewall rules, etc.) into parent node attributes, extracts typed edges from resource properties, and adds placeholder nodes for unresolved external references. Writes `graph.json`.
-5. **Draw.io** — Reads `graph.json` and the icon map from `assets/azure_icon_map.json`. Computes a deterministic layout (either `REGION>RG>TYPE` or `VNET>SUBNET`), generates draw.io XML with positioned nodes, styled icons, edges, UDR callout boxes, and attribute info boxes. Writes `diagram.drawio` and `icons_used.json`. If the `drawio` CLI is on `PATH`, also exports `diagram.svg` and `diagram.png`.
+5. **Draw.io** — Reads `graph.json` and the icon map from `assets/azure_icon_map.json`. Computes a deterministic layout (`REGION>RG>TYPE`, `VNET>SUBNET`, or `SUB>REGION>RG>NET`), generates draw.io XML with positioned nodes, styled icons, edges, UDR callout boxes, and attribute info boxes. Writes `diagram.drawio` and `icons_used.json`. If the `drawio` CLI is on `PATH`, also exports `diagram.svg` and `diagram.png`.
 6. **Docs** — Reads `graph.json` and `unresolved.json`. Generates three Markdown reports: `catalog.md`, `edges.md`, and `routing.md`.
 
 ---
@@ -126,6 +126,29 @@ The layout algorithm is determined by the `layout` field in your config file (se
 **Requires:** `graph.json` in the output directory.
 **Produces:** `diagram.drawio`, `icons_used.json`, and optionally `diagram.svg`, `diagram.png`
 
+#### `render-all` — Generate all layout × mode variants
+
+Reads the existing `graph.json` from your output directory and generates diagrams for every combination of layout and diagram mode. Each variant is written to a `variants/<layout>_<mode>/` subfolder alongside your primary output.
+
+```bash
+python3 -m tools.azdisc render-all app/myapp/config.json
+```
+
+This produces 6 variants (3 layouts × 2 modes) so you can compare how your architecture looks in each combination without modifying your primary config. Your original output files remain untouched.
+
+**Requires:** `graph.json` in the output directory (run `graph` or `run` first).
+**Produces:** `variants/` directory with subfolders for each combination.
+
+#### `test-all` — Render all fixtures × layouts × modes
+
+Exercises every combination against the bundled test fixtures. No Azure credentials needed — useful for CI and development.
+
+```bash
+python3 -m tools.azdisc test-all [output_dir]
+```
+
+**Produces:** `<output_dir>/<fixture>/<layout>_<mode>/` directories with full diagram + docs output.
+
 #### `docs` — Generate documentation
 
 Reads `graph.json` and produces three Markdown reports.
@@ -204,7 +227,7 @@ The tool reads a JSON configuration file. An example is provided at `app/myapp/c
 | `seedResourceGroups` | `string[]` | Yes | — | Resource group names to seed initial discovery from. All resources in these RGs are fetched. |
 | `outputDir` | `string` | Yes | — | Directory where all output files are written. Created automatically if it does not exist. |
 | `includeRbac` | `bool` | No | `false` | When `true`, the RBAC stage queries `authorizationresources` for role assignments and adds `rbac_assignment` edges to the graph. |
-| `layout` | `string` | No | `"REGION>RG>TYPE"` | Diagram layout mode. Must be one of: `"REGION>RG>TYPE"`, `"VNET>SUBNET"`. See [Layout Modes](#layout-modes). |
+| `layout` | `string` | No | `"REGION>RG>TYPE"` | Diagram layout mode. Must be one of: `"REGION>RG>TYPE"`, `"VNET>SUBNET"`, `"SUB>REGION>RG>NET"`. See [Layout Modes](#layout-modes). |
 | `diagramMode` | `string` | No | `"BANDS"` | Diagram rendering mode. Must be one of: `"BANDS"`, `"MSFT"`. See [Diagram Modes](#diagram-modes). |
 | `spacing` | `string` | No | `"compact"` | Diagram spacing preset. Must be one of: `"compact"`, `"spacious"`. See [Spacing](#spacing). |
 
@@ -263,6 +286,58 @@ Resources not attached to any subnet are collected into an "Other Resources" con
 In this mode, VNet and subnet nodes are rendered as containers rather than icons — they do not appear as separate icon cells.
 
 **Best for:** Network architecture diagrams, security reviews, subnet capacity planning.
+
+### `SUB>REGION>RG>NET`
+
+Organizes resources in a full environment hierarchy with subscriptions as the top-level container, designed for multi-subscription Azure Landing Zone documentation:
+
+```
+┌── Subscription ...00000001 ────────────────────────────────────┐
+│  ┌── Region: westeurope ────────────────────────────────────┐  │
+│  │  ┌── RG: rg-connectivity-prod ────────────────────────┐  │  │
+│  │  │  Networking                                         │  │  │
+│  │  │    virtualnetworks                                  │  │  │
+│  │  │    ┌──────────┐                                     │  │  │
+│  │  │    │ vnet-hub │                                     │  │  │
+│  │  │    └──────────┘                                     │  │  │
+│  │  │    azurefirewalls                                   │  │  │
+│  │  │    ┌──────────┐                                     │  │  │
+│  │  │    │ fw-hub   │                                     │  │  │
+│  │  │    └──────────┘                                     │  │  │
+│  │  │  Resources                                          │  │  │
+│  │  │    Monitoring                                       │  │  │
+│  │  │    ┌──────────────┐                                 │  │  │
+│  │  │    │ law-platform │                                 │  │  │
+│  │  │    └──────────────┘                                 │  │  │
+│  │  └─────────────────────────────────────────────────────┘  │  │
+│  └───────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+┌── Subscription ...00000002 ─────────────────────────────────────┐
+│  ...                                                             │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+Resources inside each resource group are split into two sections:
+
+- **Networking** — VNets, subnets, NSGs, route tables, firewalls, bastion hosts, application gateways, load balancers, public IPs, private endpoints, NICs, NAT gateways, firewall policies, VPN/local network gateways, and connections. Each specific network resource type gets its own sub-header.
+- **Resources** — Everything else, grouped by category (Compute, Databases, Storage, Monitoring, etc.) with sub-headers.
+
+This layout produces a 3-level container hierarchy (subscription → region → resource group) so cross-subscription relationships like VNet peering and shared Log Analytics workspaces are clearly visible as edges spanning container boundaries.
+
+**Best for:** Azure Landing Zone migration documentation, multi-subscription environment mapping, full-picture architecture reviews with architects and application teams.
+
+**Example config:**
+
+```json
+{
+  "app": "landing-zone",
+  "subscriptions": ["<hub-sub>", "<app-sub>", "<data-sub>"],
+  "seedResourceGroups": ["rg-connectivity-prod", "rg-app-prod", "rg-data-prod"],
+  "outputDir": "app/landing-zone/out",
+  "layout": "SUB>REGION>RG>NET",
+  "diagramMode": "MSFT"
+}
+```
 
 ---
 
@@ -337,7 +412,7 @@ Only the whitespace between icons is scaled. Icon cell sizes (`120x80` in BANDS,
 }
 ```
 
-The spacing option works with all layout modes (`REGION>RG>TYPE`, `VNET>SUBNET`) and all diagram modes (`BANDS`, `MSFT`). In `VNET>SUBNET` mode, container padding (VNet boxes, subnet boxes) is also scaled so inner resources have more room. In `MSFT` mode, RG containers, region containers, and type section headers all grow proportionally.
+The spacing option works with all layout modes (`REGION>RG>TYPE`, `VNET>SUBNET`, `SUB>REGION>RG>NET`) and all diagram modes (`BANDS`, `MSFT`). In `VNET>SUBNET` mode, container padding (VNet boxes, subnet boxes) is also scaled so inner resources have more room. In `MSFT` mode, RG containers, region containers, and type section headers all grow proportionally.
 
 **When to use spacious:**
 - Diagrams with long resource names (labels overlap their neighbors)
@@ -547,7 +622,7 @@ Network routing and security details:
 
 ### Relationship Edges
 
-The graph builder extracts 15 typed edge kinds from resource properties:
+The graph builder extracts 22 typed edge kinds from resource properties:
 
 | Edge Kind | Source Type | Meaning |
 |-----------|-------------|---------|
@@ -565,6 +640,16 @@ The graph builder extracts 15 typed edge kinds from resource properties:
 | `publicIp->attachment` | `publicipaddresses` | Public IP is attached to a NIC via `ipConfiguration.id` |
 | `webApp->appServicePlan` | `web/sites` | Web app runs on a plan via `serverFarmId` |
 | `webApp->subnet` | `web/sites` | Web app has VNet integration via `virtualNetworkSubnetId` |
+| `firewall->subnet` | `azurefirewalls` | Firewall IP configuration references a subnet in `ipConfigurations[].properties.subnet` |
+| `firewall->publicIp` | `azurefirewalls` | Firewall IP configuration references a public IP in `ipConfigurations[].properties.publicIPAddress` |
+| `bastion->subnet` | `bastionhosts` | Bastion IP configuration references a subnet in `ipConfigurations[].properties.subnet` |
+| `bastion->publicIp` | `bastionhosts` | Bastion IP configuration references a public IP in `ipConfigurations[].properties.publicIPAddress` |
+| `containerApp->environment` | `containerapps` | Container App references its managed environment via `managedEnvironmentId` |
+| `containerEnv->subnet` | `managedenvironments` | Container Apps Environment references its infrastructure subnet via `vnetConfiguration.infrastructureSubnetId` |
+| `appInsights->workspace` | `components` | Application Insights references a Log Analytics workspace via `WorkspaceResourceId` |
+| `appGw->subnet` | `applicationgateways` | Application Gateway references a subnet via `gatewayIPConfigurations[].properties.subnet` |
+| `appGw->backend` | `applicationgateways` | Application Gateway references a backend FQDN via `backendAddressPools[].properties.backendAddresses[].fqdn` |
+| `logicApp->connection` | `workflows` | Logic App references ARM IDs in parameter values |
 | `rbac_assignment` | *(RBAC scope)* | RBAC role assignment scope edge (only when `includeRbac: true`) |
 
 ### UDR Callout Boxes
@@ -673,14 +758,16 @@ azure-to-drawio/
 │   ├── graph.py                       # Graph model: node/edge extraction, child merging, attributes
 │   ├── drawio.py                      # Draw.io XML generation, all layout engines + MSFT mode, image export
 │   ├── docs.py                        # Markdown documentation generators (catalog, edges, routing)
+│   ├── test_all.py                    # Render-all and test-all: all fixture × layout × mode combinations
 │   ├── util.py                        # ARM ID regex, normalization, stable ID hashing, logging setup
 │   └── tests/
 │       ├── fixtures/
 │       │   ├── app_contoso.json       # Realistic 3-tier app: VNet, subnets, VMs, SQL, LB, PE, NSGs
 │       │   ├── app_ai_chatbot.json    # AI chatbot: Container Apps, OpenAI, Cosmos DB, hub-spoke networking
+│       │   ├── app_landing_zone.json  # Multi-sub hub-spoke Azure Landing Zone: 3 subs, firewall, bastion, ACA, PEs
 │       │   └── inventory_small.json   # Smaller fixture covering all edge types
 │       ├── test_ids.py                # ARM ID parsing, normalization, stable ID determinism
-│       ├── test_graph_edges.py        # Edge extraction: all 15 edge kinds
+│       ├── test_graph_edges.py        # Edge extraction: all 22 edge kinds
 │       ├── test_child_resources.py    # Child resource detection, parent merging, attribute collection
 │       ├── test_layout.py             # REGION>RG>TYPE: determinism, positive coords, no overlaps
 │       ├── test_vnet_layout.py        # VNET>SUBNET: containers, nesting, labels, determinism
@@ -688,6 +775,8 @@ azure-to-drawio/
 │       ├── test_msft_icon_fallback.py # Microsoft icon ZIP fallback: index building, fuzzy matching
 │       ├── test_spacing.py            # Spacing presets: config validation, gap scaling, label overlap
 │       ├── test_ai_chatbot_fixture.py # AI chatbot fixture: graph edges, all layout modes, determinism
+│       ├── test_sub_rg_net_layout.py  # SUB>REGION>RG>NET: edges, hierarchy, cross-sub, spacing, edge cases
+│       ├── test_test_all.py           # Render-all and test-all: combination generation, variant output
 │       └── test_integration.py        # Full pipeline: graph build → drawio XML → PNG export
 ├── assets/
 │   ├── azure_icon_map.json            # Azure resource type → draw.io style string mapping (248 types)
@@ -712,14 +801,17 @@ All tests run entirely offline using fixture data — no Azure credentials or ne
 
 - **ARM ID parsing** — Regex extraction from strings/dicts/lists, normalization, deduplication, non-resource filtering
 - **Stable IDs** — Determinism, fixed length (16 hex chars), case insensitivity
-- **Edge extraction** — All 15 edge kinds individually, sort order, no duplicates
+- **Edge extraction** — All 22 edge kinds individually (including firewall, bastion, container apps, app insights, app gateway, logic apps), sort order, no duplicates
 - **Child resources** — Type detection heuristic, parent ID derivation, attribute collection (VM SKU/image, SQL SKU)
-- **Layout engines** — `REGION>RG>TYPE`, `VNET>SUBNET`, and `MSFT` mode: determinism, positive coordinates, no overlapping nodes, correct cell dimensions
+- **Layout engines** — `REGION>RG>TYPE`, `VNET>SUBNET`, `SUB>REGION>RG>NET`, and `MSFT` mode: determinism, positive coordinates, no overlapping nodes, correct cell dimensions
 - **Spacing presets** — `compact` (default, backward compatible) and `spacious` (1.8x gaps): config validation, bounding box growth, cell sizes unchanged, label gap sufficiency, no overlaps, integration with all layout/diagram mode combinations
 - **VNET>SUBNET containers** — VNet/subnet container cells exist, correct parent nesting, expected labels
 - **MSFT mode** — Region/RG container hierarchy, type section headers, hierarchical parenting via `parent` attribute, UDR side panels with route details, deterministic layout
+- **SUB>REGION>RG>NET layout** — 3-level subscription→region→RG hierarchy, networking/resources section split, cross-subscription edge validation, subscription label helper, network type classification, spacing effects, edge cases (empty inventory, single node, multi-region, missing subscription)
 - **Microsoft icon fallback** — Index building from SVG filenames, normalized keyword matching, fuzzy lookup for ARM types, base64 data URI style generation, fallback library regeneration
 - **AI chatbot fixture** — Production-grade Container Apps + OpenAI + hub-spoke architecture: graph construction, private endpoint chains, VNet peering, all 3 layout modes, spacious mode, determinism
+- **Landing zone fixture** — Multi-subscription hub-spoke: 3 subscriptions, Azure Firewall, Bastion, Container Apps, private endpoints, cross-subscription App Insights→workspace edges
+- **Render-all / test-all** — All fixture × layout × mode combinations generate valid XML, variant folders created, primary output preserved
 - **Full integration** — Fixture → `build_graph` → `generate_drawio` → validates XML structure, vertex/edge cell counts, geometry, node labels
 - **PNG/SVG export** — When the `drawio` CLI is available: valid PNG header, SVG file created. Graceful skip when CLI is absent.
 

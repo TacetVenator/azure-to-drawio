@@ -41,6 +41,7 @@ class TestSafeLayoutName:
     def test_gt_replaced_with_dash(self):
         assert _safe_layout_name("REGION>RG>TYPE") == "REGION-RG-TYPE"
         assert _safe_layout_name("VNET>SUBNET") == "VNET-SUBNET"
+        assert _safe_layout_name("SUB>REGION>RG>NET") == "SUB-REGION-RG-NET"
 
 
 class TestRenderCombinations:
@@ -89,6 +90,32 @@ class TestRenderCombinations:
         for combo_dir in out.iterdir():
             data = json.loads((combo_dir / "graph.json").read_text())
             assert "nodes" in data and "edges" in data
+
+    def test_sub_rg_net_variant_folders_exist(self, tmp_path):
+        """SUB>REGION>RG>NET should produce BANDS and MSFT variant folders."""
+        graph = _make_graph(tmp_path / "build")
+        out = tmp_path / "out"
+        render_combinations(graph, "test", ["sub"], ["rg"], out)
+        assert (out / "SUB-REGION-RG-NET_BANDS").is_dir()
+        assert (out / "SUB-REGION-RG-NET_MSFT").is_dir()
+        for mode in ("BANDS", "MSFT"):
+            drawio = out / f"SUB-REGION-RG-NET_{mode}" / "diagram.drawio"
+            assert drawio.exists(), f"Missing drawio for SUB-REGION-RG-NET_{mode}"
+            root = ET.parse(str(drawio)).getroot()
+            assert root.tag == "mxfile"
+
+    def test_landing_zone_fixture_in_test_all(self, tmp_path):
+        """The app_landing_zone fixture should be discovered and rendered."""
+        run_test_all(str(tmp_path))
+        lz_dir = tmp_path / "app_landing_zone"
+        assert lz_dir.is_dir(), "app_landing_zone fixture not rendered"
+        # Should have all layout × mode combinations
+        sub_dirs = [d for d in lz_dir.iterdir() if d.is_dir()]
+        assert len(sub_dirs) == len(VALID_LAYOUTS) * len(VALID_DIAGRAM_MODES)
+        # SUB>REGION>RG>NET variants should have subscription containers
+        for mode in ("BANDS", "MSFT"):
+            drawio = lz_dir / f"SUB-REGION-RG-NET_{mode}" / "diagram.drawio"
+            assert drawio.exists()
 
 
 class TestRunTestAll:
