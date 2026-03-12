@@ -120,6 +120,24 @@
     "location": "eastus",
     "subscriptionId": "sub1",
     "resourceGroup": "rg-networking",
-    "properties": {}
+    "properties": {
+      "routes": [
+        {
+          "name": "to-firewall",
+          "properties": {
+            "addressPrefix": "0.0.0.0/0",
+            "nextHopType": "VirtualAppliance",
+            "nextHopIpAddress": "10.0.1.4"
+          }
+        },
+        {
+          "name": "to-onprem",
+          "properties": {
+            "addressPrefix": "172.16.0.0/12",
+            "nextHopType": "VirtualNetworkGateway"
+          }
+        }
+      ]
+    }
   }
 ]

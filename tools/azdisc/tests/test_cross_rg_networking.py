@@ -11,7 +11,7 @@ import pytest
 
 from tools.azdisc.config import Config
 from tools.azdisc.discover import _derive_parent_ids, _synthesize_subnets_from_vnets
-from tools.azdisc.drawio import layout_nodes_vnet
+from tools.azdisc.drawio import extract_route_summaries, layout_nodes_vnet
 from tools.azdisc.graph import (
     _infer_type_from_id,
     build_graph,
@@ -318,3 +318,39 @@ class TestCrossRgBuildGraph:
             f"Cross-RG networking resources should not be external: "
             f"{[n['id'] for n in external_net]}"
         )
+
+    def test_udr_routes_extracted_for_cross_rg_subnet(self, tmp_path):
+        """Route table routes should be available via extract_route_summaries."""
+        graph = self._build(tmp_path)
+        subnet_udr, vnet_rollup = extract_route_summaries(
+            graph["nodes"], graph["edges"],
+        )
+        assert len(subnet_udr) >= 1, "Expected at least one subnet with UDR"
+
+        # Find the cprmg-subnet01 entry
+        subnet_id = normalize_id(
+            "/subscriptions/sub1/resourceGroups/rg-networking/providers/"
+            "Microsoft.Network/virtualNetworks/spoke-vnet01/subnets/cprmg-subnet01"
+        )
+        assert subnet_id in subnet_udr, (
+            f"cprmg-subnet01 should have UDR summary, got keys: {list(subnet_udr.keys())}"
+        )
+        summary = subnet_udr[subnet_id]
+        assert summary["rt_name"] == "udr-shared"
+        assert len(summary["routes"]) == 2
+        route_names = {r["name"] for r in summary["routes"]}
+        assert "to-firewall" in route_names
+        assert "to-onprem" in route_names
+
+    def test_udr_vnet_rollup_for_cross_rg(self, tmp_path):
+        """VNet rollup should list subnet names that have UDRs."""
+        graph = self._build(tmp_path)
+        _, vnet_rollup = extract_route_summaries(
+            graph["nodes"], graph["edges"],
+        )
+        vnet_id = normalize_id(
+            "/subscriptions/sub1/resourceGroups/rg-networking/providers/"
+            "Microsoft.Network/virtualNetworks/spoke-vnet01"
+        )
+        assert vnet_id in vnet_rollup, "spoke-vnet01 should appear in VNet UDR rollup"
+        assert "cprmg-subnet01" in vnet_rollup[vnet_id]
