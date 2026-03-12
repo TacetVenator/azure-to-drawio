@@ -575,6 +575,7 @@ class TestNetworkTypesClassification:
             "microsoft.network/virtualnetworks",
             "microsoft.network/virtualnetworks/subnets",
             "microsoft.network/networksecuritygroups",
+            "microsoft.network/applicationsecuritygroups",
             "microsoft.network/routetables",
             "microsoft.network/azurefirewalls",
             "microsoft.network/bastionhosts",

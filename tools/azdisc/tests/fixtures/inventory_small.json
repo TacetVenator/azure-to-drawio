@@ -80,7 +80,12 @@
           "properties": {
             "subnet": {
               "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/virtualNetworks/vnet1/subnets/subnet1"
-            }
+            },
+            "applicationSecurityGroups": [
+              {
+                "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/applicationSecurityGroups/asg-web-tier"
+              }
+            ]
           }
         }
       ]
@@ -181,9 +186,47 @@
             "destinationAddressPrefix": "*",
             "access": "Allow"
           }
+        },
+        {
+          "name": "allow-web-to-app",
+          "properties": {
+            "priority": 200,
+            "protocol": "TCP",
+            "direction": "Inbound",
+            "sourceApplicationSecurityGroups": [
+              {
+                "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/applicationSecurityGroups/asg-web-tier"
+              }
+            ],
+            "destinationApplicationSecurityGroups": [
+              {
+                "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/applicationSecurityGroups/asg-app-tier"
+              }
+            ],
+            "destinationPortRange": "8080",
+            "access": "Allow"
+          }
         }
       ]
     }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/applicationSecurityGroups/asg-web-tier",
+    "name": "asg-web-tier",
+    "type": "Microsoft.Network/applicationSecurityGroups",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-dev",
+    "properties": {}
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/applicationSecurityGroups/asg-app-tier",
+    "name": "asg-app-tier",
+    "type": "Microsoft.Network/applicationSecurityGroups",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-dev",
+    "properties": {}
   },
   {
     "id": "/subscriptions/sub1/resourceGroups/rg-app-dev/providers/Microsoft.Network/routeTables/rt1",

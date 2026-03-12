@@ -135,6 +135,8 @@ def extract_edges(nodes: List[Dict]) -> List[Dict]:
             add_edge(nid, _get(p, "networkSecurityGroup", "id"), "nic->nsg")
             for ipc in _get(p, "ipConfigurations") or []:
                 add_edge(nid, _get(ipc, "properties", "subnet", "id"), "nic->subnet")
+                for asg in _get(ipc, "properties", "applicationSecurityGroups") or []:
+                    add_edge(nid, _get(asg, "id"), "nic->asg")
 
         elif t == "microsoft.network/virtualnetworks":
             for peer in _get(p, "virtualNetworkPeerings") or []:
@@ -147,6 +149,15 @@ def extract_edges(nodes: List[Dict]) -> List[Dict]:
                 add_edge(nid, vnet_id, "subnet->vnet")
             add_edge(nid, _get(p, "networkSecurityGroup", "id"), "subnet->nsg")
             add_edge(nid, _get(p, "routeTable", "id"), "subnet->routeTable")
+
+        elif t == "microsoft.network/networksecuritygroups":
+            # Extract ASG references from security rules
+            for rule in _get(p, "securityRules") or []:
+                rp = _get(rule, "properties") or {}
+                for asg in rp.get("sourceApplicationSecurityGroups") or []:
+                    add_edge(nid, _get(asg, "id"), "nsgRule->sourceAsg")
+                for asg in rp.get("destinationApplicationSecurityGroups") or []:
+                    add_edge(nid, _get(asg, "id"), "nsgRule->destAsg")
 
         elif t == "microsoft.network/privateendpoints":
             add_edge(nid, _get(p, "subnet", "id"), "privateEndpoint->subnet")
