@@ -14,8 +14,12 @@ from tools.azdisc.drawio import (
     MSFT_RG_STYLE,
     MSFT_REGION_STYLE,
     MSFT_SUB_STYLE,
+    NSG_CALLOUT_STYLE,
     _NETWORK_TYPES,
+    _edge_style,
+    _inject_boundary_nodes,
     _subscription_label,
+    extract_nsg_summaries,
     layout_nodes_sub_rg_net,
 )
 from tools.azdisc.graph import (
@@ -300,7 +304,7 @@ def _seed_output_files(tmp_path: Path, fixture: str = "app_landing_zone.json"):
     (tmp_path / "unresolved.json").write_text("[]")
 
 
-def _make_sub_rg_net_config(tmp_path: Path) -> Config:
+def _make_sub_rg_net_config(tmp_path: Path, diagram_mode: str = "MSFT") -> Config:
     return Config(
         app="landing-zone",
         subscriptions=[
@@ -311,7 +315,7 @@ def _make_sub_rg_net_config(tmp_path: Path) -> Config:
         seedResourceGroups=["rg-connectivity-prod", "rg-app-prod", "rg-data-prod"],
         outputDir=str(tmp_path),
         layout="SUB>REGION>RG>NET",
-        diagramMode="MSFT",
+        diagramMode=diagram_mode,
     )
 
 
@@ -477,6 +481,60 @@ class TestSubRgNetDrawioGeneration:
         from tools.azdisc.drawio import generate_drawio
         generate_drawio(cfg)
         assert (tmp_path / "diagram.drawio").exists()
+
+    def test_bands_and_msft_produce_different_output(self, tmp_path):
+        """BANDS and MSFT modes should produce different diagrams for SUB>REGION>RG>NET."""
+        import tempfile
+
+        _seed_output_files(tmp_path)
+        cfg_msft = _make_sub_rg_net_config(tmp_path)
+        build_graph(cfg_msft)
+        from tools.azdisc.drawio import generate_drawio
+        generate_drawio(cfg_msft)
+        xml_msft = (tmp_path / "diagram.drawio").read_text()
+
+        with tempfile.TemporaryDirectory() as tmp2:
+            tmp2_path = Path(tmp2)
+            _seed_output_files(tmp2_path)
+            cfg_bands = Config(
+                app="landing-zone-bands",
+                subscriptions=cfg_msft.subscriptions,
+                seedResourceGroups=cfg_msft.seedResourceGroups,
+                outputDir=str(tmp2_path),
+                layout="SUB>REGION>RG>NET",
+                diagramMode="BANDS",
+            )
+            build_graph(cfg_bands)
+            generate_drawio(cfg_bands)
+            xml_bands = (tmp2_path / "diagram.drawio").read_text()
+
+        assert xml_msft != xml_bands, (
+            "BANDS and MSFT modes should produce different XML for SUB>REGION>RG>NET"
+        )
+
+    def test_bands_mode_has_flat_containers(self, tmp_path):
+        """BANDS mode containers should all be parented to root (flat)."""
+        _seed_output_files(tmp_path)
+        cfg = Config(
+            app="landing-zone-bands",
+            subscriptions=["00000000-aaaa-0000-0000-000000000001",
+                           "00000000-bbbb-0000-0000-000000000002",
+                           "00000000-cccc-0000-0000-000000000003"],
+            seedResourceGroups=["rg-connectivity-prod", "rg-app-prod", "rg-data-prod"],
+            outputDir=str(tmp_path),
+            layout="SUB>REGION>RG>NET",
+            diagramMode="BANDS",
+        )
+        build_graph(cfg)
+        from tools.azdisc.drawio import generate_drawio
+        generate_drawio(cfg)
+
+        tree = ET.parse(str(tmp_path / "diagram.drawio"))
+        containers = tree.findall(".//mxCell[@connectable='0']")
+        for c in containers:
+            assert c.get("parent") == "1", (
+                f"BANDS container {c.get('id')} should have parent='1', got '{c.get('parent')}'"
+            )
 
 
 # ── _subscription_label unit tests ───────────────────────────────────────
@@ -840,3 +898,209 @@ class TestEdgeCases:
                 assert len(x_vals) <= 3, (
                     f"Parent {parent} has {len(x_vals)} columns at y={y}, expected <=3"
                 )
+
+
+# ── Edge style differentiation tests ──────────────────────────────────
+
+
+class TestEdgeStyleDifferentiation:
+    """Verify edges use different styles based on semantic type."""
+
+    def test_traffic_edge_style(self):
+        style = _edge_style("vm->nic", msft=False)
+        assert "strokeColor=#333333" in style
+        assert "dashed" not in style
+
+    def test_association_edge_style(self):
+        style = _edge_style("subnet->nsg", msft=False)
+        assert "dashed=1" in style
+        assert "strokeColor=#999999" in style
+
+    def test_peering_edge_style(self):
+        style = _edge_style("vnet->peeredVnet", msft=False)
+        assert "strokeColor=#0078D4" in style
+        assert "strokeWidth=2" in style
+
+    def test_msft_traffic_edge_style(self):
+        style = _edge_style("firewall->subnet", msft=True)
+        assert "strokeColor=#333333" in style
+        assert "html=1" in style
+
+    def test_msft_association_edge_style(self):
+        style = _edge_style("subnet->routeTable", msft=True)
+        assert "dashed=1" in style
+        assert "html=1" in style
+
+    def test_msft_peering_edge_style(self):
+        style = _edge_style("vnet->peeredVnet", msft=True)
+        assert "strokeColor=#0078D4" in style
+        assert "html=1" in style
+
+    def test_edges_in_xml_have_differentiated_styles(self, tmp_path):
+        """Generated XML should have different styles for different edge kinds."""
+        _seed_output_files(tmp_path)
+        cfg = _make_sub_rg_net_config(tmp_path)
+        build_graph(cfg)
+        from tools.azdisc.drawio import generate_drawio
+        generate_drawio(cfg)
+
+        tree = ET.parse(str(tmp_path / "diagram.drawio"))
+        edge_cells = tree.findall(".//mxCell[@edge='1']")
+        styles = {ec.get("style") for ec in edge_cells}
+        # Should have at least 2 different edge styles
+        assert len(styles) >= 2, f"Expected >= 2 edge styles, got {len(styles)}: {styles}"
+
+
+# ── Boundary node tests ──────────────────────────────────────────────
+
+
+class TestBoundaryNodes:
+    """Verify Internet/On-Premises boundary nodes are injected correctly."""
+
+    def test_internet_boundary_added_when_pip_exists(self):
+        nodes, edges = _build_graph_from_fixture()
+        new_nodes, new_edges = _inject_boundary_nodes(nodes, edges)
+        internet_nodes = [n for n in new_nodes if n["type"] == "__boundary__/internet"]
+        assert len(internet_nodes) == 1
+
+    def test_internet_edges_connect_to_pips(self):
+        nodes, edges = _build_graph_from_fixture()
+        new_nodes, new_edges = _inject_boundary_nodes(nodes, edges)
+        internet_edges = [e for e in new_edges if e["kind"] == "internet->publicIp"]
+        pip_count = sum(1 for n in nodes if n["type"] == "microsoft.network/publicipaddresses")
+        assert len(internet_edges) == pip_count
+
+    def test_no_boundary_without_pip_or_gateway(self):
+        """Nodes without PIPs or VPN gateways should not get boundary nodes."""
+        nodes = [build_node({
+            "id": "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Compute/virtualMachines/vm1",
+            "name": "vm1",
+            "type": "Microsoft.Compute/virtualMachines",
+            "location": "westeurope",
+            "subscriptionId": "sub1",
+            "resourceGroup": "rg1",
+        })]
+        new_nodes, new_edges = _inject_boundary_nodes(nodes, [])
+        assert len(new_nodes) == 1  # No boundary nodes added
+        assert len(new_edges) == 0
+
+    def test_boundary_in_generated_xml(self, tmp_path):
+        """Boundary nodes should appear in the generated draw.io XML."""
+        _seed_output_files(tmp_path)
+        cfg = _make_sub_rg_net_config(tmp_path)
+        build_graph(cfg)
+        from tools.azdisc.drawio import generate_drawio
+        generate_drawio(cfg)
+
+        tree = ET.parse(str(tmp_path / "diagram.drawio"))
+        vertices = tree.findall(".//mxCell[@vertex='1']")
+        labels = {v.get("value") for v in vertices if v.get("value")}
+        assert "Internet" in labels, "Internet boundary node should be in diagram"
+
+
+# ── NSG summary extraction tests ─────────────────────────────────────
+
+
+class TestNsgSummaries:
+    """Verify NSG rule extraction and formatting."""
+
+    def test_nsg_summaries_from_landing_zone(self):
+        """Landing zone fixture has NSGs with security rules."""
+        nodes, edges = _build_graph_from_fixture()
+        summaries = extract_nsg_summaries(nodes, edges)
+        assert len(summaries) >= 4, f"Expected at least 4 NSGs, got {len(summaries)}"
+
+    def test_nsg_summary_has_rules(self):
+        nodes, edges = _build_graph_from_fixture()
+        summaries = extract_nsg_summaries(nodes, edges)
+        for nsg_id, summary in summaries.items():
+            assert "nsg_name" in summary
+            assert "rules" in summary
+            assert isinstance(summary["rules"], list)
+
+    def test_nsg_rules_sorted_by_direction_priority(self):
+        nodes, edges = _build_graph_from_fixture()
+        summaries = extract_nsg_summaries(nodes, edges)
+        for nsg_id, summary in summaries.items():
+            rules = summary["rules"]
+            if len(rules) < 2:
+                continue
+            for i in range(len(rules) - 1):
+                a, b = rules[i], rules[i + 1]
+                assert (a["direction"], a["priority"]) <= (b["direction"], b["priority"]), \
+                    f"Rules not sorted in NSG {summary['nsg_name']}"
+
+    def test_nsg_attached_to_populated(self):
+        """NSGs with subnet/NIC edges should have attached_to list."""
+        nodes, edges = _build_graph_from_fixture()
+        summaries = extract_nsg_summaries(nodes, edges)
+        has_attached = any(s["attached_to"] for s in summaries.values())
+        assert has_attached, "Expected at least one NSG to have attached_to entries"
+
+    def test_nsg_panel_label_format(self):
+        from tools.azdisc.drawio import _format_nsg_panel_label
+        summary = {
+            "nsg_name": "nsg-test",
+            "attached_to": ["subnet-a"],
+            "rules": [
+                {"name": "r1", "priority": 100, "direction": "Inbound",
+                 "access": "Allow", "protocol": "TCP", "src": "*",
+                 "dst": "10.0.0.0/24", "dstPort": "443"},
+            ],
+        }
+        label = _format_nsg_panel_label(summary)
+        assert "NSG: nsg-test" in label
+        assert "Attached: subnet-a" in label
+        assert "443" in label
+
+
+class TestNsgInDiagram:
+    """Verify NSG callouts appear in generated diagrams."""
+
+    def _generate_msft(self, tmp_path):
+        _seed_output_files(tmp_path)
+        cfg = _make_sub_rg_net_config(tmp_path, diagram_mode="MSFT")
+        build_graph(cfg)
+        from tools.azdisc.drawio import generate_drawio
+        generate_drawio(cfg)
+        return ET.parse(str(tmp_path / "diagram.drawio"))
+
+    def _generate_bands(self, tmp_path):
+        _seed_output_files(tmp_path)
+        cfg = _make_sub_rg_net_config(tmp_path, diagram_mode="BANDS")
+        build_graph(cfg)
+        from tools.azdisc.drawio import generate_drawio
+        generate_drawio(cfg)
+        return ET.parse(str(tmp_path / "diagram.drawio"))
+
+    def test_msft_nsg_panels_present(self, tmp_path):
+        tree = self._generate_msft(tmp_path)
+        vertices = tree.findall(".//mxCell[@vertex='1']")
+        nsg_panels = [v for v in vertices if v.get("id", "").startswith("msft_nsg_")]
+        assert len(nsg_panels) >= 1, "Expected at least one NSG panel in MSFT mode"
+
+    def test_msft_nsg_panel_has_rules_content(self, tmp_path):
+        tree = self._generate_msft(tmp_path)
+        vertices = tree.findall(".//mxCell[@vertex='1']")
+        nsg_panels = [v for v in vertices if v.get("id", "").startswith("msft_nsg_")]
+        for panel in nsg_panels:
+            value = panel.get("value", "")
+            assert "NSG:" in value, f"NSG panel should have 'NSG:' label: {value}"
+
+    def test_msft_nsg_edges_exist(self, tmp_path):
+        tree = self._generate_msft(tmp_path)
+        edge_cells = tree.findall(".//mxCell[@edge='1']")
+        nsg_edges = [e for e in edge_cells if e.get("id", "").startswith("msft_nsg_edge_")]
+        assert len(nsg_edges) >= 1, "Expected NSG detail edges in MSFT mode"
+
+    def test_bands_nsg_panels_present(self, tmp_path):
+        tree = self._generate_bands(tmp_path)
+        vertices = tree.findall(".//mxCell[@vertex='1']")
+        nsg_panels = [v for v in vertices if v.get("id", "").startswith("nsg_panel_")]
+        assert len(nsg_panels) >= 1, "Expected at least one NSG panel in BANDS mode"
+
+    def test_bands_nsg_edges_exist(self, tmp_path):
+        tree = self._generate_bands(tmp_path)
+        edge_cells = tree.findall(".//mxCell[@edge='1']")
+        nsg_edges = [e for e in edge_cells if e.get("id", "").startswith("nsg_edge_")]
+        assert len(nsg_edges) >= 1, "Expected NSG detail edges in BANDS mode"

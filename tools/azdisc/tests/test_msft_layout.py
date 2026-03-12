@@ -398,12 +398,16 @@ class TestMsftDrawioGeneration:
 
         # Non-container vertex cells (excluding id=0, id=1, containers, headers)
         all_vertices = tree.findall(".//mxCell[@vertex='1']")
+        # Boundary nodes (Internet, On-Premises) are parented to root, not RGs
+        boundary_labels = {"Internet", "On-Premises"}
         resource_cells = [
             v for v in all_vertices
             if v.get("connectable") != "0"
             and v.get("id") not in ("0", "1")
             and not v.get("id", "").startswith("msft_th_")
             and not v.get("id", "").startswith("msft_udr_")
+            and not v.get("id", "").startswith("msft_nsg_")
+            and v.get("value") not in boundary_labels
         ]
 
         for cell in resource_cells:

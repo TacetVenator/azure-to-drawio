@@ -62,6 +62,11 @@ RG_STYLE = "points=[[0,0],[0.25,0],[0.5,0],[0.75,0],[1,0],[1,0.25],[1,0.5],[1,0.
 UNKNOWN_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalLabelPosition=bottom;verticalAlign=top;align=center;"
 EXTERNAL_STYLE = "ellipse;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;verticalLabelPosition=bottom;verticalAlign=top;align=center;"
 UDR_CALLOUT_STYLE = "shape=callout;fillColor=#fff2cc;strokeColor=#d6b656;align=left;verticalAlign=top;spacingLeft=5;fontSize=10;"
+NSG_CALLOUT_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;align=left;verticalAlign=top;spacingLeft=5;spacingTop=4;fontSize=10;"
+MSFT_NSG_PANEL_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=default;strokeColor=#b85450;dashed=1;"
+
+# Style for a small subnet icon decoration inside a container
+SUBNET_ICON_DECORATION_STYLE = "sketch=0;aspect=fixed;html=1;align=center;fontSize=1;pointerEvents=0;shape=image;image=img/lib/azure2/networking/Subnet.svg;"
 ATTR_BOX_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;fontSize=10;"
 VNET_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=top;align=left;spacingLeft=10;spacingTop=5;fontSize=13;fontStyle=1;arcSize=6;opacity=50;"
 SUBNET_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;verticalAlign=top;align=left;spacingLeft=8;spacingTop=4;fontSize=11;dashed=1;dashPattern=5 5;arcSize=8;opacity=60;"
@@ -73,7 +78,118 @@ MSFT_RG_STYLE = "rounded=1;fillColor=default;strokeColor=default;whiteSpace=wrap
 MSFT_NODE_STYLE_EXTRA = "whiteSpace=wrap;html=1;align=center;verticalAlign=top;"
 MSFT_UDR_PANEL_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=default;strokeColor=default;"
 MSFT_EDGE_STYLE = "edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;"
+
+# Edge kinds classified by semantic type for visual differentiation
+_ASSOCIATION_EDGE_KINDS = {
+    "subnet->nsg", "subnet->routeTable", "nic->nsg",
+    "rbac_assignment", "appInsights->workspace", "udr_detail", "nsg_detail",
+}
+_PEERING_EDGE_KINDS = {
+    "vnet->peeredVnet",
+}
+# All other edge kinds default to traffic/attachment style
+
+# Differentiated edge styles
+EDGE_STYLE_TRAFFIC = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=0.5;exitY=1;exitDx=0;exitDy=0;strokeColor=#333333;"
+EDGE_STYLE_ASSOCIATION = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;dashed=1;dashPattern=5 5;strokeColor=#999999;"
+EDGE_STYLE_PEERING = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeColor=#0078D4;strokeWidth=2;"
+MSFT_EDGE_STYLE_TRAFFIC = "edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#333333;"
+MSFT_EDGE_STYLE_ASSOCIATION = "edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;dashPattern=5 5;strokeColor=#999999;"
+MSFT_EDGE_STYLE_PEERING = "edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#0078D4;strokeWidth=2;"
 MSFT_TYPE_HEADER_STYLE = "text;html=1;align=left;verticalAlign=top;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=11;fontStyle=1;fontColor=default;"
+
+
+def _edge_style(kind: str, msft: bool = False) -> str:
+    """Return the appropriate edge style based on edge kind and rendering mode."""
+    if kind in _ASSOCIATION_EDGE_KINDS:
+        return MSFT_EDGE_STYLE_ASSOCIATION if msft else EDGE_STYLE_ASSOCIATION
+    if kind in _PEERING_EDGE_KINDS:
+        return MSFT_EDGE_STYLE_PEERING if msft else EDGE_STYLE_PEERING
+    return MSFT_EDGE_STYLE_TRAFFIC if msft else EDGE_STYLE_TRAFFIC
+
+
+# Boundary node styles (Internet, On-Premises)
+BOUNDARY_INTERNET_STYLE = "shape=mxgraph.azure.cloud;fillColor=#0078D4;strokeColor=#005A9E;fontColor=#FFFFFF;verticalLabelPosition=bottom;verticalAlign=top;align=center;whiteSpace=wrap;html=1;"
+BOUNDARY_ONPREM_STYLE = "shape=mxgraph.azure.enterprise;fillColor=#7D7D7D;strokeColor=#555555;fontColor=#333333;verticalLabelPosition=bottom;verticalAlign=top;align=center;whiteSpace=wrap;html=1;"
+
+# Sentinel IDs for boundary nodes
+_BOUNDARY_INTERNET_ID = "__boundary__/internet"
+_BOUNDARY_ONPREM_ID = "__boundary__/on-premises"
+
+_VPN_ER_TYPES = {
+    "microsoft.network/virtualnetworkgateways",
+    "microsoft.network/localnetworkgateways",
+    "microsoft.network/connections",
+    "microsoft.network/expressroutecircuits",
+}
+
+
+def _inject_boundary_nodes(
+    nodes: List[Dict], edges: List[Dict],
+) -> Tuple[List[Dict], List[Dict]]:
+    """Add Internet and/or On-Premises boundary nodes and edges if applicable.
+
+    - Internet node: added when any Public IP exists.
+    - On-Premises node: added when any VPN/ER gateway or local network gateway exists.
+
+    Returns new copies of nodes and edges with boundary entries appended.
+    """
+    has_pip = any(n["type"] == "microsoft.network/publicipaddresses" for n in nodes)
+    has_vpn_er = any(n["type"] in _VPN_ER_TYPES for n in nodes)
+
+    if not has_pip and not has_vpn_er:
+        return nodes, edges
+
+    new_nodes = list(nodes)
+    new_edges = list(edges)
+
+    if has_pip:
+        new_nodes.append({
+            "id": _BOUNDARY_INTERNET_ID,
+            "stableId": stable_id(_BOUNDARY_INTERNET_ID),
+            "name": "Internet",
+            "type": "__boundary__/internet",
+            "location": "",
+            "resourceGroup": "",
+            "subscriptionId": "",
+            "properties": {},
+            "isExternal": False,
+            "childResources": [],
+            "attributes": [],
+        })
+        # Connect each public IP to the Internet node
+        for n in nodes:
+            if n["type"] == "microsoft.network/publicipaddresses":
+                new_edges.append({
+                    "source": _BOUNDARY_INTERNET_ID,
+                    "target": n["id"],
+                    "kind": "internet->publicIp",
+                })
+
+    if has_vpn_er:
+        new_nodes.append({
+            "id": _BOUNDARY_ONPREM_ID,
+            "stableId": stable_id(_BOUNDARY_ONPREM_ID),
+            "name": "On-Premises",
+            "type": "__boundary__/on-premises",
+            "location": "",
+            "resourceGroup": "",
+            "subscriptionId": "",
+            "properties": {},
+            "isExternal": False,
+            "childResources": [],
+            "attributes": [],
+        })
+        # Connect VPN/ER gateways to On-Premises node
+        for n in nodes:
+            if n["type"] in _VPN_ER_TYPES:
+                new_edges.append({
+                    "source": _BOUNDARY_ONPREM_ID,
+                    "target": n["id"],
+                    "kind": "onPrem->gateway",
+                })
+
+    return new_nodes, new_edges
 
 
 def _get(obj: Any, *keys) -> Any:
@@ -214,6 +330,11 @@ def _node_style(node: Dict, icon_map: Dict[str, str],
     if node.get("isExternal"):
         return EXTERNAL_STYLE
     t = node.get("type", "")
+    # Boundary nodes have special styles
+    if t == "__boundary__/internet":
+        return BOUNDARY_INTERNET_STYLE
+    if t == "__boundary__/on-premises":
+        return BOUNDARY_ONPREM_STYLE
     style = icon_map.get(t)
     if style:
         return style
@@ -266,10 +387,14 @@ def layout_nodes(nodes: List[Dict], spacing: float = 1.0) -> Dict[str, Tuple[int
     type_v_gap = s(TYPE_V_GAP)
     region_padding = s(REGION_PADDING)
 
+    # Separate boundary nodes
+    boundary_nodes = [n for n in nodes if n.get("type", "").startswith("__boundary__")]
+    regular_nodes = [n for n in nodes if not n.get("type", "").startswith("__boundary__")]
+
     # Group by (region, rg, type)
     from collections import defaultdict
     groups: Dict[Tuple[str, str, str], List[Dict]] = defaultdict(list)
-    for n in nodes:
+    for n in regular_nodes:
         key = (n.get("location", ""), n.get("resourceGroup", ""), n.get("type", ""))
         groups[key].append(n)
 
@@ -313,6 +438,15 @@ def layout_nodes(nodes: List[Dict], spacing: float = 1.0) -> Dict[str, Tuple[int
             rg_x += rg_width + 2 * rg_padding + h_gap
 
         region_y += rg_max_height + region_padding
+
+    # Position boundary nodes at top-left
+    if boundary_nodes:
+        shift = CELL_H + 40 + region_padding
+        for nid in list(positions.keys()):
+            x, y, w, h = positions[nid]
+            positions[nid] = (x, y + shift, w, h)
+        for i, bn in enumerate(boundary_nodes):
+            positions[bn["id"]] = (region_padding + i * (CELL_W + 40), region_padding, CELL_W, CELL_H)
 
     return positions
 
@@ -527,8 +661,15 @@ def layout_nodes_vnet(
     region_padding = s(REGION_PADDING)
     unattached_padding = s(UNATTACHED_PADDING)
 
-    node_by_id: Dict[str, Dict] = {n["id"]: n for n in nodes}
-    vnet_subnets, subnet_members, unattached = _build_network_membership(nodes, edges)
+    # Separate boundary nodes
+    boundary_nodes = [n for n in nodes if n.get("type", "").startswith("__boundary__")]
+    regular_nodes = [n for n in nodes if not n.get("type", "").startswith("__boundary__")]
+
+    node_by_id: Dict[str, Dict] = {n["id"]: n for n in regular_nodes}
+    vnet_subnets, subnet_members, unattached = _build_network_membership(regular_nodes, edges)
+    # Remove boundary nodes from unattached
+    boundary_ids = {bn["id"] for bn in boundary_nodes}
+    unattached = [uid for uid in unattached if uid not in boundary_ids]
 
     positions: Dict[str, Tuple[int, int, int, int]] = {}
     containers: List[Dict] = []
@@ -622,6 +763,17 @@ def layout_nodes_vnet(
             "parent": "1",
         })
 
+    # Position boundary nodes at top-left
+    if boundary_nodes:
+        shift = CELL_H + 40 + region_padding
+        for c in containers:
+            c["y"] += shift
+        for nid in list(positions.keys()):
+            x, y, w, h = positions[nid]
+            positions[nid] = (x, y + shift, w, h)
+        for i, bn in enumerate(boundary_nodes):
+            positions[bn["id"]] = (region_padding + i * (CELL_W + 40), region_padding, CELL_W, CELL_H)
+
     return positions, containers
 
 
@@ -705,11 +857,15 @@ def layout_nodes_msft(
     msft_region_pad = s(MSFT_REGION_PAD)
     msft_region_header = s(MSFT_REGION_HEADER)
 
-    node_by_id: Dict[str, Dict] = {n["id"]: n for n in nodes}
+    # Separate boundary nodes
+    boundary_nodes = [n for n in nodes if n.get("type", "").startswith("__boundary__")]
+    regular_nodes = [n for n in nodes if not n.get("type", "").startswith("__boundary__")]
+
+    node_by_id: Dict[str, Dict] = {n["id"]: n for n in regular_nodes}
 
     # Group by (region, rg, type)
     groups: Dict[Tuple[str, str, str], List[Dict]] = defaultdict(list)
-    for n in nodes:
+    for n in regular_nodes:
         key = (
             n.get("location", "") or "unknown",
             n.get("resourceGroup", "") or "unknown",
@@ -818,6 +974,18 @@ def layout_nodes_msft(
 
         region_cursor_y += region_h + msft_region_pad
 
+    # Position boundary nodes above region containers
+    if boundary_nodes:
+        shift = MSFT_CELL_H + 40 + msft_region_pad
+        for c in containers:
+            c["y"] += shift
+        for nid in list(positions.keys()):
+            x, y, w, h = positions[nid]
+            positions[nid] = (x, y + shift, w, h)
+        for i, bn in enumerate(boundary_nodes):
+            positions[bn["id"]] = (msft_region_pad + i * (MSFT_CELL_W + 40), msft_region_pad, MSFT_CELL_W, MSFT_CELL_H)
+            node_parents[bn["id"]] = "1"
+
     return positions, containers, type_headers, node_parents
 
 
@@ -855,6 +1023,11 @@ MSFT_SUB_STYLE = "shape=rectangle;rounded=1;fillColor=none;strokeColor=#0078D4;s
 
 # Style for "Networking" section header inside an RG
 MSFT_NET_SECTION_STYLE = "text;html=1;align=left;verticalAlign=top;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=11;fontStyle=3;fontColor=#0078D4;"
+
+# BANDS-mode style for flat subscription/region/RG containers (no hierarchical nesting)
+BANDS_SUB_STYLE = "shape=rectangle;rounded=1;fillColor=none;strokeColor=#0078D4;strokeWidth=2;whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=8;spacingTop=5;arcSize=4;fontSize=13;fontStyle=1;fontColor=#0078D4;"
+BANDS_REGION_STYLE = "shape=rectangle;dashed=1;fillColor=none;strokeColor=#999999;rounded=0;whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=8;spacingTop=5;fontSize=11;fontStyle=2;"
+BANDS_RG_STYLE = "rounded=1;fillColor=#f5f5f5;strokeColor=#cccccc;whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=8;spacingTop=5;fontSize=11;fontStyle=1;"
 
 
 def _subscription_label(sub_id: str, nodes: List[Dict]) -> str:
@@ -902,9 +1075,13 @@ def layout_nodes_sub_rg_net(
 
     node_by_id: Dict[str, Dict] = {n["id"]: n for n in nodes}
 
+    # Separate boundary nodes
+    boundary_nodes = [n for n in nodes if n.get("type", "").startswith("__boundary__")]
+    regular_nodes = [n for n in nodes if not n.get("type", "").startswith("__boundary__")]
+
     # Group by (sub, region, rg, type)
     groups: Dict[Tuple[str, str, str, str], List[Dict]] = defaultdict(list)
-    for n in nodes:
+    for n in regular_nodes:
         key = (
             n.get("subscriptionId", "") or "unknown",
             n.get("location", "") or "unknown",
@@ -1101,7 +1278,190 @@ def layout_nodes_sub_rg_net(
 
         sub_cursor_y += sub_h + sub_v_gap
 
+    # Position boundary nodes above the subscription containers
+    if boundary_nodes:
+        # Shift all subscriptions down to make room
+        shift = MSFT_CELL_H + 40 + sub_pad
+        for c in containers:
+            c["y"] += shift
+        for nid in list(positions.keys()):
+            x, y, w, h = positions[nid]
+            positions[nid] = (x, y + shift, w, h)
+        bx = sub_pad
+        for i, bn in enumerate(boundary_nodes):
+            positions[bn["id"]] = (bx + i * (MSFT_CELL_W + 40), sub_pad, MSFT_CELL_W, MSFT_CELL_H)
+            node_parents[bn["id"]] = "1"
+
     return positions, containers, type_headers, node_parents
+
+
+# ---------------------------------------------------------------------------
+# SUB>REGION>RG>NET flat BANDS layout (no hierarchical nesting)
+# ---------------------------------------------------------------------------
+
+BANDS_SUB_PAD = 30
+BANDS_SUB_HEADER = 35
+BANDS_RG_PAD = 20
+BANDS_RG_HEADER = 28
+BANDS_REGION_PAD = 25
+BANDS_REGION_HEADER = 25
+
+
+def layout_nodes_sub_rg_net_bands(
+    nodes: List[Dict],
+    edges: List[Dict],
+    cols: int = COLS_PER_ROW,
+    spacing: float = 1.0,
+) -> Tuple[
+    Dict[str, Tuple[int, int, int, int]],   # node absolute positions
+    List[Dict],                               # flat containers (subs + regions + RGs)
+]:
+    """Compute flat BANDS layout for SUB>REGION>RG>NET.
+
+    Unlike the MSFT nested variant, all containers use parent="1" (flat)
+    and node positions are absolute. This produces a simpler visual with
+    subscription/region/RG bands as background frames — no draw.io
+    hierarchical parenting.
+
+    Returns (positions, containers) for the BANDS rendering path.
+    """
+    s = lambda v: round(v * spacing)
+    h_gap = s(H_GAP)
+    v_gap = s(V_GAP)
+    sub_pad = s(BANDS_SUB_PAD)
+    sub_header = s(BANDS_SUB_HEADER)
+    rg_pad = s(BANDS_RG_PAD)
+    rg_header = s(BANDS_RG_HEADER)
+    region_pad = s(BANDS_REGION_PAD)
+    region_header = s(BANDS_REGION_HEADER)
+
+    # Separate boundary nodes from regular nodes
+    boundary_nodes = [n for n in nodes if n.get("type", "").startswith("__boundary__")]
+    regular_nodes = [n for n in nodes if not n.get("type", "").startswith("__boundary__")]
+
+    # Group regular nodes: sub -> region -> rg -> [nodes]
+    hierarchy: Dict[str, Dict[str, Dict[str, List[Dict]]]] = defaultdict(
+        lambda: defaultdict(lambda: defaultdict(list))
+    )
+    for n in regular_nodes:
+        sub = n.get("subscriptionId", "") or "unknown"
+        region = n.get("location", "") or "unknown"
+        rg = n.get("resourceGroup", "") or "unknown"
+        hierarchy[sub][region][rg].append(n)
+
+    # Sort nodes within each group
+    for sub in hierarchy.values():
+        for region in sub.values():
+            for rg_name, rg_nodes in region.items():
+                rg_nodes.sort(key=lambda n: (n.get("type", "").lower(), n.get("name", "").lower(), n["id"].lower()))
+
+    positions: Dict[str, Tuple[int, int, int, int]] = {}
+    containers: List[Dict] = []
+
+    cursor_y = sub_pad
+
+    for sub in sorted(hierarchy.keys()):
+        sub_start_y = cursor_y
+        sub_x = sub_pad
+        cursor_y += sub_header
+
+        for region in sorted(hierarchy[sub].keys()):
+            region_start_y = cursor_y
+            region_x = sub_x + region_pad
+            cursor_y += region_header
+
+            rg_x = region_x + rg_pad
+            rg_max_bottom = cursor_y
+
+            for rg in sorted(hierarchy[sub][region].keys()):
+                rg_start_y = cursor_y
+                rg_nodes = hierarchy[sub][region][rg]
+                cursor_y_rg = rg_start_y + rg_header
+
+                # Lay out nodes in a flat grid
+                for i, node in enumerate(rg_nodes):
+                    col = i % cols
+                    row = i // cols
+                    nx = rg_x + rg_pad + col * (CELL_W + h_gap)
+                    ny = cursor_y_rg + row * (CELL_H + v_gap)
+                    positions[node["id"]] = (nx, ny, CELL_W, CELL_H)
+
+                n_rows = max(1, (len(rg_nodes) + cols - 1) // cols)
+                n_cols = min(len(rg_nodes), cols) if rg_nodes else 1
+                rg_content_w = n_cols * (CELL_W + h_gap) - h_gap
+                rg_bottom = cursor_y_rg + n_rows * (CELL_H + v_gap) - v_gap + rg_pad
+                rg_w = rg_content_w + 2 * rg_pad
+                rg_h = rg_bottom - rg_start_y
+
+                containers.append({
+                    "id": "bands_rg_" + stable_id(sub + "/" + region + "/" + rg),
+                    "label": rg,
+                    "style": BANDS_RG_STYLE,
+                    "x": rg_x,
+                    "y": rg_start_y,
+                    "w": rg_w,
+                    "h": rg_h,
+                    "parent": "1",
+                })
+
+                rg_max_bottom = max(rg_max_bottom, rg_start_y + rg_h)
+                cursor_y = rg_start_y + rg_h + v_gap
+
+            # Region container
+            region_w = max(c["x"] + c["w"] for c in containers if c["y"] >= region_start_y and c["y"] < rg_max_bottom + v_gap) - region_x + region_pad if containers else 200
+            region_h = rg_max_bottom - region_start_y + region_pad
+
+            containers.append({
+                "id": "bands_region_" + stable_id(sub + "/" + region),
+                "label": region,
+                "style": BANDS_REGION_STYLE,
+                "x": region_x,
+                "y": region_start_y,
+                "w": region_w,
+                "h": region_h,
+                "parent": "1",
+            })
+
+            cursor_y = region_start_y + region_h + region_pad
+
+        # Subscription container
+        sub_bottom = cursor_y
+        sub_w = max(
+            (c["x"] + c["w"] for c in containers if c["y"] >= sub_start_y),
+            default=300,
+        ) - sub_x + sub_pad
+        sub_h = sub_bottom - sub_start_y
+
+        containers.append({
+            "id": "bands_sub_" + stable_id(sub),
+            "label": _subscription_label(sub, nodes),
+            "style": BANDS_SUB_STYLE,
+            "x": sub_x,
+            "y": sub_start_y,
+            "w": sub_w,
+            "h": sub_h,
+            "parent": "1",
+        })
+
+        cursor_y = sub_start_y + sub_h + sub_pad
+
+    # Position boundary nodes at the top-left, above all subscription containers
+    if boundary_nodes:
+        bx = sub_pad
+        by = max(0, min((c["y"] for c in containers), default=sub_pad) - CELL_H - 40)
+        if by < sub_pad:
+            by = sub_pad
+            # Shift everything down
+            shift = CELL_H + 40 + sub_pad
+            for c in containers:
+                c["y"] += shift
+            for nid in list(positions.keys()):
+                x, y, w, h = positions[nid]
+                positions[nid] = (x, y + shift, w, h)
+        for i, bn in enumerate(boundary_nodes):
+            positions[bn["id"]] = (bx + i * (CELL_W + 40), by, CELL_W, CELL_H)
+
+    return positions, containers
 
 
 def generate_drawio(cfg: Config) -> None:
@@ -1112,13 +1472,18 @@ def generate_drawio(cfg: Config) -> None:
     nodes: List[Dict] = graph["nodes"]
     edges: List[Dict] = graph["edges"]
 
+    # Inject Internet / On-Premises boundary nodes
+    nodes, edges = _inject_boundary_nodes(nodes, edges)
+    node_by_id: Dict[str, Dict] = {n["id"]: n for n in nodes}
+
     # Find assets dir relative to this file
     assets_dir = Path(__file__).parent.parent.parent / "assets"
     icon_map = _load_icon_map(assets_dir)
     msft_icons = _load_msft_icon_index(assets_dir)
 
-    # MSFT mode and SUB>REGION>RG>NET layout use the hierarchical rendering path
-    if cfg.diagramMode == "MSFT" or cfg.layout == "SUB>REGION>RG>NET":
+    # MSFT mode uses the hierarchical rendering path.
+    # SUB>REGION>RG>NET with BANDS uses a flat band rendering (no nested parenting).
+    if cfg.diagramMode == "MSFT":
         _render_msft_mode(cfg, nodes, edges, icon_map, msft_icons)
         return
 
@@ -1126,39 +1491,14 @@ def generate_drawio(cfg: Config) -> None:
     sp = _spacing_factor(cfg.spacing)
     if cfg.layout == "VNET>SUBNET":
         positions, containers = layout_nodes_vnet(nodes, edges, spacing=sp)
+    elif cfg.layout == "SUB>REGION>RG>NET":
+        positions, containers = layout_nodes_sub_rg_net_bands(nodes, edges, spacing=sp)
     else:
         positions = layout_nodes(nodes, spacing=sp)
     icons_used = {"mapped": {}, "fallback": [], "unknown": []}
 
-    # Build XML
-    mxfile = ET.Element("mxfile")
-    diagram = ET.SubElement(mxfile, "diagram")
-    diagram.set("name", cfg.app)
-    diagram.set("id", stable_id(cfg.app))
-    model = ET.SubElement(diagram, "mxGraphModel")
-    model.set("dx", "1422")
-    model.set("dy", "762")
-    model.set("grid", "1")
-    model.set("gridSize", "10")
-    model.set("guides", "1")
-    model.set("tooltips", "1")
-    model.set("connect", "1")
-    model.set("arrows", "1")
-    model.set("fold", "1")
-    model.set("page", "1")
-    model.set("pageScale", "1")
-    model.set("pageWidth", "1654")
-    model.set("pageHeight", "1169")
-    model.set("math", "0")
-    model.set("shadow", "0")
-    root = ET.SubElement(model, "root")
-
-    # Mandatory cells
-    cell0 = ET.SubElement(root, "mxCell")
-    cell0.set("id", "0")
-    cell1 = ET.SubElement(root, "mxCell")
-    cell1.set("id", "1")
-    cell1.set("parent", "0")
+    # Build XML (uses shared skeleton with layers)
+    mxfile, root = _build_mxfile_root(cfg)
 
     # Emit container group cells (VNet/subnet boxes) for VNET>SUBNET mode
     container_id_set: set = set()
@@ -1177,6 +1517,25 @@ def generate_drawio(cfg: Config) -> None:
         cg.set("width", str(cont["w"]))
         cg.set("height", str(cont["h"]))
         cg.set("as", "geometry")
+
+    # Add subnet icon decorations inside VNET>SUBNET subnet containers
+    if cfg.layout == "VNET>SUBNET":
+        for cont in containers:
+            if cont["id"].startswith("subnet_"):
+                icon_id = cont["id"] + "_icon"
+                ic = ET.SubElement(root, "mxCell")
+                ic.set("id", icon_id)
+                ic.set("value", "")
+                ic.set("style", SUBNET_ICON_DECORATION_STYLE)
+                ic.set("vertex", "1")
+                ic.set("parent", cont["id"])
+                ig = ET.SubElement(ic, "mxGeometry")
+                # Position at top-right of the subnet container
+                ig.set("x", str(cont["w"] - 30))
+                ig.set("y", "4")
+                ig.set("width", "24")
+                ig.set("height", "24")
+                ig.set("as", "geometry")
 
     node_id_map: Dict[str, str] = {}
 
@@ -1216,19 +1575,7 @@ def generate_drawio(cfg: Config) -> None:
         else:
             icons_used["mapped"][t] = icons_used["mapped"].get(t, 0) + 1
 
-        label = node.get("name", nid.split("/")[-1])
-        cell = ET.SubElement(root, "mxCell")
-        cell.set("id", sid)
-        cell.set("value", label)
-        cell.set("style", style)
-        cell.set("vertex", "1")
-        cell.set("parent", "1")
-        geo = ET.SubElement(cell, "mxGeometry")
-        geo.set("x", str(x))
-        geo.set("y", str(y))
-        geo.set("width", str(w))
-        geo.set("height", str(h))
-        geo.set("as", "geometry")
+        _emit_resource_cell(root, node, sid, style, x, y, w, h, parent_id="1")
 
     # Add UDR callouts for route tables
     route_table_nodes = [n for n in nodes if n.get("type", "") == "microsoft.network/routetables"]
@@ -1283,7 +1630,7 @@ def generate_drawio(cfg: Config) -> None:
             ec = ET.SubElement(root, "mxCell")
             ec.set("id", edge_id)
             ec.set("value", "UDR")
-            ec.set("style", EDGE_STYLE)
+            ec.set("style", EDGE_STYLE_ASSOCIATION)
             ec.set("edge", "1")
             ec.set("source", subnet_sid)
             ec.set("target", callout_id)
@@ -1291,6 +1638,58 @@ def generate_drawio(cfg: Config) -> None:
             eg = ET.SubElement(ec, "mxGeometry")
             eg.set("relative", "1")
             eg.set("as", "geometry")
+
+    # Add NSG rule callouts
+    nsg_summaries = extract_nsg_summaries(nodes, edges)
+    for nsg_id in sorted(nsg_summaries.keys(), key=lambda s: (
+        (node_by_id.get(s) or {}).get("name", ""), s,
+    )):
+        summary = nsg_summaries[nsg_id]
+        if not summary["rules"]:
+            continue
+        nsg_sid = node_id_map.get(nsg_id)
+        if not nsg_sid:
+            continue
+        nsg_pos = positions.get(nsg_id)
+        if not nsg_pos:
+            continue
+
+        panel_label = _format_nsg_panel_label(summary)
+        panel_id = "nsg_panel_" + stable_id(nsg_id)
+        n_lines = panel_label.count("\n") + 1
+        panel_w = 220
+        panel_h = max(50, 16 * n_lines + 12)
+
+        # Position below the NSG node
+        cx = nsg_pos[0]
+        cy = nsg_pos[1] + nsg_pos[3] + 20
+
+        pc = ET.SubElement(root, "mxCell")
+        pc.set("id", panel_id)
+        pc.set("value", panel_label)
+        pc.set("style", NSG_CALLOUT_STYLE)
+        pc.set("vertex", "1")
+        pc.set("parent", "1")
+        pg = ET.SubElement(pc, "mxGeometry")
+        pg.set("x", str(cx))
+        pg.set("y", str(cy))
+        pg.set("width", str(panel_w))
+        pg.set("height", str(panel_h))
+        pg.set("as", "geometry")
+
+        # Connect NSG to its panel
+        nsg_edge_id = "nsg_edge_" + stable_id(nsg_id)
+        ne = ET.SubElement(root, "mxCell")
+        ne.set("id", nsg_edge_id)
+        ne.set("value", "")
+        ne.set("style", EDGE_STYLE_ASSOCIATION)
+        ne.set("edge", "1")
+        ne.set("source", nsg_sid)
+        ne.set("target", panel_id)
+        ne.set("parent", "1")
+        neg = ET.SubElement(ne, "mxGeometry")
+        neg.set("relative", "1")
+        neg.set("as", "geometry")
 
     # Add attribute info boxes for resources that have metadata
     ATTR_EDGE_STYLE = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeColor=#9673a6;dashed=1;"
@@ -1342,7 +1741,7 @@ def generate_drawio(cfg: Config) -> None:
         aeg.set("relative", "1")
         aeg.set("as", "geometry")
 
-    # Add edges
+    # Add edges with differentiated styles
     for i, e in enumerate(edges):
         src = node_id_map.get(e["source"])
         tgt = node_id_map.get(e["target"])
@@ -1354,7 +1753,7 @@ def generate_drawio(cfg: Config) -> None:
         ec = ET.SubElement(root, "mxCell")
         ec.set("id", edge_id)
         ec.set("value", e["kind"])
-        ec.set("style", EDGE_STYLE)
+        ec.set("style", _edge_style(e["kind"], msft=False))
         ec.set("edge", "1")
         ec.set("source", src)
         ec.set("target", tgt)
@@ -1466,6 +1865,79 @@ def extract_route_summaries(
     return subnet_udr, dict(vnet_udr_subnets)
 
 
+MAX_NSG_RULES_SHOWN = 6
+
+
+def extract_nsg_summaries(
+    nodes: List[Dict], edges: List[Dict],
+) -> Dict[str, Dict]:
+    """Extract NSG rule summaries for NSG nodes.
+
+    Returns:
+      nsg_id -> {nsg_name, rules: [{name, priority, direction, access, protocol,
+                                     src, dst, dstPort}]}
+    """
+    node_by_id: Dict[str, Dict] = {n["id"]: n for n in nodes}
+
+    # Identify which subnets/NICs reference which NSGs
+    nsg_refs: Dict[str, List[str]] = defaultdict(list)
+    for e in edges:
+        if e["kind"] in ("subnet->nsg", "nic->nsg"):
+            nsg_id = normalize_id(e["target"])
+            src_name = node_by_id.get(normalize_id(e["source"]), {}).get("name", "")
+            if src_name:
+                nsg_refs[nsg_id].append(src_name)
+
+    nsg_summaries: Dict[str, Dict] = {}
+
+    for n in nodes:
+        if n["type"] != "microsoft.network/networksecuritygroups":
+            continue
+        nid = n["id"]
+        raw_rules = _get(n.get("properties", {}), "securityRules") or []
+        rules = []
+        for r in raw_rules:
+            rp = _get(r, "properties") or {}
+            rules.append({
+                "name": r.get("name", ""),
+                "priority": rp.get("priority", 0),
+                "direction": rp.get("direction", ""),
+                "access": rp.get("access", ""),
+                "protocol": rp.get("protocol", "*"),
+                "src": rp.get("sourceAddressPrefix", "*"),
+                "dst": rp.get("destinationAddressPrefix", "*"),
+                "dstPort": rp.get("destinationPortRange", "*"),
+            })
+        rules.sort(key=lambda r: (r["direction"], r["priority"], r["name"]))
+
+        nsg_summaries[nid] = {
+            "nsg_name": n.get("name", nid.split("/")[-1]),
+            "rules": rules,
+            "attached_to": sorted(set(nsg_refs.get(nid, []))),
+        }
+
+    return nsg_summaries
+
+
+def _format_nsg_panel_label(summary: Dict) -> str:
+    """Build the text label for an NSG panel node."""
+    lines = [f"NSG: {summary['nsg_name']}"]
+    if summary.get("attached_to"):
+        lines.append(f"Attached: {', '.join(summary['attached_to'])}")
+    rules = summary["rules"]
+    shown = rules[:MAX_NSG_RULES_SHOWN]
+    for r in shown:
+        icon = "\u2705" if r["access"] == "Allow" else "\u274c"
+        lines.append(
+            f"{icon} {r['direction'][:2]} P{r['priority']} "
+            f"{r['protocol']} {r['src']}\u2192{r['dst']}:{r['dstPort']}"
+        )
+    remaining = len(rules) - len(shown)
+    if remaining > 0:
+        lines.append(f"\u2026(+{remaining} more)")
+    return "\n".join(lines)
+
+
 def _format_udr_panel_label(summary: Dict) -> str:
     """Build the text label for a UDR panel node."""
     lines = [f"UDR: {summary['rt_name']}"]
@@ -1482,8 +1954,62 @@ def _format_udr_panel_label(summary: Dict) -> str:
     return "\n".join(lines)
 
 
+# Layer IDs for draw.io layer separation
+LAYER_CONTAINERS = "layer_containers"
+LAYER_RESOURCES = "layer_resources"
+LAYER_TRAFFIC_EDGES = "layer_traffic_edges"
+LAYER_ASSOC_EDGES = "layer_assoc_edges"
+LAYER_LABELS = "layer_labels"
+
+_LAYERS = [
+    (LAYER_CONTAINERS, "Containers"),
+    (LAYER_RESOURCES, "Resources"),
+    (LAYER_TRAFFIC_EDGES, "Traffic Edges"),
+    (LAYER_ASSOC_EDGES, "Association Edges"),
+    (LAYER_LABELS, "Labels"),
+]
+
+
+def _emit_resource_cell(
+    root: ET.Element, node: Dict, sid: str, style: str,
+    x: int, y: int, w: int, h: int, parent_id: str = "1",
+) -> None:
+    """Emit a resource node as a UserObject with ARM metadata + mxCell child.
+
+    Stores ARM ID, type, RG, subscription, and location as data-* attributes
+    on the UserObject element for downstream tooling or manual inspection.
+    The label (value) is set on the UserObject; draw.io reads it from there.
+    """
+    uo = ET.SubElement(root, "UserObject")
+    label = node.get("name", sid)
+    uo.set("label", label)
+    uo.set("id", sid)
+    uo.set("data-arm-id", node.get("id", ""))
+    uo.set("data-type", node.get("type", ""))
+    uo.set("data-resource-group", node.get("resourceGroup", ""))
+    uo.set("data-subscription", node.get("subscriptionId", ""))
+    uo.set("data-location", node.get("location", ""))
+
+    cell = ET.SubElement(uo, "mxCell")
+    cell.set("style", style)
+    cell.set("vertex", "1")
+    # Also set value on mxCell for backwards compatibility with test queries
+    cell.set("value", label)
+    cell.set("parent", parent_id)
+    geo = ET.SubElement(cell, "mxGeometry")
+    geo.set("x", str(x))
+    geo.set("y", str(y))
+    geo.set("width", str(w))
+    geo.set("height", str(h))
+    geo.set("as", "geometry")
+
+
 def _build_mxfile_root(cfg: Config) -> Tuple[ET.Element, ET.Element]:
-    """Create the mxfile/diagram/mxGraphModel/root skeleton and return (mxfile, root)."""
+    """Create the mxfile/diagram/mxGraphModel/root skeleton and return (mxfile, root).
+
+    Creates named layers: Containers, Resources, Traffic Edges, Association Edges, Labels.
+    All layers are children of cell "0" (like cell "1").
+    """
     mxfile = ET.Element("mxfile")
     diagram = ET.SubElement(mxfile, "diagram")
     diagram.set("name", cfg.app)
@@ -1498,9 +2024,16 @@ def _build_mxfile_root(cfg: Config) -> Tuple[ET.Element, ET.Element]:
     root = ET.SubElement(model, "root")
     cell0 = ET.SubElement(root, "mxCell")
     cell0.set("id", "0")
+    # Default layer (backwards compatible — used as fallback parent)
     cell1 = ET.SubElement(root, "mxCell")
     cell1.set("id", "1")
     cell1.set("parent", "0")
+    # Named layers
+    for layer_id, layer_name in _LAYERS:
+        lc = ET.SubElement(root, "mxCell")
+        lc.set("id", layer_id)
+        lc.set("value", layer_name)
+        lc.set("parent", "0")
     return mxfile, root
 
 
@@ -1596,19 +2129,7 @@ def _render_msft_mode(
         else:
             icons_used["mapped"][t] = icons_used["mapped"].get(t, 0) + 1
 
-        label = node.get("name", nid.split("/")[-1])
-        cell = ET.SubElement(root, "mxCell")
-        cell.set("id", sid)
-        cell.set("value", label)
-        cell.set("style", style)
-        cell.set("vertex", "1")
-        cell.set("parent", parent_id)
-        geo = ET.SubElement(cell, "mxGeometry")
-        geo.set("x", str(x))
-        geo.set("y", str(y))
-        geo.set("width", str(w))
-        geo.set("height", str(h))
-        geo.set("as", "geometry")
+        _emit_resource_cell(root, node, sid, style, x, y, w, h, parent_id=parent_id)
 
     # Add UDR panels for subnets with route tables
     subnet_udr, vnet_udr_rollup = extract_route_summaries(nodes, edges)
@@ -1651,7 +2172,7 @@ def _render_msft_mode(
             ue = ET.SubElement(root, "mxCell")
             ue.set("id", udr_edge_id)
             ue.set("value", "udr_detail")
-            ue.set("style", MSFT_EDGE_STYLE)
+            ue.set("style", _edge_style("udr_detail", msft=True))
             ue.set("edge", "1")
             ue.set("source", subnet_sid)
             ue.set("target", panel_id)
@@ -1662,7 +2183,55 @@ def _render_msft_mode(
 
         panel_cursor_y += panel_h + 15
 
-    # Emit edges with orthogonal style
+    # Add NSG rule panels next to the UDR panels
+    nsg_summaries = extract_nsg_summaries(nodes, edges)
+    nsg_panel_x = panel_base_x + 240  # offset from UDR panels
+    nsg_cursor_y = MSFT_REGION_PAD
+    for nsg_id in sorted(nsg_summaries.keys(), key=lambda s: (
+        (node_by_id.get(s) or {}).get("name", ""), s,
+    )):
+        summary = nsg_summaries[nsg_id]
+        if not summary["rules"]:
+            continue
+        panel_label = _format_nsg_panel_label(summary)
+        panel_id = "msft_nsg_" + stable_id(nsg_id)
+
+        n_lines = panel_label.count("\n") + 1
+        nsg_panel_w = 260
+        nsg_panel_h = max(60, 18 * n_lines + 16)
+
+        pc = ET.SubElement(root, "mxCell")
+        pc.set("id", panel_id)
+        pc.set("value", panel_label)
+        pc.set("style", MSFT_NSG_PANEL_STYLE)
+        pc.set("vertex", "1")
+        pc.set("parent", "1")
+        pg = ET.SubElement(pc, "mxGeometry")
+        pg.set("x", str(nsg_panel_x))
+        pg.set("y", str(nsg_cursor_y))
+        pg.set("width", str(nsg_panel_w))
+        pg.set("height", str(nsg_panel_h))
+        pg.set("as", "geometry")
+
+        # Connect NSG node to panel
+        nsg_sid = node_id_map.get(nsg_id)
+        if nsg_sid:
+            nsg_edge_id = "msft_nsg_edge_" + stable_id(nsg_id)
+            ne = ET.SubElement(root, "mxCell")
+            ne.set("id", nsg_edge_id)
+            ne.set("value", "nsg_detail")
+            ne.set("style", _edge_style("udr_detail", msft=True))
+            ne.set("edge", "1")
+            ne.set("source", nsg_sid)
+            ne.set("target", panel_id)
+            ne.set("parent", "1")
+            neg = ET.SubElement(ne, "mxGeometry")
+            neg.set("relative", "1")
+            neg.set("as", "geometry")
+
+        nsg_cursor_y += nsg_panel_h + 15
+
+    # Emit edges with differentiated styles
     for e in edges:
         src = node_id_map.get(e["source"])
         tgt = node_id_map.get(e["target"])
@@ -1674,7 +2243,7 @@ def _render_msft_mode(
         ec = ET.SubElement(root, "mxCell")
         ec.set("id", edge_id)
         ec.set("value", e["kind"])
-        ec.set("style", MSFT_EDGE_STYLE)
+        ec.set("style", _edge_style(e["kind"], msft=True))
         ec.set("edge", "1")
         ec.set("source", src)
         ec.set("target", tgt)

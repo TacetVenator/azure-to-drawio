@@ -210,7 +210,7 @@ class TestVnetDrawioGeneration:
         )
 
     def test_drawio_no_vnet_subnet_icon_cells(self, tmp_path):
-        """VNet and subnet nodes should not appear as icon cells."""
+        """VNet and subnet nodes should not appear as full icon cells (decorations OK)."""
         self._generate(tmp_path)
         tree = ET.parse(str(tmp_path / "diagram.drawio"))
         vertices = tree.findall(".//mxCell[@vertex='1']")
@@ -219,11 +219,44 @@ class TestVnetDrawioGeneration:
             # Container cells use our VNET_STYLE/SUBNET_STYLE, not image-based icon styles
             if "connectable" in v.attrib:
                 continue
+            # Allow small subnet icon decorations (id ends with _icon)
+            if v.get("id", "").endswith("_icon"):
+                continue
             # Icon cells should not be for VNets or subnets
             if "Virtual_Networks.svg" in style or "Subnet.svg" in style:
                 pytest.fail(
                     f"Found VNet/subnet icon cell in VNET>SUBNET mode: {v.get('value')}"
                 )
+
+    def test_subnet_containers_have_icon_decoration(self, tmp_path):
+        """Each subnet container in VNET>SUBNET mode should have a small icon decoration."""
+        self._generate(tmp_path)
+        tree = ET.parse(str(tmp_path / "diagram.drawio"))
+        vertices = tree.findall(".//mxCell[@vertex='1']")
+
+        # Find subnet containers
+        subnet_containers = [
+            v for v in vertices
+            if v.get("id", "").startswith("subnet_") and v.get("connectable") == "0"
+            and not v.get("id", "").endswith("_icon")
+        ]
+        assert len(subnet_containers) >= 1, "Expected at least one subnet container"
+
+        # Find subnet icon decorations
+        icon_decorations = [
+            v for v in vertices
+            if v.get("id", "").endswith("_icon") and "Subnet.svg" in v.get("style", "")
+        ]
+        assert len(icon_decorations) == len(subnet_containers), (
+            f"Expected {len(subnet_containers)} subnet icon decorations, got {len(icon_decorations)}"
+        )
+
+        # Each icon should be small (24x24)
+        for icon in icon_decorations:
+            geo = icon.find("mxGeometry")
+            assert geo is not None
+            assert geo.get("width") == "24"
+            assert geo.get("height") == "24"
 
     def test_drawio_contains_vertex_cells(self, tmp_path):
         self._generate(tmp_path)
