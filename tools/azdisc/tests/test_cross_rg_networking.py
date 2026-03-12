@@ -9,9 +9,12 @@ from pathlib import Path
 
 import pytest
 
+import xml.etree.ElementTree as ET
+
 from tools.azdisc.config import Config
 from tools.azdisc.discover import _derive_parent_ids, _synthesize_subnets_from_vnets
-from tools.azdisc.drawio import extract_route_summaries, layout_nodes_vnet
+from tools.azdisc.docs import generate_docs
+from tools.azdisc.drawio import extract_route_summaries, generate_drawio, layout_nodes_vnet
 from tools.azdisc.graph import (
     _infer_type_from_id,
     build_graph,
@@ -354,3 +357,160 @@ class TestCrossRgBuildGraph:
         )
         assert vnet_id in vnet_rollup, "spoke-vnet01 should appear in VNet UDR rollup"
         assert "cprmg-subnet01" in vnet_rollup[vnet_id]
+
+
+# ── Markdown docs output ─────────────────────────────────────────────────
+
+
+class TestCrossRgMarkdownDocs:
+    """Verify routing.md and catalog.md include cross-RG networking details."""
+
+    def _generate(self, tmp_path):
+        fixture = FIXTURES / "cross_rg_networking.json"
+        (tmp_path / "inventory.json").write_text(fixture.read_text())
+        (tmp_path / "unresolved.json").write_text("[]")
+        cfg = Config(
+            app="cross-rg-test",
+            subscriptions=["sub1"],
+            seedResourceGroups=["rg-compute"],
+            outputDir=str(tmp_path),
+            layout="VNET>SUBNET",
+        )
+        build_graph(cfg)
+        generate_docs(cfg)
+        return cfg
+
+    def test_routing_md_has_route_table(self, tmp_path):
+        self._generate(tmp_path)
+        routing = (tmp_path / "routing.md").read_text()
+        assert "udr-shared" in routing
+
+    def test_routing_md_has_routes(self, tmp_path):
+        self._generate(tmp_path)
+        routing = (tmp_path / "routing.md").read_text()
+        assert "to-firewall" in routing
+        assert "0.0.0.0/0" in routing
+        assert "VirtualAppliance" in routing
+        assert "10.0.1.4" in routing
+        assert "to-onprem" in routing
+        assert "172.16.0.0/12" in routing
+
+    def test_routing_md_has_subnet_udr_association(self, tmp_path):
+        self._generate(tmp_path)
+        routing = (tmp_path / "routing.md").read_text()
+        assert "cprmg-subnet01" in routing
+        # Subnet should be listed with its UDR association
+        assert "Subnets with UDRs: 1" in routing
+
+    def test_routing_md_has_nsg(self, tmp_path):
+        self._generate(tmp_path)
+        routing = (tmp_path / "routing.md").read_text()
+        assert "nsg-shared" in routing
+
+    def test_catalog_md_has_cross_rg_types(self, tmp_path):
+        self._generate(tmp_path)
+        catalog = (tmp_path / "catalog.md").read_text()
+        assert "microsoft.network/virtualnetworks" in catalog
+        assert "microsoft.network/routetables" in catalog
+        assert "microsoft.network/networksecuritygroups" in catalog
+        # Both resource groups should appear
+        assert "rg-compute" in catalog
+        assert "rg-networking" in catalog
+
+    def test_edges_md_has_cross_rg_edge_kinds(self, tmp_path):
+        self._generate(tmp_path)
+        edges_md = (tmp_path / "edges.md").read_text()
+        assert "subnet->routeTable" in edges_md
+        assert "subnet->nsg" in edges_md
+        assert "nic->subnet" in edges_md
+        assert "subnet->vnet" in edges_md
+
+
+# ── Diagram output ────────────────────────────────────────────────────────
+
+
+class TestCrossRgDiagramOutput:
+    """Verify the .drawio XML includes cross-RG networking containers and edges."""
+
+    def _generate(self, tmp_path):
+        fixture = FIXTURES / "cross_rg_networking.json"
+        (tmp_path / "inventory.json").write_text(fixture.read_text())
+        (tmp_path / "unresolved.json").write_text("[]")
+        cfg = Config(
+            app="cross-rg-test",
+            subscriptions=["sub1"],
+            seedResourceGroups=["rg-compute"],
+            outputDir=str(tmp_path),
+            layout="VNET>SUBNET",
+        )
+        build_graph(cfg)
+        generate_drawio(cfg)
+        return cfg
+
+    def test_drawio_file_created(self, tmp_path):
+        self._generate(tmp_path)
+        assert (tmp_path / "diagram.drawio").exists()
+
+    def test_drawio_has_vnet_container(self, tmp_path):
+        self._generate(tmp_path)
+        tree = ET.parse(str(tmp_path / "diagram.drawio"))
+        containers = tree.findall(".//mxCell[@connectable='0']")
+        labels = {c.get("value") for c in containers}
+        assert "spoke-vnet01" in labels, f"Missing VNET container, got: {labels}"
+
+    def test_drawio_has_subnet_container(self, tmp_path):
+        self._generate(tmp_path)
+        tree = ET.parse(str(tmp_path / "diagram.drawio"))
+        containers = tree.findall(".//mxCell[@connectable='0']")
+        labels = {c.get("value") for c in containers}
+        assert "cprmg-subnet01" in labels, f"Missing subnet container, got: {labels}"
+
+    def test_drawio_has_udr_callout(self, tmp_path):
+        self._generate(tmp_path)
+        tree = ET.parse(str(tmp_path / "diagram.drawio"))
+        vertices = tree.findall(".//mxCell[@vertex='1']")
+        udr_callouts = [
+            v for v in vertices
+            if v.get("id", "").startswith("udr_")
+            and "Routes:" in (v.get("value") or "")
+        ]
+        assert len(udr_callouts) >= 1, "Expected UDR callout with route details"
+        callout_text = udr_callouts[0].get("value", "")
+        assert "0.0.0.0/0" in callout_text
+        assert "172.16.0.0/12" in callout_text
+
+    def test_drawio_has_vm_node(self, tmp_path):
+        self._generate(tmp_path)
+        tree = ET.parse(str(tmp_path / "diagram.drawio"))
+        vertices = tree.findall(".//mxCell[@vertex='1']")
+        labels = {v.get("value") for v in vertices if v.get("value")}
+        assert "vm-crossrg" in labels
+
+    def test_drawio_has_edge_cells(self, tmp_path):
+        self._generate(tmp_path)
+        tree = ET.parse(str(tmp_path / "diagram.drawio"))
+        edges = tree.findall(".//mxCell[@edge='1']")
+        assert len(edges) >= 3, f"Expected >=3 edges, got {len(edges)}"
+
+    def test_drawio_udr_callout_edge_connects_to_route_table(self, tmp_path):
+        """UDR callout edge should connect from the route table node, not a subnet container."""
+        self._generate(tmp_path)
+        tree = ET.parse(str(tmp_path / "diagram.drawio"))
+        udr_edges = [
+            e for e in tree.findall(".//mxCell[@edge='1']")
+            if e.get("id", "").startswith("udr_edge_")
+        ]
+        assert len(udr_edges) >= 1, "Expected at least one UDR callout edge"
+
+        # Collect all element IDs (mxCell + UserObject, since resource nodes
+        # use UserObject wrappers whose id is the stable_id)
+        all_ids = set()
+        for elem in tree.iter():
+            eid = elem.get("id")
+            if eid:
+                all_ids.add(eid)
+        for edge in udr_edges:
+            src = edge.get("source")
+            tgt = edge.get("target")
+            assert src in all_ids, f"UDR edge source {src} not found in diagram elements"
+            assert tgt in all_ids, f"UDR edge target {tgt} not found in diagram elements"

@@ -1623,16 +1623,16 @@ def generate_drawio(cfg: Config) -> None:
         cog.set("height", str(max(60, 20 * len(label_lines))))
         cog.set("as", "geometry")
 
-        # Attach callout to subnet with udr edge
-        if rt_id in udr_edge_sources:
-            subnet_sid = stable_id(udr_edge_sources[rt_id])
+        # Attach callout to route table node with udr edge
+        rt_sid = node_id_map.get(rt_id)
+        if rt_sid:
             edge_id = "udr_edge_" + stable_id(rt_id)
             ec = ET.SubElement(root, "mxCell")
             ec.set("id", edge_id)
             ec.set("value", "UDR")
             ec.set("style", EDGE_STYLE_ASSOCIATION)
             ec.set("edge", "1")
-            ec.set("source", subnet_sid)
+            ec.set("source", rt_sid)
             ec.set("target", callout_id)
             ec.set("parent", "1")
             eg = ET.SubElement(ec, "mxGeometry")
