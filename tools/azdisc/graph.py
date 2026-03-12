@@ -59,6 +59,33 @@ def _find_parent_id(resource_id: str, resource_type: str) -> Optional[str]:
     return None
 
 
+def _infer_type_from_id(arm_id: str) -> str:
+    """Best-effort resource type inference from an ARM resource ID.
+
+    For example:
+      .../microsoft.network/virtualnetworks/foo/subnets/bar
+        -> microsoft.network/virtualnetworks/subnets
+      .../microsoft.network/virtualnetworks/foo
+        -> microsoft.network/virtualnetworks
+    Falls back to ``external/unknown`` when the pattern is unrecognisable.
+    """
+    nid = normalize_id(arm_id)
+    # Find the /providers/ segment and extract type tokens after it
+    idx = nid.rfind("/providers/")
+    if idx == -1:
+        return "external/unknown"
+    after = nid[idx + len("/providers/"):]
+    # Tokens alternate: provider, type, name, type, name ...
+    parts = after.split("/")
+    if len(parts) < 3:
+        return "external/unknown"
+    # provider = parts[0], then pairs of (type_segment, name)
+    type_parts = [parts[0]]  # e.g. "microsoft.network"
+    for i in range(1, len(parts) - 1, 2):
+        type_parts.append(parts[i])  # e.g. "virtualnetworks", "subnets"
+    return "/".join(type_parts)
+
+
 def build_node(resource: Dict, is_external: bool = False) -> Dict:
     nid = normalize_id(resource.get("id", ""))
     return {
@@ -291,7 +318,7 @@ def build_graph(cfg: Config) -> Dict:
                 "id": uid,
                 "stableId": stable_id(uid),
                 "name": uid.split("/")[-1],
-                "type": "external/unknown",
+                "type": _infer_type_from_id(uid),
                 "location": "",
                 "resourceGroup": "",
                 "subscriptionId": "",

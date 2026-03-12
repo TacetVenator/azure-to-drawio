@@ -20,6 +20,66 @@ def _rg_filter(rgs: List[str]) -> str:
     return f"resources | where resourceGroup in~ ({quoted}) | project id, name, type, location, subscriptionId, resourceGroup, properties"
 
 
+def _derive_parent_ids(referenced: Set[str]) -> Set[str]:
+    """Derive parent resource IDs from child resource IDs.
+
+    For example, a subnet ID like
+      /subscriptions/.../virtualnetworks/spoke-vnet01/subnets/cprmg-subnet01
+    yields the parent VNET ID:
+      /subscriptions/.../virtualnetworks/spoke-vnet01
+
+    This ensures cross-resource-group parent resources are discovered during
+    expansion even when no property explicitly references them.
+    """
+    parents: Set[str] = set()
+    for rid in referenced:
+        nid = normalize_id(rid)
+        # Subnet -> parent VNET
+        if "/subnets/" in nid:
+            vnet_id = nid.split("/subnets/")[0]
+            parents.add(vnet_id)
+    return parents
+
+
+def _synthesize_subnets_from_vnets(
+    collected: Dict[str, Dict], unresolved: Set[str],
+) -> None:
+    """For unresolved subnet IDs, synthesize entries from parent VNET properties.
+
+    Azure Resource Graph sometimes does not return subnets as standalone
+    resources.  When the parent VNET *is* in the inventory, we can extract
+    the subnet details from its ``properties.subnets`` array and add them
+    as first-class resources.
+    """
+    resolved_from_vnet: Set[str] = set()
+    for uid in list(unresolved):
+        nid = normalize_id(uid)
+        if "/subnets/" not in nid:
+            continue
+        vnet_id = nid.split("/subnets/")[0]
+        vnet = collected.get(vnet_id)
+        if vnet is None:
+            continue
+        subnet_name = nid.split("/subnets/")[-1]
+        for sn in vnet.get("properties", {}).get("subnets", []):
+            sn_id = normalize_id(sn.get("id", ""))
+            if sn_id == nid or sn.get("name", "").lower() == subnet_name:
+                # Build a synthetic resource entry matching ARG shape
+                collected[nid] = {
+                    "id": sn.get("id", uid),
+                    "name": sn.get("name", subnet_name),
+                    "type": "Microsoft.Network/virtualNetworks/subnets",
+                    "location": vnet.get("location", ""),
+                    "subscriptionId": vnet.get("subscriptionId", ""),
+                    "resourceGroup": vnet.get("resourceGroup", ""),
+                    "properties": sn.get("properties", {}),
+                }
+                resolved_from_vnet.add(uid)
+                log.info("Synthesized subnet %s from parent VNET", subnet_name)
+                break
+    unresolved -= resolved_from_vnet
+
+
 def run_seed(cfg: Config) -> List[Dict]:
     log.info("Seeding resources from RGs: %s", cfg.seedResourceGroups)
     rows = query(_rg_filter(cfg.seedResourceGroups), cfg.subscriptions)
@@ -45,6 +105,13 @@ def run_expand(cfg: Config) -> None:
             referenced.update(extract_arm_ids(r.get("properties", {})))
             referenced.add(normalize_id(r["id"]))
         referenced = {normalize_id(i) for i in referenced}
+
+        # Derive parent resource IDs for child resources (e.g. VNET from subnet ID).
+        # This ensures cross-resource-group parent resources are fetched even when
+        # they are not directly referenced in any property.
+        parent_ids = _derive_parent_ids(referenced)
+        referenced.update(parent_ids)
+
         missing = referenced - set(collected.keys()) - unresolved
         if not missing:
             log.info("Expansion converged after %d iteration(s).", iteration)
@@ -61,6 +128,10 @@ def run_expand(cfg: Config) -> None:
         log.debug("Still unresolved: %d", len(still_missing))
     else:
         log.warning("Expansion hit max iterations (%d).", _MAX_ITERATIONS)
+
+    # Synthesize subnet entries from parent VNET properties for any subnets
+    # that could not be fetched directly from ARG (common for cross-RG refs).
+    _synthesize_subnets_from_vnets(collected, unresolved)
 
     inventory = sorted(collected.values(), key=lambda r: normalize_id(r["id"]))
     cfg.ensure_output_dir()
