@@ -105,11 +105,20 @@ def _write_routing(cfg: Config, nodes: List[Dict], edges: List[Dict]) -> None:
     id_to_node = {n["id"]: n for n in nodes}
     subnet_to_rt = {}
     subnet_to_nsg = {}
+    nic_to_asgs: Dict[str, List[str]] = defaultdict(list)
+    nsg_to_src_asgs: Dict[str, List[str]] = defaultdict(list)
+    nsg_to_dst_asgs: Dict[str, List[str]] = defaultdict(list)
     for e in edges:
         if e["kind"] == "subnet->routeTable":
             subnet_to_rt[e["source"]] = e["target"]
         elif e["kind"] == "subnet->nsg":
             subnet_to_nsg[e["source"]] = e["target"]
+        elif e["kind"] == "nic->asg":
+            nic_to_asgs[e["source"]].append(e["target"])
+        elif e["kind"] == "nsgRule->sourceAsg":
+            nsg_to_src_asgs[e["source"]].append(e["target"])
+        elif e["kind"] == "nsgRule->destAsg":
+            nsg_to_dst_asgs[e["source"]].append(e["target"])
 
     rt_nodes = [n for n in nodes if n["type"] == "microsoft.network/routetables"]
     subnets = sorted(
@@ -172,6 +181,12 @@ def _write_routing(cfg: Config, nodes: List[Dict], edges: List[Dict]) -> None:
         lines.append("")
 
     # NSG section
+    # Build ASG ID -> name lookup for resolving ASG references in NSG rules
+    asg_name_map = {}
+    for n in nodes:
+        if n["type"] == "microsoft.network/applicationsecuritygroups":
+            asg_name_map[n["id"]] = n.get("name", n["id"].split("/")[-1])
+
     lines.append("\n## Network Security Groups\n")
     nsg_nodes = [n for n in nodes if n["type"] == "microsoft.network/networksecuritygroups"]
     if not nsg_nodes:
@@ -189,12 +204,72 @@ def _write_routing(cfg: Config, nodes: List[Dict], edges: List[Dict]) -> None:
                     lines.append("|------|----------|----------|-----|-----|--------|")
                     for r in sorted(direction_rules, key=lambda x: (x.get("properties") or {}).get("priority", 0)):
                         rp = r.get("properties") or {}
+                        # Resolve source: prefer ASG names over address prefix
+                        src_asgs = rp.get("sourceApplicationSecurityGroups") or []
+                        if src_asgs:
+                            src = ", ".join(
+                                asg_name_map.get(a.get("id", "").lower(), a.get("id", "").split("/")[-1])
+                                for a in src_asgs
+                            )
+                        else:
+                            src = rp.get("sourceAddressPrefix", "")
+                        # Resolve destination: prefer ASG names over address prefix
+                        dst_asgs = rp.get("destinationApplicationSecurityGroups") or []
+                        if dst_asgs:
+                            dst = ", ".join(
+                                asg_name_map.get(a.get("id", "").lower(), a.get("id", "").split("/")[-1])
+                                for a in dst_asgs
+                            )
+                        else:
+                            dst = rp.get("destinationAddressPrefix", "")
                         lines.append(
                             f"| {r.get('name','')} | {rp.get('priority','')} "
                             f"| {rp.get('protocol','')} "
-                            f"| {rp.get('sourceAddressPrefix','')} "
-                            f"| {rp.get('destinationAddressPrefix','')} "
+                            f"| {src} "
+                            f"| {dst} "
                             f"| {rp.get('access','')} |"
                         )
+
+    # ASG section
+    lines.append("\n## Application Security Groups\n")
+    asg_nodes = sorted(
+        [n for n in nodes if n["type"] == "microsoft.network/applicationsecuritygroups"],
+        key=lambda n: (n.get("name", ""), n["id"]),
+    )
+    if not asg_nodes:
+        lines.append("_No ASGs found._\n")
+    else:
+        lines.append(f"- Application security groups: {len(asg_nodes)}")
+        # Build ASG -> NIC membership from edges
+        asg_to_nics: Dict[str, List[str]] = defaultdict(list)
+        for nic_id, asg_ids in nic_to_asgs.items():
+            nic_node = id_to_node.get(nic_id)
+            nic_name = nic_node["name"] if nic_node else nic_id.split("/")[-1]
+            for asg_id in asg_ids:
+                asg_to_nics[asg_id].append(nic_name)
+        # Build ASG -> NSG rule references
+        asg_to_nsg_rules: Dict[str, List[str]] = defaultdict(list)
+        for nsg_id, asg_ids in nsg_to_src_asgs.items():
+            nsg_node = id_to_node.get(nsg_id)
+            nsg_name = nsg_node["name"] if nsg_node else nsg_id.split("/")[-1]
+            for asg_id in asg_ids:
+                asg_to_nsg_rules[asg_id].append(f"{nsg_name} (source)")
+        for nsg_id, asg_ids in nsg_to_dst_asgs.items():
+            nsg_node = id_to_node.get(nsg_id)
+            nsg_name = nsg_node["name"] if nsg_node else nsg_id.split("/")[-1]
+            for asg_id in asg_ids:
+                asg_to_nsg_rules[asg_id].append(f"{nsg_name} (destination)")
+        lines.append("")
+        for asg in asg_nodes:
+            lines.append(f"### ASG: `{asg['name']}` (`{asg['id']}`)\n")
+            members = sorted(set(asg_to_nics.get(asg["id"], [])))
+            if members:
+                lines.append(f"- Member NICs: {', '.join(f'`{m}`' for m in members)}")
+            else:
+                lines.append("- Member NICs: _none discovered_")
+            nsg_refs = sorted(set(asg_to_nsg_rules.get(asg["id"], [])))
+            if nsg_refs:
+                lines.append(f"- Referenced in NSG rules: {', '.join(nsg_refs)}")
+            lines.append("")
 
     cfg.out("routing.md").write_text("\n".join(lines) + "\n")

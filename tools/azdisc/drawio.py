@@ -81,7 +81,8 @@ MSFT_EDGE_STYLE = "edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;"
 
 # Edge kinds classified by semantic type for visual differentiation
 _ASSOCIATION_EDGE_KINDS = {
-    "subnet->nsg", "subnet->routeTable", "nic->nsg",
+    "subnet->nsg", "subnet->routeTable", "nic->nsg", "nic->asg",
+    "nsgRule->sourceAsg", "nsgRule->destAsg",
     "rbac_assignment", "appInsights->workspace", "udr_detail", "nsg_detail",
 }
 _PEERING_EDGE_KINDS = {
@@ -565,6 +566,16 @@ def _build_network_membership(
                 subnet_members[sid].append(rt_id)
                 placed.add(rt_id)
 
+    # Place ASGs into the subnet of their member NICs (nic->asg)
+    for e in edges:
+        if e["kind"] == "nic->asg":
+            asg_id = normalize_id(e["target"])
+            nic_id = normalize_id(e["source"])
+            if asg_id not in placed and nic_id in nic_subnet:
+                sid = nic_subnet[nic_id]
+                subnet_members[sid].append(asg_id)
+                placed.add(asg_id)
+
     # Place load balancers near their backend NICs
     for e in edges:
         if e["kind"] == "loadBalancer->backendNic":
@@ -1003,6 +1014,7 @@ _NETWORK_TYPES = {
     "microsoft.network/virtualnetworks",
     "microsoft.network/virtualnetworks/subnets",
     "microsoft.network/networksecuritygroups",
+    "microsoft.network/applicationsecuritygroups",
     "microsoft.network/routetables",
     "microsoft.network/azurefirewalls",
     "microsoft.network/bastionhosts",
@@ -1623,16 +1635,16 @@ def generate_drawio(cfg: Config) -> None:
         cog.set("height", str(max(60, 20 * len(label_lines))))
         cog.set("as", "geometry")
 
-        # Attach callout to subnet with udr edge
-        if rt_id in udr_edge_sources:
-            subnet_sid = stable_id(udr_edge_sources[rt_id])
+        # Attach callout to route table node with udr edge
+        rt_sid = node_id_map.get(rt_id)
+        if rt_sid:
             edge_id = "udr_edge_" + stable_id(rt_id)
             ec = ET.SubElement(root, "mxCell")
             ec.set("id", edge_id)
             ec.set("value", "UDR")
             ec.set("style", EDGE_STYLE_ASSOCIATION)
             ec.set("edge", "1")
-            ec.set("source", subnet_sid)
+            ec.set("source", rt_sid)
             ec.set("target", callout_id)
             ec.set("parent", "1")
             eg = ET.SubElement(ec, "mxGeometry")
@@ -1890,6 +1902,12 @@ def extract_nsg_summaries(
 
     nsg_summaries: Dict[str, Dict] = {}
 
+    # Build ASG ID -> name lookup for resolving ASG references in rules
+    asg_name_map: Dict[str, str] = {}
+    for n in nodes:
+        if n["type"] == "microsoft.network/applicationsecuritygroups":
+            asg_name_map[n["id"]] = n.get("name", n["id"].split("/")[-1])
+
     for n in nodes:
         if n["type"] != "microsoft.network/networksecuritygroups":
             continue
@@ -1898,14 +1916,32 @@ def extract_nsg_summaries(
         rules = []
         for r in raw_rules:
             rp = _get(r, "properties") or {}
+            # Resolve source: prefer ASG names over address prefix
+            src_asgs = rp.get("sourceApplicationSecurityGroups") or []
+            if src_asgs:
+                src = ",".join(
+                    asg_name_map.get(normalize_id(a.get("id", "")), a.get("id", "").split("/")[-1])
+                    for a in src_asgs
+                )
+            else:
+                src = rp.get("sourceAddressPrefix", "*")
+            # Resolve destination: prefer ASG names over address prefix
+            dst_asgs = rp.get("destinationApplicationSecurityGroups") or []
+            if dst_asgs:
+                dst = ",".join(
+                    asg_name_map.get(normalize_id(a.get("id", "")), a.get("id", "").split("/")[-1])
+                    for a in dst_asgs
+                )
+            else:
+                dst = rp.get("destinationAddressPrefix", "*")
             rules.append({
                 "name": r.get("name", ""),
                 "priority": rp.get("priority", 0),
                 "direction": rp.get("direction", ""),
                 "access": rp.get("access", ""),
                 "protocol": rp.get("protocol", "*"),
-                "src": rp.get("sourceAddressPrefix", "*"),
-                "dst": rp.get("destinationAddressPrefix", "*"),
+                "src": src,
+                "dst": dst,
                 "dstPort": rp.get("destinationPortRange", "*"),
             })
         rules.sort(key=lambda r: (r["direction"], r["priority"], r["name"]))

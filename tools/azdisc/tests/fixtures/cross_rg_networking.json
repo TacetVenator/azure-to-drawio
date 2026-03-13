@@ -1,0 +1,143 @@
+[
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-compute/providers/Microsoft.Compute/virtualMachines/vm-crossrg",
+    "name": "vm-crossrg",
+    "type": "Microsoft.Compute/virtualMachines",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-compute",
+    "properties": {
+      "hardwareProfile": {"vmSize": "Standard_D2s_v3"},
+      "networkProfile": {
+        "networkInterfaces": [
+          {"id": "/subscriptions/sub1/resourceGroups/rg-compute/providers/Microsoft.Network/networkInterfaces/nic-crossrg"}
+        ]
+      },
+      "storageProfile": {
+        "osDisk": {
+          "osType": "Linux",
+          "managedDisk": {
+            "id": "/subscriptions/sub1/resourceGroups/rg-compute/providers/Microsoft.Compute/disks/disk-crossrg"
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-compute/providers/Microsoft.Network/networkInterfaces/nic-crossrg",
+    "name": "nic-crossrg",
+    "type": "Microsoft.Network/networkInterfaces",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-compute",
+    "properties": {
+      "networkSecurityGroup": {
+        "id": "/subscriptions/sub1/resourceGroups/rg-networking/providers/Microsoft.Network/networkSecurityGroups/nsg-shared"
+      },
+      "ipConfigurations": [
+        {
+          "properties": {
+            "subnet": {
+              "id": "/subscriptions/sub1/resourceGroups/rg-networking/providers/Microsoft.Network/virtualNetworks/spoke-vnet01/subnets/cprmg-subnet01"
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-compute/providers/Microsoft.Compute/disks/disk-crossrg",
+    "name": "disk-crossrg",
+    "type": "Microsoft.Compute/disks",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-compute",
+    "properties": {}
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-networking/providers/Microsoft.Network/virtualNetworks/spoke-vnet01",
+    "name": "spoke-vnet01",
+    "type": "Microsoft.Network/virtualNetworks",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-networking",
+    "properties": {
+      "addressSpace": {"addressPrefixes": ["10.1.0.0/16"]},
+      "subnets": [
+        {
+          "id": "/subscriptions/sub1/resourceGroups/rg-networking/providers/Microsoft.Network/virtualNetworks/spoke-vnet01/subnets/cprmg-subnet01",
+          "name": "cprmg-subnet01",
+          "properties": {
+            "addressPrefix": "10.1.1.0/24",
+            "networkSecurityGroup": {
+              "id": "/subscriptions/sub1/resourceGroups/rg-networking/providers/Microsoft.Network/networkSecurityGroups/nsg-shared"
+            },
+            "routeTable": {
+              "id": "/subscriptions/sub1/resourceGroups/rg-networking/providers/Microsoft.Network/routeTables/udr-shared"
+            }
+          }
+        },
+        {
+          "id": "/subscriptions/sub1/resourceGroups/rg-networking/providers/Microsoft.Network/virtualNetworks/spoke-vnet01/subnets/cprmg-subnet02",
+          "name": "cprmg-subnet02",
+          "properties": {
+            "addressPrefix": "10.1.2.0/24"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-networking/providers/Microsoft.Network/virtualNetworks/spoke-vnet01/subnets/cprmg-subnet01",
+    "name": "cprmg-subnet01",
+    "type": "Microsoft.Network/virtualNetworks/subnets",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-networking",
+    "properties": {
+      "addressPrefix": "10.1.1.0/24",
+      "networkSecurityGroup": {
+        "id": "/subscriptions/sub1/resourceGroups/rg-networking/providers/Microsoft.Network/networkSecurityGroups/nsg-shared"
+      },
+      "routeTable": {
+        "id": "/subscriptions/sub1/resourceGroups/rg-networking/providers/Microsoft.Network/routeTables/udr-shared"
+      }
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-networking/providers/Microsoft.Network/networkSecurityGroups/nsg-shared",
+    "name": "nsg-shared",
+    "type": "Microsoft.Network/networkSecurityGroups",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-networking",
+    "properties": {}
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-networking/providers/Microsoft.Network/routeTables/udr-shared",
+    "name": "udr-shared",
+    "type": "Microsoft.Network/routeTables",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-networking",
+    "properties": {
+      "routes": [
+        {
+          "name": "to-firewall",
+          "properties": {
+            "addressPrefix": "0.0.0.0/0",
+            "nextHopType": "VirtualAppliance",
+            "nextHopIpAddress": "10.0.1.4"
+          }
+        },
+        {
+          "name": "to-onprem",
+          "properties": {
+            "addressPrefix": "172.16.0.0/12",
+            "nextHopType": "VirtualNetworkGateway"
+          }
+        }
+      ]
+    }
+  }
+]

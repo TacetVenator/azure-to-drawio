@@ -59,6 +59,33 @@ def _find_parent_id(resource_id: str, resource_type: str) -> Optional[str]:
     return None
 
 
+def _infer_type_from_id(arm_id: str) -> str:
+    """Best-effort resource type inference from an ARM resource ID.
+
+    For example:
+      .../microsoft.network/virtualnetworks/foo/subnets/bar
+        -> microsoft.network/virtualnetworks/subnets
+      .../microsoft.network/virtualnetworks/foo
+        -> microsoft.network/virtualnetworks
+    Falls back to ``external/unknown`` when the pattern is unrecognisable.
+    """
+    nid = normalize_id(arm_id)
+    # Find the /providers/ segment and extract type tokens after it
+    idx = nid.rfind("/providers/")
+    if idx == -1:
+        return "external/unknown"
+    after = nid[idx + len("/providers/"):]
+    # Tokens alternate: provider, type, name, type, name ...
+    parts = after.split("/")
+    if len(parts) < 3:
+        return "external/unknown"
+    # provider = parts[0], then pairs of (type_segment, name)
+    type_parts = [parts[0]]  # e.g. "microsoft.network"
+    for i in range(1, len(parts) - 1, 2):
+        type_parts.append(parts[i])  # e.g. "virtualnetworks", "subnets"
+    return "/".join(type_parts)
+
+
 def build_node(resource: Dict, is_external: bool = False) -> Dict:
     nid = normalize_id(resource.get("id", ""))
     return {
@@ -108,6 +135,8 @@ def extract_edges(nodes: List[Dict]) -> List[Dict]:
             add_edge(nid, _get(p, "networkSecurityGroup", "id"), "nic->nsg")
             for ipc in _get(p, "ipConfigurations") or []:
                 add_edge(nid, _get(ipc, "properties", "subnet", "id"), "nic->subnet")
+                for asg in _get(ipc, "properties", "applicationSecurityGroups") or []:
+                    add_edge(nid, _get(asg, "id"), "nic->asg")
 
         elif t == "microsoft.network/virtualnetworks":
             for peer in _get(p, "virtualNetworkPeerings") or []:
@@ -120,6 +149,15 @@ def extract_edges(nodes: List[Dict]) -> List[Dict]:
                 add_edge(nid, vnet_id, "subnet->vnet")
             add_edge(nid, _get(p, "networkSecurityGroup", "id"), "subnet->nsg")
             add_edge(nid, _get(p, "routeTable", "id"), "subnet->routeTable")
+
+        elif t == "microsoft.network/networksecuritygroups":
+            # Extract ASG references from security rules
+            for rule in _get(p, "securityRules") or []:
+                rp = _get(rule, "properties") or {}
+                for asg in rp.get("sourceApplicationSecurityGroups") or []:
+                    add_edge(nid, _get(asg, "id"), "nsgRule->sourceAsg")
+                for asg in rp.get("destinationApplicationSecurityGroups") or []:
+                    add_edge(nid, _get(asg, "id"), "nsgRule->destAsg")
 
         elif t == "microsoft.network/privateendpoints":
             add_edge(nid, _get(p, "subnet", "id"), "privateEndpoint->subnet")
@@ -291,7 +329,7 @@ def build_graph(cfg: Config) -> Dict:
                 "id": uid,
                 "stableId": stable_id(uid),
                 "name": uid.split("/")[-1],
-                "type": "external/unknown",
+                "type": _infer_type_from_id(uid),
                 "location": "",
                 "resourceGroup": "",
                 "subscriptionId": "",
