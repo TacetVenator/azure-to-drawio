@@ -42,12 +42,6 @@ jobs:
       - name: Generate all layout × mode combinations (test-all)
         run: python -m tools.azdisc -v test-all -o out/test-all
 
-      - name: Upload test-all artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-diagrams-all-combinations
-          path: out/test-all/
-
       - name: Post combination summary to PR
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7

@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  create:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release:
+    if: startsWith(github.ref, 'refs/heads/release/')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: pip install pytest
+
+      - name: Install draw.io CLI
+        run: |
+          curl -fsSL https://github.com/jgraph/drawio-desktop/releases/download/v26.0.9/drawio-amd64-26.0.9.deb -o drawio.deb
+          sudo apt-get update
+          sudo apt-get install -y xvfb ./drawio.deb
+          # drawio needs a display; create a wrapper that uses xvfb-run
+          sudo mv /usr/bin/drawio /usr/bin/drawio-real
+          printf '#!/bin/sh\nexec xvfb-run -a /usr/bin/drawio-real --no-sandbox "$@"\n' | sudo tee /usr/bin/drawio > /dev/null
+          sudo chmod +x /usr/bin/drawio
+
+      - name: Run tests
+        run: python -m pytest tools/azdisc/tests/ -v --tb=short
+
+      - name: Generate all layout × mode combinations (test-all)
+        run: python -m tools.azdisc -v test-all -o out/test-all
+
+      - name: Upload release diagrams artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-diagrams
+          path: out/test-all/
+
+      - name: Collect and rename PNGs for release
+        run: |
+          mkdir -p out/release-pngs
+          for png in out/test-all/*/*/diagram.png; do
+            fixture=$(echo "$png" | cut -d/ -f3)
+            combo=$(echo "$png" | cut -d/ -f4)
+            cp "$png" "out/release-pngs/${fixture}__${combo}.png"
+          done
+
+      - name: Derive release name from branch
+        run: echo "RELEASE_NAME=${GITHUB_REF#refs/heads/release/}" >> "$GITHUB_ENV"
+
+      - name: Publish GitHub Release with PNGs
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_NAME }}
+          name: Release ${{ env.RELEASE_NAME }}
+          files: out/release-pngs/*.png
