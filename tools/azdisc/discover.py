@@ -20,6 +20,134 @@ def _rg_filter(rgs: List[str]) -> str:
     return f"resources | where resourceGroup in~ ({quoted}) | project id, name, type, location, subscriptionId, resourceGroup, properties"
 
 
+def _safe_get(obj, *keys):
+    """Safe nested get for extracting properties."""
+    for k in keys:
+        if isinstance(obj, dict):
+            obj = obj.get(k)
+        elif isinstance(obj, list) and isinstance(k, int):
+            obj = obj[k] if k < len(obj) else None
+        else:
+            return None
+        if obj is None:
+            return None
+    return obj
+
+
+def _extract_related_ids(resource: Dict) -> Set[str]:
+    """Extract only directly-related ARM IDs from a resource.
+
+    Instead of walking every property and following every ARM ID (which causes
+    unbounded tenant-wide expansion), this function only follows known
+    relationship types that produce useful diagram context:
+
+      - VM -> NICs, managed disks
+      - NIC -> subnet, NSG, ASGs
+      - Subnet -> parent VNET, NSG, route table
+      - VNET -> peered VNETs (one hop only)
+      - Private endpoint -> subnet, target service
+      - Load balancer -> backend NICs
+      - Public IP -> attached resource
+      - Web app -> app service plan, VNET integration subnet
+      - Firewall / Bastion -> subnet, public IP
+      - Container app -> managed environment
+      - Managed environment -> subnet
+      - App insights -> workspace
+      - App gateway -> subnet
+      - NSG -> ASGs referenced in rules
+    """
+    ids: Set[str] = set()
+    t = (resource.get("type") or "").lower()
+    p = resource.get("properties") or {}
+
+    def _add(raw):
+        if raw and isinstance(raw, str) and "/providers/" in raw.lower():
+            ids.add(normalize_id(raw))
+
+    if t == "microsoft.compute/virtualmachines":
+        for ni in _safe_get(p, "networkProfile", "networkInterfaces") or []:
+            _add(_safe_get(ni, "id"))
+        _add(_safe_get(p, "storageProfile", "osDisk", "managedDisk", "id"))
+        for dd in _safe_get(p, "storageProfile", "dataDisks") or []:
+            _add(_safe_get(dd, "managedDisk", "id"))
+
+    elif t == "microsoft.network/networkinterfaces":
+        _add(_safe_get(p, "networkSecurityGroup", "id"))
+        for ipc in _safe_get(p, "ipConfigurations") or []:
+            _add(_safe_get(ipc, "properties", "subnet", "id"))
+            for asg in _safe_get(ipc, "properties", "applicationSecurityGroups") or []:
+                _add(_safe_get(asg, "id"))
+
+    elif t == "microsoft.network/virtualnetworks":
+        for peer in _safe_get(p, "virtualNetworkPeerings") or []:
+            _add(_safe_get(peer, "properties", "remoteVirtualNetwork", "id"))
+
+    elif t == "microsoft.network/virtualnetworks/subnets" or "/subnets/" in (resource.get("id") or "").lower():
+        _add(_safe_get(p, "networkSecurityGroup", "id"))
+        _add(_safe_get(p, "routeTable", "id"))
+
+    elif t == "microsoft.network/networksecuritygroups":
+        for rule in _safe_get(p, "securityRules") or []:
+            rp = _safe_get(rule, "properties") or {}
+            for asg in rp.get("sourceApplicationSecurityGroups") or []:
+                _add(_safe_get(asg, "id"))
+            for asg in rp.get("destinationApplicationSecurityGroups") or []:
+                _add(_safe_get(asg, "id"))
+
+    elif t == "microsoft.network/privateendpoints":
+        _add(_safe_get(p, "subnet", "id"))
+        for conn in _safe_get(p, "privateLinkServiceConnections") or []:
+            _add(_safe_get(conn, "properties", "privateLinkServiceId"))
+
+    elif t == "microsoft.network/loadbalancers":
+        for pool in _safe_get(p, "backendAddressPools") or []:
+            for ipc in _safe_get(pool, "properties", "backendIPConfigurations") or []:
+                ipc_id = _safe_get(ipc, "id")
+                if ipc_id:
+                    nic_id = normalize_id(ipc_id).split("/ipconfigurations/")[0]
+                    ids.add(nic_id)
+
+    elif t == "microsoft.network/publicipaddresses":
+        raw = _safe_get(p, "ipConfiguration", "id")
+        if raw:
+            nic_id = normalize_id(raw).split("/ipconfigurations/")[0]
+            ids.add(nic_id)
+
+    elif t == "microsoft.web/sites":
+        _add(_safe_get(p, "serverFarmId"))
+        _add(_safe_get(p, "virtualNetworkSubnetId"))
+
+    elif t == "microsoft.network/azurefirewalls":
+        for ipc in _safe_get(p, "ipConfigurations") or []:
+            _add(_safe_get(ipc, "properties", "subnet", "id"))
+            _add(_safe_get(ipc, "properties", "publicIPAddress", "id"))
+
+    elif t == "microsoft.network/bastionhosts":
+        for ipc in _safe_get(p, "ipConfigurations") or []:
+            _add(_safe_get(ipc, "properties", "subnet", "id"))
+            _add(_safe_get(ipc, "properties", "publicIPAddress", "id"))
+
+    elif t == "microsoft.app/containerapps":
+        _add(_safe_get(p, "managedEnvironmentId"))
+
+    elif t == "microsoft.app/managedenvironments":
+        _add(_safe_get(p, "vnetConfiguration", "infrastructureSubnetId"))
+
+    elif t == "microsoft.insights/components":
+        _add(_safe_get(p, "WorkspaceResourceId"))
+
+    elif t == "microsoft.network/applicationgateways":
+        for ipc in _safe_get(p, "gatewayIPConfigurations") or []:
+            _add(_safe_get(ipc, "properties", "subnet", "id"))
+
+    elif t == "microsoft.network/routetables":
+        # Route tables are leaf resources — don't chase next-hop references
+        # which can point to appliances across the tenant.
+        pass
+
+    return ids
+
+
 def _derive_parent_ids(referenced: Set[str]) -> Set[str]:
     """Derive parent resource IDs from child resource IDs.
 
@@ -99,10 +227,19 @@ def run_expand(cfg: Config) -> None:
     collected: Dict[str, Dict] = {normalize_id(r["id"]): r for r in seed}
     unresolved: Set[str] = set()
 
+    use_scoped = cfg.expandScope == "related"
+    if use_scoped:
+        log.info("Using scoped expansion (expandScope=related). Set expandScope=all to follow every ARM reference.")
+    else:
+        log.info("Using full expansion (expandScope=all). All ARM references will be followed.")
+
     for iteration in range(_MAX_ITERATIONS):
         referenced: Set[str] = set()
         for r in collected.values():
-            referenced.update(extract_arm_ids(r.get("properties", {})))
+            if use_scoped:
+                referenced.update(_extract_related_ids(r))
+            else:
+                referenced.update(extract_arm_ids(r.get("properties", {})))
             referenced.add(normalize_id(r["id"]))
         referenced = {normalize_id(i) for i in referenced}
 
