@@ -139,6 +139,19 @@ This produces 6 variants (3 layouts × 2 modes) so you can compare how your arch
 **Requires:** `graph.json` in the output directory (run `graph` or `run` first).
 **Produces:** `variants/` directory with subfolders for each combination.
 
+#### `report-all` — Generate a Markdown report of all diagram variants
+
+Reads the existing `graph.json` from your output directory and generates all 12 combinations of layout, diagram mode, and spacing preset (3 × 2 × 2). Each variant is written to a `variants/<layout>_<mode>_<spacing>/` subfolder, and a single `variants/report.md` is produced that links to every variant — embedding PNG previews where the `drawio` CLI is available.
+
+```bash
+python3 -m tools.azdisc report-all app/myapp/config.json
+```
+
+**Requires:** `graph.json` in the output directory (run `graph` or `run` first).
+**Produces:**
+- `variants/<layout>_<mode>_<spacing>/` — one subfolder per combination, each containing `diagram.drawio`, `icons_used.json`, `catalog.md`, `edges.md`, `routing.md`, and optionally `diagram.svg` / `diagram.png`
+- `variants/report.md` — a single Markdown document with a section per variant, PNG embed (if available), and a link to the `.drawio` file
+
 #### `test-all` — Render all fixtures × layouts × modes
 
 Exercises every combination against the bundled test fixtures. No Azure credentials needed — useful for CI and development.
@@ -189,6 +202,14 @@ python3 -m tools.azdisc seed app/myapp/config.json
 python3 -m tools.azdisc expand app/myapp/config.json
 python3 -m tools.azdisc graph app/myapp/config.json
 python3 -m tools.azdisc docs app/myapp/config.json
+```
+
+**Generate a Markdown report of all 12 diagram variants (layout × mode × spacing):**
+
+```bash
+python3 -m tools.azdisc run app/myapp/config.json
+python3 -m tools.azdisc report-all app/myapp/config.json
+# produces variants/report.md with PNG previews and .drawio links for every combination
 ```
 
 **Verbose mode for debugging:**
