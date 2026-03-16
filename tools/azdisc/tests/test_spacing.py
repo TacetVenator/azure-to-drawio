@@ -114,8 +114,8 @@ class TestSpacingFactor:
     def test_spacing_1_0_equals_compact(self, tmp_path):
         """spacing=1.0 (compact) and default produce identical positions."""
         nodes, _ = _build_nodes_edges(tmp_path)
-        pos_default = layout_nodes(nodes)
-        pos_compact = layout_nodes(nodes, spacing=1.0)
+        pos_default, _ = layout_nodes(nodes)
+        pos_compact, _ = layout_nodes(nodes, spacing=1.0)
         assert pos_default == pos_compact
 
 
@@ -128,7 +128,7 @@ class TestBandsSpacing:
     def test_compact_positions_unchanged(self, tmp_path):
         """Compact spacing (1.0) must produce the same positions as before."""
         nodes, _ = _build_nodes_edges(tmp_path)
-        pos = layout_nodes(nodes, spacing=1.0)
+        pos, _ = layout_nodes(nodes, spacing=1.0)
         # Just verify we get positions — exact values validated by existing tests
         assert len(pos) > 0
         for nid, (x, y, w, h) in pos.items():
@@ -140,8 +140,8 @@ class TestBandsSpacing:
     def test_spacious_increases_total_area(self, tmp_path):
         """Spacious mode should produce a larger bounding box."""
         nodes, _ = _build_nodes_edges(tmp_path)
-        pos_compact = layout_nodes(nodes, spacing=1.0)
-        pos_spacious = layout_nodes(nodes, spacing=1.8)
+        pos_compact, _ = layout_nodes(nodes, spacing=1.0)
+        pos_spacious, _ = layout_nodes(nodes, spacing=1.8)
 
         def bbox(positions):
             max_x = max(x + w for x, y, w, h in positions.values())
@@ -156,7 +156,7 @@ class TestBandsSpacing:
     def test_cell_sizes_unchanged_in_spacious(self, tmp_path):
         """Cell sizes must remain constant regardless of spacing."""
         nodes, _ = _build_nodes_edges(tmp_path)
-        pos = layout_nodes(nodes, spacing=1.8)
+        pos, _ = layout_nodes(nodes, spacing=1.8)
         for nid, (x, y, w, h) in pos.items():
             assert w == CELL_W, f"Node {nid} has wrong width {w}"
             assert h == CELL_H, f"Node {nid} has wrong height {h}"
@@ -164,7 +164,7 @@ class TestBandsSpacing:
     def test_spacious_no_overlapping_nodes(self, tmp_path):
         """No nodes should overlap in spacious mode."""
         nodes, _ = _build_nodes_edges(tmp_path)
-        pos = layout_nodes(nodes, spacing=1.8)
+        pos, _ = layout_nodes(nodes, spacing=1.8)
         rects = list(pos.values())
         for i, (x1, y1, w1, h1) in enumerate(rects):
             for j, (x2, y2, w2, h2) in enumerate(rects):
@@ -179,7 +179,7 @@ class TestBandsSpacing:
     def test_spacious_label_gap_sufficient(self, tmp_path):
         """Vertical gap between adjacent rows should exceed label height (~25px)."""
         nodes, _ = _build_nodes_edges(tmp_path)
-        pos = layout_nodes(nodes, spacing=1.8)
+        pos, _ = layout_nodes(nodes, spacing=1.8)
         # Collect all unique y positions and sort them
         y_values = sorted({y for (x, y, w, h) in pos.values()})
         if len(y_values) < 2:

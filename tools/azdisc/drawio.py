@@ -106,6 +106,25 @@ MSFT_EDGE_STYLE_ASSOCIATION = "edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;da
 MSFT_EDGE_STYLE_PEERING = "edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#0078D4;strokeWidth=2;"
 MSFT_TYPE_HEADER_STYLE = "text;html=1;align=left;verticalAlign=top;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=11;fontStyle=1;fontColor=default;"
 
+# Network detail compact mode — resource types hidden from the diagram and
+# summarised in a per-resource annotation box instead.
+_COMPACT_HIDDEN_TYPES = {
+    "microsoft.network/networkinterfaces",
+    "microsoft.network/virtualnetworks/subnets",
+    "microsoft.network/networksecuritygroups",
+    "microsoft.network/applicationsecuritygroups",
+    "microsoft.network/routetables",
+    "microsoft.compute/disks",
+}
+NET_CONTEXT_STYLE = (
+    "rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;"
+    "align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;fontSize=10;"
+)
+NET_CONTEXT_EDGE_STYLE = (
+    "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;"
+    "strokeColor=#6c8ebf;dashed=1;strokeWidth=1;"
+)
+
 
 def _edge_style(kind: str, msft: bool = False) -> str:
     """Return the appropriate edge style based on edge kind and rendering mode."""
@@ -379,11 +398,15 @@ def _make_cell(parent, cell_id: str, label: str, style: str,
     return cell
 
 
-def layout_nodes(nodes: List[Dict], spacing: float = 1.0) -> Dict[str, Tuple[int, int, int, int]]:
-    """
-    Compute deterministic (x, y, w, h) positions.
-    Hierarchy: REGION > RG > TYPE band (left-to-right grid with wrapping).
-    Returns dict: node_id -> (x, y, w, h).
+def layout_nodes(
+    nodes: List[Dict], spacing: float = 1.0,
+) -> Tuple[Dict[str, Tuple[int, int, int, int]], List[Dict]]:
+    """Compute deterministic (x, y, w, h) positions.
+
+    Hierarchy: REGION > RG > TYPE band.
+    Regions are arranged left to right; RGs within each region also go left to
+    right.  Returns (positions, containers) where containers are flat region and
+    RG bounding boxes (all parent="1", BANDS style).
 
     The *spacing* multiplier scales gaps and padding (≥1.0 = more whitespace).
     Cell sizes (CELL_W, CELL_H) are unchanged.
@@ -400,13 +423,11 @@ def layout_nodes(nodes: List[Dict], spacing: float = 1.0) -> Dict[str, Tuple[int
     regular_nodes = [n for n in nodes if not n.get("type", "").startswith("__boundary__")]
 
     # Group by (region, rg, type)
-    from collections import defaultdict
     groups: Dict[Tuple[str, str, str], List[Dict]] = defaultdict(list)
     for n in regular_nodes:
         key = (n.get("location", ""), n.get("resourceGroup", ""), n.get("type", ""))
         groups[key].append(n)
 
-    # Sort within each group deterministically
     for key in groups:
         groups[key].sort(key=lambda n: (n.get("name", ""), n["id"]))
 
@@ -417,16 +438,20 @@ def layout_nodes(nodes: List[Dict], spacing: float = 1.0) -> Dict[str, Tuple[int
         region_rg[region][rg].append(key)
 
     positions: Dict[str, Tuple[int, int, int, int]] = {}
-    region_y = region_padding
+    containers: List[Dict] = []
+
+    # Regions go LEFT TO RIGHT
+    region_cursor_x = region_padding
 
     for region in sorted(region_rg.keys()):
-        rg_x = region_padding
+        rg_x = region_cursor_x + region_padding  # absolute x of the first RG
         rg_max_height = 0
+        rg_containers_for_region: List[Dict] = []
 
         for rg in sorted(region_rg[region].keys()):
             type_keys = region_rg[region][rg]
             type_y = rg_padding
-            rg_width = 0
+            rg_content_w = 0
 
             for key in sorted(type_keys):
                 nodes_in_band = groups[key]
@@ -436,27 +461,58 @@ def layout_nodes(nodes: List[Dict], spacing: float = 1.0) -> Dict[str, Tuple[int
                     col = i % COLS_PER_ROW
                     row = i // COLS_PER_ROW
                     nx = rg_x + rg_padding + col * (CELL_W + h_gap)
-                    ny = region_y + type_y + row * (CELL_H + v_gap)
+                    ny = region_padding + type_y + row * (CELL_H + v_gap)
                     positions[node["id"]] = (nx, ny, CELL_W, CELL_H)
                 type_y += rows * (CELL_H + v_gap) + type_v_gap
-                rg_width = max(rg_width, band_w)
+                rg_content_w = max(rg_content_w, band_w)
 
-            rg_height = type_y + rg_padding
-            rg_max_height = max(rg_max_height, rg_height)
-            rg_x += rg_width + 2 * rg_padding + h_gap
+            rg_h = type_y + rg_padding
+            rg_w = rg_content_w + 2 * rg_padding
+            rg_max_height = max(rg_max_height, rg_h)
 
-        region_y += rg_max_height + region_padding
+            rg_containers_for_region.append({
+                "id": "rg_" + stable_id(region + "/" + rg),
+                "label": rg,
+                "style": BANDS_RG_STYLE,
+                "x": rg_x,
+                "y": region_padding,
+                "w": rg_w,
+                "h": rg_h,
+                "parent": "1",
+            })
+            rg_x += rg_w + h_gap
 
-    # Position boundary nodes at top-left
+        # Region container wraps all its RGs
+        region_right = rg_x - h_gap + region_padding
+        region_w = region_right - region_cursor_x
+        region_h = rg_max_height + 2 * region_padding
+
+        containers.append({
+            "id": "region_" + stable_id(region),
+            "label": region,
+            "style": BANDS_REGION_STYLE,
+            "x": region_cursor_x,
+            "y": 0,
+            "w": region_w,
+            "h": region_h,
+            "parent": "1",
+        })
+        containers.extend(rg_containers_for_region)
+
+        region_cursor_x = region_right + region_padding  # next region's left edge
+
+    # Position boundary nodes at top-left, shifting everything else down
     if boundary_nodes:
         shift = CELL_H + 40 + region_padding
         for nid in list(positions.keys()):
             x, y, w, h = positions[nid]
             positions[nid] = (x, y + shift, w, h)
+        for c in containers:
+            c["y"] += shift
         for i, bn in enumerate(boundary_nodes):
             positions[bn["id"]] = (region_padding + i * (CELL_W + 40), region_padding, CELL_W, CELL_H)
 
-    return positions
+    return positions, containers
 
 
 # ---------------------------------------------------------------------------
@@ -710,16 +766,16 @@ def layout_nodes_vnet(
     for r in regions_to_vnets:
         regions_to_vnets[r].sort()
 
-    # Regions are stacked vertically; region_cursor_y tracks the next region's top
-    region_cursor_y = region_padding
+    # Regions are arranged left to right; region_cursor_x tracks the next region's left edge
+    region_cursor_x = region_padding
 
     for region_name in sorted(regions_to_vnets.keys()):
         region_vnets = regions_to_vnets[region_name]
         region_container_id = "vnet_region_" + stable_id(region_name)
 
         # Absolute position of the region container
-        r_abs_x = region_padding
-        r_abs_y = region_cursor_y
+        r_abs_x = region_cursor_x
+        r_abs_y = region_padding
 
         # VNets are laid out horizontally within the region.
         # Positions of VNets are RELATIVE to the region container.
@@ -825,13 +881,13 @@ def layout_nodes_vnet(
             "parent": "1",
         })
 
-        region_cursor_y += region_h + region_padding
+        region_cursor_x += region_w + region_padding
 
-    # Layout unattached nodes below all region containers
+    # Layout unattached nodes to the right of all region containers
     if unattached:
         unattached_id = "unattached_group"
-        ua_abs_x = region_padding
-        ua_abs_y = region_cursor_y
+        ua_abs_x = region_cursor_x
+        ua_abs_y = region_padding
         inner_x = ua_abs_x + unattached_padding
         inner_y = ua_abs_y + vnet_header
         cols = min(COLS_PER_ROW, len(unattached))
@@ -1556,6 +1612,78 @@ def layout_nodes_sub_rg_net_bands(
     return positions, containers
 
 
+def _build_network_context_annotations(
+    nodes: List[Dict], edges: List[Dict],
+) -> Dict[str, List[str]]:
+    """Build compact network context annotation lines for each resource.
+
+    Traverses vm->nic, nic->subnet/nsg/asg, subnet->vnet/nsg/routeTable
+    edges and produces a summary for the annotation box rendered next to
+    each compute resource in compact (networkDetail=compact) mode.
+
+    Returns {resource_id: [label_lines]}.
+    """
+    node_by_id = {n["id"]: n for n in nodes}
+
+    # Build outgoing edge index: source_id -> [(kind, target_id)]
+    edges_from: Dict[str, List[Tuple[str, str]]] = defaultdict(list)
+    for e in edges:
+        edges_from[e["source"]].append((e["kind"], e["target"]))
+
+    def _name(nid: str) -> str:
+        n = node_by_id.get(nid)
+        return n.get("name", nid.split("/")[-1]) if n else nid.split("/")[-1]
+
+    def _targets(nid: str, kind: str) -> List[str]:
+        return [tgt for k, tgt in edges_from[nid] if k == kind]
+
+    network_context: Dict[str, List[str]] = {}
+
+    for node in nodes:
+        nid = node["id"]
+        if node.get("type", "").lower().startswith("__boundary__"):
+            continue
+
+        nics = _targets(nid, "vm->nic")
+        if not nics:
+            continue
+
+        lines = ["Network:"]
+        seen_subnets: set = set()
+
+        for nic_id in nics:
+            nsgs_from_nic = _targets(nic_id, "nic->nsg")
+            asgs_from_nic = _targets(nic_id, "nic->asg")
+
+            for subnet_id in _targets(nic_id, "nic->subnet"):
+                if subnet_id in seen_subnets:
+                    continue
+                seen_subnets.add(subnet_id)
+
+                vnets = _targets(subnet_id, "subnet->vnet")
+                vnet_part = f" ({_name(vnets[0])})" if vnets else ""
+                lines.append(f"  Subnet: {_name(subnet_id)}{vnet_part}")
+
+                all_nsgs = list(dict.fromkeys(nsgs_from_nic + _targets(subnet_id, "subnet->nsg")))
+                if all_nsgs:
+                    lines.append(f"  NSG: {', '.join(_name(n) for n in all_nsgs)}")
+
+                if asgs_from_nic:
+                    lines.append(f"  ASG: {', '.join(_name(a) for a in asgs_from_nic)}")
+
+                udrs = _targets(subnet_id, "subnet->routeTable")
+                if udrs:
+                    rt_node = node_by_id.get(udrs[0])
+                    count = len((rt_node.get("properties") or {}).get("routes", [])) if rt_node else 0
+                    suffix = f" ({count} routes)" if count else ""
+                    lines.append(f"  UDR: {_name(udrs[0])}{suffix}")
+
+        if len(lines) > 1:
+            network_context[nid] = lines
+
+    return network_context
+
+
 def generate_drawio(cfg: Config) -> None:
     graph_path = cfg.out("graph.json")
     if not graph_path.exists():
@@ -1567,6 +1695,18 @@ def generate_drawio(cfg: Config) -> None:
     # Inject Internet / On-Premises boundary nodes
     nodes, edges = _inject_boundary_nodes(nodes, edges)
     node_by_id: Dict[str, Dict] = {n["id"]: n for n in nodes}
+
+    # Compact network detail mode: suppress plumbing node types and replace
+    # with per-resource annotation boxes summarising NIC/Subnet/NSG/ASG/UDR.
+    compact_mode = cfg.networkDetail == "compact"
+    compact_hidden_ids: set = set()
+    net_context_annotations: Dict[str, List[str]] = {}
+    if compact_mode:
+        compact_hidden_ids = {
+            n["id"] for n in nodes
+            if n.get("type", "").lower() in _COMPACT_HIDDEN_TYPES
+        }
+        net_context_annotations = _build_network_context_annotations(nodes, edges)
 
     # Find assets dir relative to this file
     assets_dir = Path(__file__).parent.parent.parent / "assets"
@@ -1586,7 +1726,7 @@ def generate_drawio(cfg: Config) -> None:
     elif cfg.layout == "SUB>REGION>RG>NET":
         positions, containers = layout_nodes_sub_rg_net_bands(nodes, edges, spacing=sp)
     else:
-        positions = layout_nodes(nodes, spacing=sp)
+        positions, containers = layout_nodes(nodes, spacing=sp)
     icons_used = {"mapped": {}, "fallback": [], "unknown": []}
 
     # Build XML (uses shared skeleton with layers)
@@ -1650,6 +1790,10 @@ def generate_drawio(cfg: Config) -> None:
         if is_vnet_layout and node.get("type", "") in vnet_subnet_types:
             continue
 
+        # Skip plumbing nodes in compact mode
+        if compact_mode and nid in compact_hidden_ids:
+            continue
+
         # Skip nodes with no computed position (shouldn't happen, but guard)
         if nid not in positions:
             continue
@@ -1671,8 +1815,10 @@ def generate_drawio(cfg: Config) -> None:
 
         _emit_resource_cell(root, node, sid, style, x, y, w, h, parent_id=LAYER_RESOURCES)
 
-    # Add UDR callouts for route tables
-    route_table_nodes = [n for n in nodes if n.get("type", "") == "microsoft.network/routetables"]
+    # Add UDR callouts for route tables (full mode only — compact uses annotations)
+    route_table_nodes = [] if compact_mode else [
+        n for n in nodes if n.get("type", "") == "microsoft.network/routetables"
+    ]
     udr_edge_sources = {}
     for e in edges:
         if e["kind"] == "subnet->routeTable":
@@ -1733,8 +1879,8 @@ def generate_drawio(cfg: Config) -> None:
             eg.set("relative", "1")
             eg.set("as", "geometry")
 
-    # Add NSG rule callouts
-    nsg_summaries = extract_nsg_summaries(nodes, edges)
+    # Add NSG rule callouts (full mode only — compact uses annotations)
+    nsg_summaries = {} if compact_mode else extract_nsg_summaries(nodes, edges)
     for nsg_id in sorted(nsg_summaries.keys(), key=lambda s: (
         (node_by_id.get(s) or {}).get("name", ""), s,
     )):
@@ -1835,11 +1981,59 @@ def generate_drawio(cfg: Config) -> None:
         aeg.set("relative", "1")
         aeg.set("as", "geometry")
 
+    # Compact mode: network context annotation boxes (one per compute resource)
+    if compact_mode:
+        for nid, lines in net_context_annotations.items():
+            sid = node_id_map.get(nid)
+            if not sid:
+                continue
+            pos = positions.get(nid)
+            if not pos:
+                continue
+            x, y, w, h = pos
+            line_h = 16
+            box_w = 210
+            box_h = max(44, 10 + line_h * len(lines))
+            # Place annotation to the right of the resource icon
+            box_x = x + w + 12
+            box_y = y
+
+            ann_id = "netctx_" + stable_id(nid)
+            ac = ET.SubElement(root, "mxCell")
+            ac.set("id", ann_id)
+            ac.set("value", "\n".join(lines))
+            ac.set("style", NET_CONTEXT_STYLE)
+            ac.set("vertex", "1")
+            ac.set("parent", LAYER_LABELS)
+            acg = ET.SubElement(ac, "mxGeometry")
+            acg.set("x", str(box_x))
+            acg.set("y", str(box_y))
+            acg.set("width", str(box_w))
+            acg.set("height", str(box_h))
+            acg.set("as", "geometry")
+
+            # Dashed connector from resource to annotation
+            ae_id = "netctx_edge_" + stable_id(nid)
+            ae = ET.SubElement(root, "mxCell")
+            ae.set("id", ae_id)
+            ae.set("value", "")
+            ae.set("style", NET_CONTEXT_EDGE_STYLE)
+            ae.set("edge", "1")
+            ae.set("source", sid)
+            ae.set("target", ann_id)
+            ae.set("parent", LAYER_ASSOC_EDGES)
+            aeg = ET.SubElement(ae, "mxGeometry")
+            aeg.set("relative", "1")
+            aeg.set("as", "geometry")
+
     # Add edges with differentiated styles
     for i, e in enumerate(edges):
         src = node_id_map.get(e["source"])
         tgt = node_id_map.get(e["target"])
         if not src or not tgt:
+            continue
+        # In compact mode skip edges that touch hidden plumbing nodes
+        if compact_mode and (e["source"] in compact_hidden_ids or e["target"] in compact_hidden_ids):
             continue
         if e["kind"] == "subnet->routeTable":
             continue  # shown via callout

@@ -1071,6 +1071,15 @@ class TestNsgInDiagram:
     def _generate_bands(self, tmp_path):
         _seed_output_files(tmp_path)
         cfg = _make_sub_rg_net_config(tmp_path, diagram_mode="BANDS")
+        cfg = Config(
+            app=cfg.app,
+            subscriptions=cfg.subscriptions,
+            seedResourceGroups=cfg.seedResourceGroups,
+            outputDir=cfg.outputDir,
+            layout=cfg.layout,
+            diagramMode=cfg.diagramMode,
+            networkDetail="full",  # test verifies BANDS NSG panel shapes
+        )
         build_graph(cfg)
         from tools.azdisc.drawio import generate_drawio
         generate_drawio(cfg)
