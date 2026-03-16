@@ -247,7 +247,7 @@ class TestAiChatbotVnetLayout:
         nodes, edges = graph["nodes"], graph["edges"]
         _, containers = layout_nodes_vnet(nodes, edges)
         vnet_containers = [c for c in containers
-                           if c["id"].startswith("vnet_")]
+                           if c["id"].startswith("vnet_") and not c["id"].startswith("vnet_region_")]
         assert len(vnet_containers) == 2, (
             f"Expected 2 VNet containers, got {len(vnet_containers)}"
         )

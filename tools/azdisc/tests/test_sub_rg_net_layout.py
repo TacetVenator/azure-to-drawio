@@ -531,9 +531,11 @@ class TestSubRgNetDrawioGeneration:
 
         tree = ET.parse(str(tmp_path / "diagram.drawio"))
         containers = tree.findall(".//mxCell[@connectable='0']")
+        valid_parents = {"1", "layer_containers"}
         for c in containers:
-            assert c.get("parent") == "1", (
-                f"BANDS container {c.get('id')} should have parent='1', got '{c.get('parent')}'"
+            assert c.get("parent") in valid_parents, (
+                f"BANDS container {c.get('id')} should have parent in {valid_parents}, "
+                f"got '{c.get('parent')}'"
             )
 
 

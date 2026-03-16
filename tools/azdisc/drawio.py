@@ -41,6 +41,8 @@ SUBNET_HEADER = 30
 SUBNET_H_GAP = 30
 VNET_H_GAP = 60
 UNATTACHED_PADDING = 40
+VNET_REGION_PADDING = 20   # Padding around VNets inside a region container
+VNET_REGION_HEADER = 30    # Height of region container title bar
 
 # MSFT mode layout constants
 MSFT_CELL_W = 110
@@ -71,6 +73,11 @@ ATTR_BOX_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor
 VNET_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=top;align=left;spacingLeft=10;spacingTop=5;fontSize=13;fontStyle=1;arcSize=6;opacity=50;"
 SUBNET_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;verticalAlign=top;align=left;spacingLeft=8;spacingTop=4;fontSize=11;dashed=1;dashPattern=5 5;arcSize=8;opacity=60;"
 UNATTACHED_STYLE = "rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;verticalAlign=top;align=left;spacingLeft=10;spacingTop=5;fontSize=13;fontStyle=1;arcSize=6;dashed=1;dashPattern=8 4;"
+VNET_REGION_CONTAINER_STYLE = (
+    "shape=rectangle;dashed=1;dashPattern=8 4;fillColor=none;strokeColor=#0078D4;"
+    "strokeWidth=2;rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;align=left;"
+    "spacingLeft=10;spacingTop=5;fontSize=13;fontStyle=1;fontColor=#0078D4;arcSize=4;"
+)
 
 # MSFT mode styles
 MSFT_REGION_STYLE = "shape=rectangle;dashed=1;fillColor=none;strokeColor=default;rounded=0;whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacingLeft=8;spacingTop=5;"
@@ -90,12 +97,12 @@ _PEERING_EDGE_KINDS = {
 }
 # All other edge kinds default to traffic/attachment style
 
-# Differentiated edge styles
-EDGE_STYLE_TRAFFIC = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=0.5;exitY=1;exitDx=0;exitDy=0;strokeColor=#333333;"
-EDGE_STYLE_ASSOCIATION = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;dashed=1;dashPattern=5 5;strokeColor=#999999;"
+# Differentiated edge styles (all lines are at least 2pt wide)
+EDGE_STYLE_TRAFFIC = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;exitX=0.5;exitY=1;exitDx=0;exitDy=0;strokeColor=#333333;strokeWidth=2;"
+EDGE_STYLE_ASSOCIATION = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;dashed=1;dashPattern=5 5;strokeColor=#999999;strokeWidth=2;"
 EDGE_STYLE_PEERING = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeColor=#0078D4;strokeWidth=2;"
-MSFT_EDGE_STYLE_TRAFFIC = "edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#333333;"
-MSFT_EDGE_STYLE_ASSOCIATION = "edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;dashPattern=5 5;strokeColor=#999999;"
+MSFT_EDGE_STYLE_TRAFFIC = "edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#333333;strokeWidth=2;"
+MSFT_EDGE_STYLE_ASSOCIATION = "edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;dashPattern=5 5;strokeColor=#999999;strokeWidth=2;"
 MSFT_EDGE_STYLE_PEERING = "edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#0078D4;strokeWidth=2;"
 MSFT_TYPE_HEADER_STYLE = "text;html=1;align=left;verticalAlign=top;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=11;fontStyle=1;fontColor=default;"
 
@@ -651,15 +658,21 @@ def _grid_layout(
 def layout_nodes_vnet(
     nodes: List[Dict], edges: List[Dict], spacing: float = 1.0,
 ) -> Tuple[
-    Dict[str, Tuple[int, int, int, int]],    # node positions
-    List[Dict],                                # container rects for VNets/subnets
+    Dict[str, Tuple[int, int, int, int]],    # node absolute positions
+    List[Dict],                                # container rects (mixed abs/relative coords)
 ]:
     """Compute positions for the VNET>SUBNET layout mode.
 
     The *spacing* multiplier scales gaps and padding (≥1.0 = more whitespace).
 
+    Groups VNets by Azure region, producing three levels of containers:
+      Region container (absolute)  →  VNet container (relative to region)
+        →  Subnet container (relative to VNet)
+
+    Member node positions are absolute (parent layer handles placement).
+
     Returns:
-      positions: node_id -> (x, y, w, h)
+      positions: node_id -> (x, y, w, h)  — absolute canvas coordinates
       containers: list of dicts with keys: id, label, style, x, y, w, h, parent
     """
     s = lambda v: round(v * spacing)
@@ -671,6 +684,8 @@ def layout_nodes_vnet(
     vnet_h_gap = s(VNET_H_GAP)
     region_padding = s(REGION_PADDING)
     unattached_padding = s(UNATTACHED_PADDING)
+    vnet_region_padding = s(VNET_REGION_PADDING)
+    vnet_region_header = s(VNET_REGION_HEADER)
 
     # Separate boundary nodes
     boundary_nodes = [n for n in nodes if n.get("type", "").startswith("__boundary__")]
@@ -685,77 +700,140 @@ def layout_nodes_vnet(
     positions: Dict[str, Tuple[int, int, int, int]] = {}
     containers: List[Dict] = []
 
-    cursor_x = region_padding
-
-    # Sort VNets deterministically
+    # Group VNets by region for hierarchical layout
     all_vnets = sorted(vnet_subnets.keys())
-
+    regions_to_vnets: Dict[str, List[str]] = defaultdict(list)
     for vnet_id in all_vnets:
-        subnet_ids = vnet_subnets[vnet_id]
-        vnet_label = node_by_id[vnet_id]["name"] if vnet_id in node_by_id else vnet_id.split("/")[-1]
-        vnet_container_id = "vnet_" + stable_id(vnet_id)
+        node = node_by_id.get(vnet_id)
+        region_name = (node.get("location", "unknown") if node else "unknown")
+        regions_to_vnets[region_name].append(vnet_id)
+    for r in regions_to_vnets:
+        regions_to_vnets[r].sort()
 
-        vnet_inner_x = cursor_x + vnet_padding
-        vnet_inner_y = region_padding + vnet_header
-        subnet_cursor_x = vnet_inner_x
-        vnet_content_h = 0
+    # Regions are stacked vertically; region_cursor_y tracks the next region's top
+    region_cursor_y = region_padding
 
-        for subnet_id in subnet_ids:
-            members = subnet_members.get(subnet_id, [])
-            subnet_label = node_by_id[subnet_id]["name"] if subnet_id in node_by_id else subnet_id.split("/")[-1]
-            subnet_container_id = "subnet_" + stable_id(subnet_id)
+    for region_name in sorted(regions_to_vnets.keys()):
+        region_vnets = regions_to_vnets[region_name]
+        region_container_id = "vnet_region_" + stable_id(region_name)
 
-            # Layout member nodes inside this subnet
-            inner_x = subnet_cursor_x + subnet_padding
-            inner_y = vnet_inner_y + subnet_header
-            cols = max(2, min(COLS_PER_ROW, len(members))) if members else 2
-            member_pos, content_w, content_h = _grid_layout(members, inner_x, inner_y, cols, spacing=spacing)
-            positions.update(member_pos)
+        # Absolute position of the region container
+        r_abs_x = region_padding
+        r_abs_y = region_cursor_y
 
-            # Subnet box dimensions
-            subnet_w = max(content_w, CELL_W) + 2 * subnet_padding
-            subnet_h = max(content_h, CELL_H // 2) + subnet_header + subnet_padding
+        # VNets are laid out horizontally within the region.
+        # Positions of VNets are RELATIVE to the region container.
+        vnet_rel_cursor_x = vnet_region_padding   # relative X inside region, advances rightward
+        vnet_rel_y = vnet_region_header + vnet_region_padding   # fixed relative Y for all VNets
 
+        # Absolute Y baseline for VNet interiors (for computing member absolute coords)
+        abs_vnet_y_base = r_abs_y + vnet_rel_y
+
+        vnet_max_height = 0
+
+        for vnet_id in region_vnets:
+            subnet_ids = vnet_subnets.get(vnet_id, [])
+            vnet_label = node_by_id[vnet_id]["name"] if vnet_id in node_by_id else vnet_id.split("/")[-1]
+            vnet_container_id = "vnet_" + stable_id(vnet_id)
+
+            # VNet position is RELATIVE to its region container
+            vnet_in_region_x = vnet_rel_cursor_x
+            vnet_in_region_y = vnet_rel_y
+
+            # Absolute top-left of VNet box (used for computing member/subnet absolute coords)
+            abs_vnet_x = r_abs_x + vnet_in_region_x
+            abs_vnet_y = abs_vnet_y_base  # = r_abs_y + vnet_rel_y
+
+            # Absolute start for the first subnet inside this VNet
+            abs_inner_y = abs_vnet_y + vnet_header  # below VNet title bar
+            subnet_cursor_abs_x = abs_vnet_x + vnet_padding  # first subnet starts here (absolute)
+
+            vnet_content_h = 0
+
+            for subnet_id in subnet_ids:
+                members = subnet_members.get(subnet_id, [])
+                subnet_label = (node_by_id[subnet_id]["name"] if subnet_id in node_by_id
+                                else subnet_id.split("/")[-1])
+                subnet_container_id = "subnet_" + stable_id(subnet_id)
+
+                # Member node absolute positions (members are parented to the resource layer)
+                inner_member_x = subnet_cursor_abs_x + subnet_padding
+                inner_member_y = abs_inner_y + subnet_header
+                cols = max(2, min(COLS_PER_ROW, len(members))) if members else 2
+                member_pos, content_w, content_h = _grid_layout(
+                    members, inner_member_x, inner_member_y, cols, spacing=spacing)
+                positions.update(member_pos)
+
+                # Subnet box dimensions
+                subnet_w = max(content_w, CELL_W) + 2 * subnet_padding
+                subnet_h = max(content_h, CELL_H // 2) + subnet_header + subnet_padding
+
+                # Subnet position is RELATIVE to its VNet container
+                subnet_rel_x = subnet_cursor_abs_x - abs_vnet_x  # = vnet_padding + prior_subnet_widths
+                subnet_rel_y = vnet_header                         # starts right below VNet title
+
+                containers.append({
+                    "id": subnet_container_id,
+                    "label": subnet_label,
+                    "style": SUBNET_STYLE,
+                    "x": subnet_rel_x,
+                    "y": subnet_rel_y,
+                    "w": subnet_w,
+                    "h": subnet_h,
+                    "parent": vnet_container_id,
+                })
+
+                vnet_content_h = max(vnet_content_h, subnet_h)
+                subnet_cursor_abs_x += subnet_w + subnet_h_gap
+
+            # VNet box dimensions
+            if subnet_ids:
+                vnet_w = (subnet_cursor_abs_x - subnet_h_gap) - abs_vnet_x + vnet_padding
+            else:
+                vnet_w = 200
+            vnet_w = max(vnet_w, 200)
+            vnet_h = vnet_content_h + vnet_header + 2 * vnet_padding
+
+            # VNet position is RELATIVE to its region container
             containers.append({
-                "id": subnet_container_id,
-                "label": subnet_label,
-                "style": SUBNET_STYLE,
-                "x": subnet_cursor_x,
-                "y": vnet_inner_y,
-                "w": subnet_w,
-                "h": subnet_h,
-                "parent": vnet_container_id,
+                "id": vnet_container_id,
+                "label": vnet_label,
+                "style": VNET_STYLE,
+                "x": vnet_in_region_x,
+                "y": vnet_in_region_y,
+                "w": vnet_w,
+                "h": vnet_h,
+                "parent": region_container_id,
             })
 
-            vnet_content_h = max(vnet_content_h, subnet_h)
-            subnet_cursor_x += subnet_w + subnet_h_gap
+            vnet_max_height = max(vnet_max_height, vnet_h)
+            vnet_rel_cursor_x += vnet_w + vnet_h_gap
 
-        # VNet box dimensions
-        vnet_w = (subnet_cursor_x - subnet_h_gap) - cursor_x + vnet_padding
-        vnet_h = vnet_content_h + vnet_header + vnet_padding + vnet_padding
-
-        # Ensure minimum width
-        vnet_w = max(vnet_w, 200)
+        # Region container dimensions (absolute coordinates, parent is root layer)
+        region_content_w = vnet_rel_cursor_x - vnet_h_gap + vnet_region_padding
+        region_h = vnet_max_height + vnet_rel_y + vnet_region_padding
+        region_w = max(region_content_w, 200)
 
         containers.append({
-            "id": vnet_container_id,
-            "label": vnet_label,
-            "style": VNET_STYLE,
-            "x": cursor_x,
-            "y": region_padding,
-            "w": vnet_w,
-            "h": vnet_h,
+            "id": region_container_id,
+            "label": region_name,
+            "style": VNET_REGION_CONTAINER_STYLE,
+            "x": r_abs_x,
+            "y": r_abs_y,
+            "w": region_w,
+            "h": region_h,
             "parent": "1",
         })
 
-        cursor_x += vnet_w + vnet_h_gap
+        region_cursor_y += region_h + region_padding
 
-    # Layout unattached nodes
+    # Layout unattached nodes below all region containers
     if unattached:
-        unattached_label = "Other Resources"
         unattached_id = "unattached_group"
-        inner_x = cursor_x + unattached_padding
-        inner_y = region_padding + vnet_header
+        ua_abs_x = region_padding
+        ua_abs_y = region_cursor_y
+        inner_x = ua_abs_x + unattached_padding
+        inner_y = ua_abs_y + vnet_header
         cols = min(COLS_PER_ROW, len(unattached))
         ua_pos, content_w, content_h = _grid_layout(unattached, inner_x, inner_y, cols, spacing=spacing)
         positions.update(ua_pos)
@@ -765,20 +843,22 @@ def layout_nodes_vnet(
 
         containers.append({
             "id": unattached_id,
-            "label": unattached_label,
+            "label": "Other Resources",
             "style": UNATTACHED_STYLE,
-            "x": cursor_x,
-            "y": region_padding,
+            "x": ua_abs_x,
+            "y": ua_abs_y,
             "w": ua_w,
             "h": ua_h,
             "parent": "1",
         })
 
-    # Position boundary nodes at top-left
+    # Position boundary nodes at top-left, shifting all absolute-coord containers down
     if boundary_nodes:
         shift = CELL_H + 40 + region_padding
         for c in containers:
-            c["y"] += shift
+            # Only shift top-level (absolute) containers; nested ones use relative coords
+            if c["parent"] == "1":
+                c["y"] += shift
         for nid in list(positions.keys()):
             x, y, w, h = positions[nid]
             positions[nid] = (x, y + shift, w, h)
@@ -1512,16 +1592,18 @@ def generate_drawio(cfg: Config) -> None:
     # Build XML (uses shared skeleton with layers)
     mxfile, root = _build_mxfile_root(cfg)
 
-    # Emit container group cells (VNet/subnet boxes) for VNET>SUBNET mode
+    # Emit container group cells in topological order (parents before children)
     container_id_set: set = set()
-    for cont in containers:
+    for cont in _topo_sort_containers(containers):
         container_id_set.add(cont["id"])
+        # Top-level containers (parent="1") go on the Containers layer
+        cont_parent = LAYER_CONTAINERS if cont["parent"] == "1" else cont["parent"]
         cc = ET.SubElement(root, "mxCell")
         cc.set("id", cont["id"])
         cc.set("value", cont["label"])
         cc.set("style", cont["style"])
         cc.set("vertex", "1")
-        cc.set("parent", cont["parent"])
+        cc.set("parent", cont_parent)
         cc.set("connectable", "0")
         cg = ET.SubElement(cc, "mxGeometry")
         cg.set("x", str(cont["x"]))
@@ -1587,7 +1669,7 @@ def generate_drawio(cfg: Config) -> None:
         else:
             icons_used["mapped"][t] = icons_used["mapped"].get(t, 0) + 1
 
-        _emit_resource_cell(root, node, sid, style, x, y, w, h, parent_id="1")
+        _emit_resource_cell(root, node, sid, style, x, y, w, h, parent_id=LAYER_RESOURCES)
 
     # Add UDR callouts for route tables
     route_table_nodes = [n for n in nodes if n.get("type", "") == "microsoft.network/routetables"]
@@ -1627,7 +1709,7 @@ def generate_drawio(cfg: Config) -> None:
         co.set("value", callout_label)
         co.set("style", UDR_CALLOUT_STYLE)
         co.set("vertex", "1")
-        co.set("parent", "1")
+        co.set("parent", LAYER_LABELS)
         cog = ET.SubElement(co, "mxGeometry")
         cog.set("x", str(cx))
         cog.set("y", str(cy))
@@ -1646,7 +1728,7 @@ def generate_drawio(cfg: Config) -> None:
             ec.set("edge", "1")
             ec.set("source", rt_sid)
             ec.set("target", callout_id)
-            ec.set("parent", "1")
+            ec.set("parent", LAYER_ASSOC_EDGES)
             eg = ET.SubElement(ec, "mxGeometry")
             eg.set("relative", "1")
             eg.set("as", "geometry")
@@ -1681,7 +1763,7 @@ def generate_drawio(cfg: Config) -> None:
         pc.set("value", panel_label)
         pc.set("style", NSG_CALLOUT_STYLE)
         pc.set("vertex", "1")
-        pc.set("parent", "1")
+        pc.set("parent", LAYER_LABELS)
         pg = ET.SubElement(pc, "mxGeometry")
         pg.set("x", str(cx))
         pg.set("y", str(cy))
@@ -1698,13 +1780,13 @@ def generate_drawio(cfg: Config) -> None:
         ne.set("edge", "1")
         ne.set("source", nsg_sid)
         ne.set("target", panel_id)
-        ne.set("parent", "1")
+        ne.set("parent", LAYER_ASSOC_EDGES)
         neg = ET.SubElement(ne, "mxGeometry")
         neg.set("relative", "1")
         neg.set("as", "geometry")
 
     # Add attribute info boxes for resources that have metadata
-    ATTR_EDGE_STYLE = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeColor=#9673a6;dashed=1;"
+    ATTR_EDGE_STYLE = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;strokeColor=#9673a6;dashed=1;strokeWidth=2;"
     for node in nodes:
         attrs = node.get("attributes", [])
         if not attrs:
@@ -1731,7 +1813,7 @@ def generate_drawio(cfg: Config) -> None:
         ab.set("value", attr_label)
         ab.set("style", ATTR_BOX_STYLE)
         ab.set("vertex", "1")
-        ab.set("parent", "1")
+        ab.set("parent", LAYER_LABELS)
         abg = ET.SubElement(ab, "mxGeometry")
         abg.set("x", str(box_x))
         abg.set("y", str(box_y))
@@ -1748,7 +1830,7 @@ def generate_drawio(cfg: Config) -> None:
         ae.set("edge", "1")
         ae.set("source", attr_id)
         ae.set("target", sid)
-        ae.set("parent", "1")
+        ae.set("parent", LAYER_ASSOC_EDGES)
         aeg = ET.SubElement(ae, "mxGeometry")
         aeg.set("relative", "1")
         aeg.set("as", "geometry")
@@ -1769,7 +1851,7 @@ def generate_drawio(cfg: Config) -> None:
         ec.set("edge", "1")
         ec.set("source", src)
         ec.set("target", tgt)
-        ec.set("parent", "1")
+        ec.set("parent", _edge_layer(e["kind"]))
         eg = ET.SubElement(ec, "mxGeometry")
         eg.set("relative", "1")
         eg.set("as", "geometry")
@@ -2005,6 +2087,35 @@ _LAYERS = [
     (LAYER_LABELS, "Labels"),
 ]
 
+_LAYER_ROOT_IDS = {"0", "1", LAYER_CONTAINERS, LAYER_RESOURCES,
+                   LAYER_TRAFFIC_EDGES, LAYER_ASSOC_EDGES, LAYER_LABELS}
+
+
+def _edge_layer(kind: str) -> str:
+    """Return the layer ID for an edge based on its kind."""
+    return LAYER_ASSOC_EDGES if kind in _ASSOCIATION_EDGE_KINDS else LAYER_TRAFFIC_EDGES
+
+
+def _topo_sort_containers(containers: List[Dict]) -> List[Dict]:
+    """Return containers sorted so that parent containers appear before their children."""
+    by_id = {c["id"]: c for c in containers}
+    result: List[Dict] = []
+    visited: set = set()
+
+    def visit(c_id: str) -> None:
+        if c_id in visited:
+            return
+        c = by_id[c_id]
+        parent = c.get("parent", "1")
+        if parent not in _LAYER_ROOT_IDS and parent in by_id:
+            visit(parent)
+        visited.add(c_id)
+        result.append(c)
+
+    for c in containers:
+        visit(c["id"])
+    return result
+
 
 def _emit_resource_cell(
     root: ET.Element, node: Dict, sid: str, style: str,
@@ -2101,21 +2212,16 @@ def _render_msft_mode(
 
     mxfile, root = _build_mxfile_root(cfg)
 
-    # Emit containers ordered by depth: top-level first, then children, then RGs.
-    # For SUB>REGION>RG>NET: subs (parent="1") > regions (parent=sub) > RGs (parent=region)
-    # For REGION>RG>TYPE: regions (parent="1") > RGs (parent=region)
-    container_by_id = {c["id"]: c for c in containers}
-    top_level = [c for c in containers if c["parent"] == "1"]
-    mid_level = [c for c in containers if c["parent"] != "1" and c["parent"] in {t["id"] for t in top_level}]
-    leaf_level = [c for c in containers if c not in top_level and c not in mid_level]
-
-    for cont in top_level + mid_level + leaf_level:
+    # Emit containers in topological order (parents before children).
+    # Top-level containers (parent="1") are placed on LAYER_CONTAINERS.
+    for cont in _topo_sort_containers(containers):
+        cont_parent = LAYER_CONTAINERS if cont["parent"] == "1" else cont["parent"]
         cc = ET.SubElement(root, "mxCell")
         cc.set("id", cont["id"])
         cc.set("value", cont["label"])
         cc.set("style", cont["style"])
         cc.set("vertex", "1")
-        cc.set("parent", cont["parent"])
+        cc.set("parent", cont_parent)
         cc.set("connectable", "0")
         cg = ET.SubElement(cc, "mxGeometry")
         cg.set("x", str(cont["x"]))
@@ -2193,7 +2299,7 @@ def _render_msft_mode(
         pc.set("value", panel_label)
         pc.set("style", MSFT_UDR_PANEL_STYLE)
         pc.set("vertex", "1")
-        pc.set("parent", "1")
+        pc.set("parent", LAYER_LABELS)
         pg = ET.SubElement(pc, "mxGeometry")
         pg.set("x", str(panel_base_x))
         pg.set("y", str(panel_cursor_y))
@@ -2212,7 +2318,7 @@ def _render_msft_mode(
             ue.set("edge", "1")
             ue.set("source", subnet_sid)
             ue.set("target", panel_id)
-            ue.set("parent", "1")
+            ue.set("parent", LAYER_ASSOC_EDGES)
             ueg = ET.SubElement(ue, "mxGeometry")
             ueg.set("relative", "1")
             ueg.set("as", "geometry")
@@ -2241,7 +2347,7 @@ def _render_msft_mode(
         pc.set("value", panel_label)
         pc.set("style", MSFT_NSG_PANEL_STYLE)
         pc.set("vertex", "1")
-        pc.set("parent", "1")
+        pc.set("parent", LAYER_LABELS)
         pg = ET.SubElement(pc, "mxGeometry")
         pg.set("x", str(nsg_panel_x))
         pg.set("y", str(nsg_cursor_y))
@@ -2260,7 +2366,7 @@ def _render_msft_mode(
             ne.set("edge", "1")
             ne.set("source", nsg_sid)
             ne.set("target", panel_id)
-            ne.set("parent", "1")
+            ne.set("parent", LAYER_ASSOC_EDGES)
             neg = ET.SubElement(ne, "mxGeometry")
             neg.set("relative", "1")
             neg.set("as", "geometry")
@@ -2283,7 +2389,7 @@ def _render_msft_mode(
         ec.set("edge", "1")
         ec.set("source", src)
         ec.set("target", tgt)
-        ec.set("parent", "1")
+        ec.set("parent", _edge_layer(e["kind"]))
         eg = ET.SubElement(ec, "mxGeometry")
         eg.set("relative", "1")
         eg.set("as", "geometry")
