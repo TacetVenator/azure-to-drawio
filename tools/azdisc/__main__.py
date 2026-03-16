@@ -10,6 +10,7 @@ from .discover import run_seed, run_expand, run_rbac
 from .drawio import generate_drawio
 from .docs import generate_docs
 from .graph import build_graph
+from .inventory import generate_csv, generate_yaml
 from .test_all import run_test_all, run_render_all, run_report_all
 from .util import setup_logging
 
@@ -55,6 +56,16 @@ def cmd_report_all(args) -> None:
     run_report_all(cfg)
 
 
+def cmd_inventory_csv(args) -> None:
+    cfg = load_config(args.config)
+    generate_csv(cfg)
+
+
+def cmd_inventory_yaml(args) -> None:
+    cfg = load_config(args.config)
+    generate_yaml(cfg)
+
+
 def cmd_run(args) -> None:
     cfg = load_config(args.config)
     run_seed(cfg)
@@ -81,6 +92,8 @@ def main() -> None:
         ("graph", cmd_graph, "Build graph model"),
         ("drawio", cmd_drawio, "Generate draw.io diagram"),
         ("docs", cmd_docs, "Generate documentation"),
+        ("inventory-csv", cmd_inventory_csv, "Generate inventory.csv from inventory.json"),
+        ("inventory-yaml", cmd_inventory_yaml, "Generate inventory.yaml from inventory.json"),
         ("render-all", cmd_render_all, "Generate all layout × mode variants from an existing graph"),
         ("report-all", cmd_report_all, "Generate a Markdown report of all layout × mode × spacing variants"),
     ]:

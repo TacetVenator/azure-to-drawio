@@ -42,6 +42,7 @@ from .config import Config, VALID_LAYOUTS, VALID_DIAGRAM_MODES, VALID_SPACINGS
 from .graph import build_graph
 from .drawio import generate_drawio
 from .docs import generate_docs
+from .inventory import generate_csv, generate_yaml
 
 log = logging.getLogger(__name__)
 
@@ -257,6 +258,14 @@ def run_report_all(cfg: Config) -> None:
             log.exception("  FAIL %s", label)
 
         combos.append((layout, diagram_mode, spacing, label))
+
+    # Generate inventory exports from the real outputDir
+    try:
+        generate_csv(cfg)
+        generate_yaml(cfg)
+        log.info("  OK   inventory exports (inventory.csv, inventory.yaml)")
+    except Exception:
+        log.exception("  FAIL inventory exports")
 
     # Write the Markdown report
     report_path = variants_root / "report.md"
