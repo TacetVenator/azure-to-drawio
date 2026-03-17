@@ -351,7 +351,7 @@ class TestMsftDrawioGeneration:
         region_containers = [
             c for c in containers
             if "dashed=1" in (c.get("style") or "")
-            and "fillColor=none" in (c.get("style") or "")
+            and (c.get("id") or "").startswith("msft_region_")
         ]
         assert len(region_containers) >= 1
 

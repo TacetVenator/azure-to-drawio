@@ -92,14 +92,14 @@ class TestVnetLayout:
         nodes, edges = _build_contoso_graph()
         _, containers = layout_nodes_vnet(nodes, edges)
 
-        vnet_containers = [c for c in containers if c["style"].startswith("rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc")]
+        vnet_containers = [c for c in containers if c["id"].startswith("vnet_")]
         assert len(vnet_containers) >= 1, "Expected at least one VNet container"
 
     def test_subnet_containers_exist(self):
         nodes, edges = _build_contoso_graph()
         _, containers = layout_nodes_vnet(nodes, edges)
 
-        subnet_containers = [c for c in containers if "dashed=1" in c["style"] and "#fff2cc" in c["style"]]
+        subnet_containers = [c for c in containers if c["id"].startswith("subnet_")]
         assert len(subnet_containers) >= 3, "Expected at least 3 subnet containers (web, app, data)"
 
     def test_subnet_containers_have_vnet_parent(self):
