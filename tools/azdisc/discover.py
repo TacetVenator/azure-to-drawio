@@ -17,7 +17,7 @@ _MAX_ITERATIONS = 50
 
 def _rg_filter(rgs: List[str]) -> str:
     quoted = ", ".join(f"'{rg.lower()}'" for rg in rgs)
-    return f"resources | where resourceGroup in~ ({quoted}) | project id, name, type, location, subscriptionId, resourceGroup, properties"
+    return f"resources | where resourceGroup in~ ({quoted}) | project id, name, type, location, subscriptionId, resourceGroup, tags, sku, kind, systemData, properties"
 
 
 def _safe_get(obj, *keys):

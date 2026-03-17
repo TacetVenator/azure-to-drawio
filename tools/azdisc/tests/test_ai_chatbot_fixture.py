@@ -303,7 +303,7 @@ class TestAiChatbotSpacious:
     def test_spacious_no_overlap(self, tmp_path):
         graph, _ = _build(tmp_path)
         sp = _spacing_factor("spacious")
-        pos = layout_nodes(graph["nodes"], spacing=sp)
+        pos, _ = layout_nodes(graph["nodes"], spacing=sp)
         rects = list(pos.values())
         for i, (x1, y1, w1, h1) in enumerate(rects):
             for j, (x2, y2, w2, h2) in enumerate(rects):

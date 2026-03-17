@@ -442,6 +442,7 @@ class TestCrossRgDiagramOutput:
             seedResourceGroups=["rg-compute"],
             outputDir=str(tmp_path),
             layout="VNET>SUBNET",
+            networkDetail="full",  # these tests verify UDR/NSG callout shapes
         )
         build_graph(cfg)
         generate_drawio(cfg)

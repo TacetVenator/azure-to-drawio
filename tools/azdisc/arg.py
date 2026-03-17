@@ -57,6 +57,6 @@ def query_by_ids(ids: List[str], subscriptions: List[str]) -> List[Dict[str, Any
     for i in range(0, len(ids), _BATCH_SIZE):
         batch = ids[i: i + _BATCH_SIZE]
         id_list = ", ".join(f"'{rid}'" for rid in batch)
-        kusto = f"resources | where id in~ ({id_list}) | project id, name, type, location, subscriptionId, resourceGroup, properties"
+        kusto = f"resources | where id in~ ({id_list}) | project id, name, type, location, subscriptionId, resourceGroup, tags, sku, kind, systemData, properties"
         all_results.extend(query(kusto, subscriptions))
     return all_results
