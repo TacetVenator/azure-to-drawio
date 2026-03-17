@@ -173,6 +173,47 @@ python3 -m tools.azdisc docs app/myapp/config.json
 **Requires:** `graph.json` in the output directory.
 **Produces:** `catalog.md`, `edges.md`, `routing.md`
 
+#### `telemetry` — Enrich graph with runtime telemetry
+
+Queries App Insights, Activity Log, and NSG Flow Logs to add observed runtime relationships on top of the static graph. Results are layered onto the diagram as additional edges.
+
+```bash
+python3 -m tools.azdisc telemetry app/myapp/config.json
+```
+
+Requires `enableTelemetry: true` in your config and a Log Analytics workspace linked to your App Insights component. The command runs three phases:
+
+1. **App Insights dependencies** — Queries the `AppDependencies` table (or classic `dependencies`) for outbound calls. Resolves Azure service hostnames (e.g., `myacct.blob.core.windows.net`) to ARM IDs where possible.
+2. **Activity Log** — Queries `az monitor activity-log` for each seed resource group, emitting edges for managed identity operations targeting other resources.
+3. **NSG Flow Logs** — Queries the Flow Log Analytics table for accepted traffic, emitting `flowLog->flow` edges between IPs and known NIC nodes.
+
+**Requires:** `graph.json` in the output directory, `enableTelemetry: true` in config, authenticated `az` CLI with `Microsoft.OperationalInsights/workspaces/query/read` permission.
+**Produces:** `telemetry.json` (new edges to layer onto the graph)
+
+#### `inventory-csv` — Export inventory as CSV
+
+Exports `inventory.json` to a flat CSV file for spreadsheet analysis or hand-off.
+
+```bash
+python3 -m tools.azdisc inventory-csv app/myapp/config.json
+```
+
+Columns: `Name`, `Type`, `Location`, `ResourceGroup`, `SubscriptionId`, `ProvisioningState`, `Tags`, `CreatedDate`, `CreatedBy`, `SkuName`.
+
+**Requires:** `inventory.json` in the output directory.
+**Produces:** `inventory.csv`
+
+#### `inventory-yaml` — Export inventory as YAML
+
+Exports `inventory.json` to a human-readable YAML file.
+
+```bash
+python3 -m tools.azdisc inventory-yaml app/myapp/config.json
+```
+
+**Requires:** `inventory.json` in the output directory.
+**Produces:** `inventory.yaml`
+
 ### Typical Workflows
 
 **Full run from scratch:**
@@ -202,6 +243,25 @@ python3 -m tools.azdisc seed app/myapp/config.json
 python3 -m tools.azdisc expand app/myapp/config.json
 python3 -m tools.azdisc graph app/myapp/config.json
 python3 -m tools.azdisc docs app/myapp/config.json
+```
+
+**Enrich diagram with runtime telemetry (App Insights + Activity Log + Flow Logs):**
+
+```bash
+# config.json must have "enableTelemetry": true
+python3 -m tools.azdisc run app/myapp/config.json
+python3 -m tools.azdisc telemetry app/myapp/config.json
+# Re-generate diagram to include telemetry edges
+python3 -m tools.azdisc drawio app/myapp/config.json
+```
+
+**Export inventory for spreadsheet review:**
+
+```bash
+python3 -m tools.azdisc seed app/myapp/config.json
+python3 -m tools.azdisc expand app/myapp/config.json
+python3 -m tools.azdisc inventory-csv app/myapp/config.json
+python3 -m tools.azdisc inventory-yaml app/myapp/config.json
 ```
 
 **Generate a Markdown report of all 12 diagram variants (layout × mode × spacing):**
@@ -248,9 +308,14 @@ The tool reads a JSON configuration file. An example is provided at `app/myapp/c
 | `seedResourceGroups` | `string[]` | Yes | — | Resource group names to seed initial discovery from. All resources in these RGs are fetched. |
 | `outputDir` | `string` | Yes | — | Directory where all output files are written. Created automatically if it does not exist. |
 | `includeRbac` | `bool` | No | `false` | When `true`, the RBAC stage queries `authorizationresources` for role assignments and adds `rbac_assignment` edges to the graph. |
+| `enableTelemetry` | `bool` | No | `false` | When `true`, the `run` command runs the telemetry enrichment stage after building the graph. See [Telemetry Enrichment](#telemetry-enrichment). |
+| `telemetryLookbackDays` | `int` | No | `7` | Number of days of telemetry history to query (App Insights, Activity Log, Flow Logs). Must be a positive integer. |
 | `layout` | `string` | No | `"REGION>RG>TYPE"` | Diagram layout mode. Must be one of: `"REGION>RG>TYPE"`, `"VNET>SUBNET"`, `"SUB>REGION>RG>NET"`. See [Layout Modes](#layout-modes). |
 | `diagramMode` | `string` | No | `"BANDS"` | Diagram rendering mode. Must be one of: `"BANDS"`, `"MSFT"`. See [Diagram Modes](#diagram-modes). |
 | `spacing` | `string` | No | `"compact"` | Diagram spacing preset. Must be one of: `"compact"`, `"spacious"`. See [Spacing](#spacing). |
+| `expandScope` | `string` | No | `"related"` | Controls transitive expansion depth. `"related"` follows only scoped ARM ID references from resource properties; `"all"` follows every ARM ID found anywhere in the properties tree. `"related"` is faster and avoids pulling in unrelated tenant-wide resources. |
+| `inventoryGroupBy` | `string` | No | `"type"` | Controls how `inventory.yaml` and `inventory.csv` group resources. `"type"` groups by ARM resource type; `"rg"` groups by resource group. |
+| `networkDetail` | `string` | No | `"full"` | Controls NIC/subnet/NSG detail in the diagram. `"full"` renders every NIC, subnet, and NSG as separate nodes; `"compact"` hides them and places VMs directly into their VNet context, reducing visual noise for large environments. |
 
 ---
 
@@ -540,6 +605,27 @@ The normalized graph model consumed by the `drawio` and `docs` stages.
 
 Edges are sorted by `(source, target, kind)` and deduplicated.
 
+### `telemetry.json`
+
+**Produced by:** `telemetry` command (only when `enableTelemetry: true`)
+**Format:** JSON array of edge objects (same schema as edges in `graph.json`)
+
+New edges discovered from live telemetry sources, ready to be layered onto the static graph. Contains edges of kind `appInsights->dependency`, `activityLog->access`, and `flowLog->flow`.
+
+### `inventory.csv`
+
+**Produced by:** `inventory-csv` command
+**Format:** CSV with header row
+
+Flat export of all discovered resources with columns: `Name`, `Type`, `Location`, `ResourceGroup`, `SubscriptionId`, `ProvisioningState`, `Tags`, `CreatedDate`, `CreatedBy`, `SkuName`. Suitable for spreadsheet import or hand-off to stakeholders.
+
+### `inventory.yaml`
+
+**Produced by:** `inventory-yaml` command
+**Format:** YAML (no external dependencies — generated by the built-in serializer)
+
+Human-readable YAML export of `inventory.json`. Useful for diffs, Git-tracked documentation, and scripting.
+
 ### `diagram.drawio`
 
 **Produced by:** `drawio` stage
@@ -643,7 +729,7 @@ Network routing and security details:
 
 ### Relationship Edges
 
-The graph builder extracts 22 typed edge kinds from resource properties:
+The graph builder extracts 28 typed edge kinds from resource properties:
 
 | Edge Kind | Source Type | Meaning |
 |-----------|-------------|---------|
@@ -651,9 +737,12 @@ The graph builder extracts 22 typed edge kinds from resource properties:
 | `vm->disk` | `virtualmachines` | VM references OS or data disk in `storageProfile.osDisk.managedDisk` or `storageProfile.dataDisks[].managedDisk` |
 | `nic->subnet` | `networkinterfaces` | NIC IP configuration references a subnet in `ipConfigurations[].properties.subnet` |
 | `nic->nsg` | `networkinterfaces` | NIC references an NSG in `networkSecurityGroup` |
+| `nic->asg` | `networkinterfaces` | NIC IP configuration references an Application Security Group in `ipConfigurations[].properties.applicationSecurityGroups` |
 | `subnet->vnet` | `subnets` | Subnet belongs to a VNet (derived from the ARM ID path) |
 | `subnet->nsg` | `subnets` | Subnet references an NSG in `networkSecurityGroup` |
 | `subnet->routeTable` | `subnets` | Subnet references a route table in `routeTable` |
+| `nsgRule->sourceAsg` | `networksecuritygroups` | NSG security rule references a source Application Security Group |
+| `nsgRule->destAsg` | `networksecuritygroups` | NSG security rule references a destination Application Security Group |
 | `vnet->peeredVnet` | `virtualnetworks` | VNet peering in `virtualNetworkPeerings[].properties.remoteVirtualNetwork` |
 | `privateEndpoint->subnet` | `privateendpoints` | Private endpoint is in a subnet via `subnet` property |
 | `privateEndpoint->target` | `privateendpoints` | Private endpoint connects to a service via `privateLinkServiceConnections[].properties.privateLinkServiceId` |
@@ -672,6 +761,14 @@ The graph builder extracts 22 typed edge kinds from resource properties:
 | `appGw->backend` | `applicationgateways` | Application Gateway references a backend FQDN via `backendAddressPools[].properties.backendAddresses[].fqdn` |
 | `logicApp->connection` | `workflows` | Logic App references ARM IDs in parameter values |
 | `rbac_assignment` | *(RBAC scope)* | RBAC role assignment scope edge (only when `includeRbac: true`) |
+
+Telemetry enrichment (requires `enableTelemetry: true`) adds three additional edge kinds:
+
+| Edge Kind | Meaning |
+|-----------|---------|
+| `appInsights->dependency` | Observed outbound dependency from App Insights telemetry (App Insights → target service) |
+| `activityLog->access` | Managed identity cross-resource access observed in Activity Log |
+| `flowLog->flow` | Accepted network traffic flow between IPs resolved to known NIC nodes |
 
 ### UDR Callout Boxes
 
@@ -767,6 +864,230 @@ Types resolved via this fallback are reported as `"fallback"` (rather than `"map
 
 ---
 
+## Telemetry Enrichment
+
+Set `"enableTelemetry": true` in your config to augment the static graph with observed runtime behaviour. The `telemetry` command (or the `run` command when telemetry is enabled) runs three phases in sequence and writes the discovered edges to `telemetry.json`.
+
+### Phase 1 — App Insights Dependencies
+
+For each `microsoft.insights/components` node in the graph, the tool queries its linked Log Analytics workspace for outbound dependency calls recorded during the lookback window. It first tries the modern `AppDependencies` table (workspace-based App Insights) and falls back to the classic `dependencies` table.
+
+Dependency targets are resolved to ARM resource IDs where possible by stripping well-known Azure service suffixes (`.blob.core.windows.net`, `.database.windows.net`, `.vault.azure.net`, and [14 others](tools/azdisc/telemetry.py)) and matching the resulting name against the inventory. Targets that cannot be resolved are kept as `external/<hostname>` synthetic IDs.
+
+**Edges produced:** `appInsights->dependency`
+
+**Required permission:** `Microsoft.OperationalInsights/workspaces/query/read` on the linked Log Analytics workspace.
+
+### Phase 2 — Activity Log
+
+For each seed resource group, the tool queries `az monitor activity-log list` to find operations performed by managed identities present in the graph. Caller/resource pairs are deduplicated and emitted as access edges.
+
+**Edges produced:** `activityLog->access`
+
+**Required permission:** `Microsoft.Insights/eventtypes/values/read` (Reader or Monitoring Reader) on the target resource groups.
+
+### Phase 3 — NSG Flow Logs
+
+For each Log Analytics workspace in the graph, the tool queries the `AzureNetworkAnalytics_CL` table for accepted traffic flows. Source and destination IPs are resolved to NIC node IDs using the NIC IP address map built from the inventory.
+
+**Edges produced:** `flowLog->flow`
+
+**Required permission:** `Microsoft.OperationalInsights/workspaces/query/read` and NSG flow logs must be configured and sending data to the workspace.
+
+### Telemetry config example
+
+```json
+{
+  "app": "myapp",
+  "subscriptions": ["<sub>"],
+  "seedResourceGroups": ["rg-prod"],
+  "outputDir": "app/myapp/out",
+  "enableTelemetry": true,
+  "telemetryLookbackDays": 14
+}
+```
+
+---
+
+## Azure CLI Reference
+
+The tool calls the `az` CLI under the hood. The commands below are useful for exploring your environment, troubleshooting discovery issues, and running the same queries the tool uses.
+
+### Authentication and setup
+
+```bash
+# Interactive login
+az login
+
+# Device-code login (useful for WSL / headless environments)
+az login --use-device-code
+
+# List available subscriptions
+az account list --output table
+
+# Set active subscription
+az account set --subscription "<subscription-id-or-name>"
+
+# Confirm current identity and subscription
+az account show --output table
+
+# Check Azure CLI version (requires 2.37+ for graph extension)
+az --version
+
+# Install or update the Resource Graph extension (if not bundled)
+az extension add --name resource-graph
+az extension update --name resource-graph
+```
+
+### Azure Resource Graph queries
+
+The `seed` and `expand` stages both call `az graph query`. You can run the same queries manually to inspect data or troubleshoot missing resources.
+
+```bash
+# List all resources in a resource group
+az graph query \
+  --graph-query "resources | where resourceGroup =~ 'rg-prod' | project name, type, location, id" \
+  --subscriptions "<sub-id>" \
+  --output table
+
+# Count resources by type across all subscriptions
+az graph query \
+  --graph-query "resources | summarize count() by type | order by count_ desc" \
+  --output table
+
+# Find a specific resource by name
+az graph query \
+  --graph-query "resources | where name =~ 'vm-web-01' | project id, type, location, resourceGroup" \
+  --output table
+
+# List all VNets and their address spaces
+az graph query \
+  --graph-query "resources | where type =~ 'microsoft.network/virtualnetworks' | project name, resourceGroup, location, properties.addressSpace.addressPrefixes" \
+  --output table
+
+# List all subnets with their parent VNet and associated NSG / route table
+az graph query \
+  --graph-query "resources | where type =~ 'microsoft.network/virtualnetworks/subnets' | project name, resourceGroup, properties.addressPrefix, properties.networkSecurityGroup.id, properties.routeTable.id" \
+  --output table
+
+# Find all private endpoints and their targets
+az graph query \
+  --graph-query "resources | where type =~ 'microsoft.network/privateendpoints' | project name, resourceGroup, properties.privateLinkServiceConnections[0].properties.privateLinkServiceId" \
+  --output table
+
+# Check which resource types exist in your seed RGs (useful before first run)
+az graph query \
+  --graph-query "resources | where resourceGroup in~ ('rg-app-prod', 'rg-network') | summarize count() by type | order by count_ desc" \
+  --subscriptions "<sub-id>" \
+  --output table
+
+# Fetch a specific resource by ARM ID (same query the expand stage uses)
+az graph query \
+  --graph-query "resources | where id =~ '/subscriptions/.../providers/Microsoft.Network/virtualNetworks/vnet-hub' | project id, name, type, properties" \
+  --output json
+
+# Count resources across multiple subscriptions
+az graph query \
+  --graph-query "resources | summarize count() by subscriptionId, resourceGroup | order by count_ desc" \
+  --subscriptions "<sub-1>" "<sub-2>" \
+  --output table
+```
+
+### RBAC queries
+
+Used by the optional RBAC stage (`includeRbac: true`).
+
+```bash
+# List all role assignments in a resource group
+az role assignment list --resource-group rg-prod --output table
+
+# List role assignments for a specific resource
+az role assignment list \
+  --scope "/subscriptions/<sub>/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-web-01" \
+  --output table
+
+# List role assignments at subscription scope (includes inherited)
+az role assignment list \
+  --scope "/subscriptions/<sub-id>" \
+  --include-inherited \
+  --output table
+
+# Show human-readable role definition name for a role definition ID
+az role definition list \
+  --id "/subscriptions/<sub>/providers/Microsoft.Authorization/roleDefinitions/<guid>" \
+  --output table
+```
+
+### Log Analytics queries (telemetry)
+
+The `telemetry` command uses `az monitor log-analytics query`. You can run the KQL queries directly to verify workspace connectivity and data availability before enabling telemetry enrichment.
+
+```bash
+# List Log Analytics workspaces
+az monitor log-analytics workspace list --output table
+
+# Get the workspace ID for a named workspace
+az monitor log-analytics workspace show \
+  --resource-group rg-monitoring \
+  --workspace-name law-prod \
+  --query customerId \
+  --output tsv
+
+# Test App Insights dependency table (modern workspace-based)
+az monitor log-analytics query \
+  --workspace "<workspace-id>" \
+  --analytics-query "AppDependencies | where TimeGenerated > ago(7d) | summarize CallCount=count() by Target, DependencyType | order by CallCount desc | take 20" \
+  --output table
+
+# Test App Insights classic dependency table (classic Application Insights)
+az monitor log-analytics query \
+  --workspace "<workspace-id>" \
+  --analytics-query "dependencies | where timestamp > ago(7d) | summarize count() by target, type | take 20" \
+  --output table
+
+# Check Activity Log for managed identity operations in a resource group
+az monitor activity-log list \
+  --resource-group rg-prod \
+  --start-time "$(date -u -d '7 days ago' '+%Y-%m-%dT%H:%M:%SZ')" \
+  --caller "<managed-identity-principal-id>" \
+  --output table
+
+# Check if NSG flow log data is reaching Log Analytics
+az monitor log-analytics query \
+  --workspace "<workspace-id>" \
+  --analytics-query "AzureNetworkAnalytics_CL | where TimeGenerated > ago(1d) | take 5" \
+  --output table
+
+# List NSG flow log settings in a region
+az network watcher flow-log list \
+  --location eastus \
+  --output table
+```
+
+### Troubleshooting
+
+```bash
+# Verify the az graph extension is installed and auth works
+az graph query --graph-query "resources | take 1" --output table
+
+# Check if a subscription is visible (missing subs cause silent gaps in discovery)
+az account list --query "[].{Name:name, SubscriptionId:id, State:state}" --output table
+
+# Find resources that reference a specific subnet (useful for debugging expand)
+az graph query \
+  --graph-query "resources | where properties contains '/subnets/snet-web' | project name, type" \
+  --output table
+
+# Identify resource types that will appear as 'unknown' icons (no icon mapping)
+# Run the tool first, then check:
+cat app/myapp/out/icons_used.json | python3 -c "import json,sys; d=json.load(sys.stdin); print('\n'.join(d.get('unknown', [])))"
+
+# Show unresolved ARM IDs after expand (cross-tenant refs, deleted resources, etc.)
+cat app/myapp/out/unresolved.json | python3 -m json.tool | head -40
+```
+
+---
+
 ## Project Structure
 
 ```
@@ -774,21 +1095,25 @@ azure-to-drawio/
 ├── tools/azdisc/                      # Main Python package
 │   ├── __main__.py                    # CLI entry point: argument parsing and subcommand dispatch
 │   ├── arg.py                         # Azure Resource Graph query wrapper (paging, batching via az CLI)
-│   ├── config.py                      # Config dataclass, JSON loader, layout/diagramMode validation
-│   ├── discover.py                    # Seed, transitive expand, and RBAC discovery stages
-│   ├── graph.py                       # Graph model: node/edge extraction, child merging, attributes
+│   ├── config.py                      # Config dataclass, JSON loader, all field validation
+│   ├── discover.py                    # Seed, transitive expand (related/all scope), and RBAC discovery stages
+│   ├── graph.py                       # Graph model: 28-kind edge extraction, child merging, attributes
 │   ├── drawio.py                      # Draw.io XML generation, all layout engines + MSFT mode, image export
 │   ├── docs.py                        # Markdown documentation generators (catalog, edges, routing)
+│   ├── inventory.py                   # CSV and YAML export from inventory.json
+│   ├── telemetry.py                   # Telemetry enrichment: App Insights, Activity Log, NSG Flow Logs
 │   ├── test_all.py                    # Render-all and test-all: all fixture × layout × mode combinations
 │   ├── util.py                        # ARM ID regex, normalization, stable ID hashing, logging setup
 │   └── tests/
 │       ├── fixtures/
-│       │   ├── app_contoso.json       # Realistic 3-tier app: VNet, subnets, VMs, SQL, LB, PE, NSGs
-│       │   ├── app_ai_chatbot.json    # AI chatbot: Container Apps, OpenAI, Cosmos DB, hub-spoke networking
-│       │   ├── app_landing_zone.json  # Multi-sub hub-spoke Azure Landing Zone: 3 subs, firewall, bastion, ACA, PEs
-│       │   └── inventory_small.json   # Smaller fixture covering all edge types
+│       │   ├── app_contoso.json           # Realistic 3-tier app: VNet, subnets, VMs, SQL, LB, PE, NSGs
+│       │   ├── app_ai_chatbot.json        # AI chatbot: Container Apps, OpenAI, Cosmos DB, hub-spoke networking
+│       │   ├── app_landing_zone.json      # Multi-sub hub-spoke Azure Landing Zone: 3 subs, firewall, bastion, ACA, PEs
+│       │   ├── cross_rg_networking.json   # Cross-RG networking: shared VNet, peering, multi-RG resources
+│       │   └── inventory_small.json       # Smaller fixture covering all edge types
 │       ├── test_ids.py                # ARM ID parsing, normalization, stable ID determinism
-│       ├── test_graph_edges.py        # Edge extraction: all 22 edge kinds
+│       ├── test_graph_edges.py        # Edge extraction: all 28 edge kinds
+│       ├── test_asg_support.py        # Application Security Group edges (nic->asg, nsgRule->sourceAsg/destAsg)
 │       ├── test_child_resources.py    # Child resource detection, parent merging, attribute collection
 │       ├── test_layout.py             # REGION>RG>TYPE: determinism, positive coords, no overlaps
 │       ├── test_vnet_layout.py        # VNET>SUBNET: containers, nesting, labels, determinism
@@ -796,7 +1121,10 @@ azure-to-drawio/
 │       ├── test_msft_icon_fallback.py # Microsoft icon ZIP fallback: index building, fuzzy matching
 │       ├── test_spacing.py            # Spacing presets: config validation, gap scaling, label overlap
 │       ├── test_ai_chatbot_fixture.py # AI chatbot fixture: graph edges, all layout modes, determinism
+│       ├── test_cross_rg_networking.py # Cross-RG networking: shared VNet references, expand scope
 │       ├── test_sub_rg_net_layout.py  # SUB>REGION>RG>NET: edges, hierarchy, cross-sub, spacing, edge cases
+│       ├── test_expand_scope.py       # expandScope "related" vs "all" filtering behaviour
+│       ├── test_telemetry.py          # Telemetry enrichment: hostname resolution, LA query, edge emission
 │       ├── test_test_all.py           # Render-all and test-all: combination generation, variant output
 │       └── test_integration.py        # Full pipeline: graph build → drawio XML → PNG export
 ├── assets/
@@ -822,7 +1150,7 @@ All tests run entirely offline using fixture data — no Azure credentials or ne
 
 - **ARM ID parsing** — Regex extraction from strings/dicts/lists, normalization, deduplication, non-resource filtering
 - **Stable IDs** — Determinism, fixed length (16 hex chars), case insensitivity
-- **Edge extraction** — All 22 edge kinds individually (including firewall, bastion, container apps, app insights, app gateway, logic apps), sort order, no duplicates
+- **Edge extraction** — All 28 edge kinds individually (including firewall, bastion, container apps, app insights, app gateway, logic apps, ASG references, NSG rule ASGs), sort order, no duplicates
 - **Child resources** — Type detection heuristic, parent ID derivation, attribute collection (VM SKU/image, SQL SKU)
 - **Layout engines** — `REGION>RG>TYPE`, `VNET>SUBNET`, `SUB>REGION>RG>NET`, and `MSFT` mode: determinism, positive coordinates, no overlapping nodes, correct cell dimensions
 - **Spacing presets** — `compact` (default, backward compatible) and `spacious` (1.8x gaps): config validation, bounding box growth, cell sizes unchanged, label gap sufficiency, no overlaps, integration with all layout/diagram mode combinations
@@ -830,8 +1158,12 @@ All tests run entirely offline using fixture data — no Azure credentials or ne
 - **MSFT mode** — Region/RG container hierarchy, type section headers, hierarchical parenting via `parent` attribute, UDR side panels with route details, deterministic layout
 - **SUB>REGION>RG>NET layout** — 3-level subscription→region→RG hierarchy, networking/resources section split, cross-subscription edge validation, subscription label helper, network type classification, spacing effects, edge cases (empty inventory, single node, multi-region, missing subscription)
 - **Microsoft icon fallback** — Index building from SVG filenames, normalized keyword matching, fuzzy lookup for ARM types, base64 data URI style generation, fallback library regeneration
+- **Application Security Groups** — `nic->asg`, `nsgRule->sourceAsg`, `nsgRule->destAsg` edges; ASG nodes rendered correctly
+- **Expand scope** — `"related"` mode filters to scoped ARM ID fields only; `"all"` follows every ARM ID in the properties tree
 - **AI chatbot fixture** — Production-grade Container Apps + OpenAI + hub-spoke architecture: graph construction, private endpoint chains, VNet peering, all 3 layout modes, spacious mode, determinism
+- **Cross-RG networking fixture** — Shared VNet referenced from multiple resource groups: expand follows cross-RG subnet references, nodes placed correctly in VNET>SUBNET layout
 - **Landing zone fixture** — Multi-subscription hub-spoke: 3 subscriptions, Azure Firewall, Bastion, Container Apps, private endpoints, cross-subscription App Insights→workspace edges
+- **Telemetry enrichment** — Hostname resolution for 17 Azure service suffixes, Log Analytics response parsing (direct list and `tables` envelope), edge deduplication, fallback to external IDs for unresolvable targets
 - **Render-all / test-all** — All fixture × layout × mode combinations generate valid XML, variant folders created, primary output preserved
 - **Full integration** — Fixture → `build_graph` → `generate_drawio` → validates XML structure, vertex/edge cell counts, geometry, node labels
 - **PNG/SVG export** — When the `drawio` CLI is available: valid PNG header, SVG file created. Graceful skip when CLI is absent.
