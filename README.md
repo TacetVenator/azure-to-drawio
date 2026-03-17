@@ -292,10 +292,15 @@ The tool reads a JSON configuration file. An example is provided at `app/myapp/c
   "subscriptions": ["<sub1>", "<sub2>"],
   "seedResourceGroups": ["rg-app-dev", "rg-app-prod"],
   "outputDir": "app/myapp/out",
-  "includeRbac": true,
+  "includeRbac": false,
+  "enableTelemetry": false,
+  "telemetryLookbackDays": 7,
   "layout": "REGION>RG>TYPE",
   "diagramMode": "BANDS",
-  "spacing": "compact"
+  "spacing": "compact",
+  "expandScope": "related",
+  "inventoryGroupBy": "type",
+  "networkDetail": "full"
 }
 ```
 
