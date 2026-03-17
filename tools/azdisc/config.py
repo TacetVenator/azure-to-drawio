@@ -24,12 +24,14 @@ class Config:
     seedResourceGroups: List[str]
     outputDir: str
     includeRbac: bool = False
+    enableTelemetry: bool = False
+    telemetryLookbackDays: int = 7
     layout: str = "REGION>RG>TYPE"
     diagramMode: str = "BANDS"
     spacing: str = "compact"
     expandScope: str = "related"
     inventoryGroupBy: str = "type"
-    networkDetail: str = "compact"
+    networkDetail: str = "full"
 
     def out(self, filename: str) -> Path:
         return Path(self.outputDir) / filename
@@ -63,15 +65,21 @@ def load_config(path: str) -> Config:
     inventory_group_by = data.get("inventoryGroupBy", "type")
     if inventory_group_by not in VALID_INVENTORY_GROUP_BYS:
         raise ValueError(f"Unsupported inventoryGroupBy: {inventory_group_by!r}. Valid: {VALID_INVENTORY_GROUP_BYS}")
-    network_detail = data.get("networkDetail", "compact")
+    network_detail = data.get("networkDetail", "full")
     if network_detail not in VALID_NETWORK_DETAILS:
         raise ValueError(f"Unsupported networkDetail: {network_detail!r}. Valid: {VALID_NETWORK_DETAILS}")
+    enable_telemetry = data.get("enableTelemetry", False)
+    lookback_days = data.get("telemetryLookbackDays", 7)
+    if not isinstance(lookback_days, int) or lookback_days < 1:
+        raise ValueError(f"telemetryLookbackDays must be a positive integer, got {lookback_days!r}")
     cfg = Config(
         app=data["app"],
         subscriptions=data["subscriptions"],
         seedResourceGroups=data["seedResourceGroups"],
         outputDir=data["outputDir"],
         includeRbac=data.get("includeRbac", False),
+        enableTelemetry=enable_telemetry,
+        telemetryLookbackDays=lookback_days,
         layout=layout,
         diagramMode=diagram_mode,
         spacing=spacing,

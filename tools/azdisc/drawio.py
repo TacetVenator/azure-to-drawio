@@ -91,6 +91,7 @@ _ASSOCIATION_EDGE_KINDS = {
     "subnet->nsg", "subnet->routeTable", "nic->nsg", "nic->asg",
     "nsgRule->sourceAsg", "nsgRule->destAsg",
     "rbac_assignment", "appInsights->workspace", "udr_detail", "nsg_detail",
+    "activityLog->access",
 }
 _PEERING_EDGE_KINDS = {
     "vnet->peeredVnet",
@@ -104,6 +105,26 @@ EDGE_STYLE_PEERING = "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;j
 MSFT_EDGE_STYLE_TRAFFIC = "edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#333333;strokeWidth=2;"
 MSFT_EDGE_STYLE_ASSOCIATION = "edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;dashPattern=5 5;strokeColor=#999999;strokeWidth=2;"
 MSFT_EDGE_STYLE_PEERING = "edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeColor=#0078D4;strokeWidth=2;"
+EDGE_STYLE_TELEMETRY_DEPENDENCY = (
+    "edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;"
+    "strokeColor=#AA00AA;strokeWidth=1;dashed=1;dashPattern=8 3;"
+    "endArrow=open;endFill=0;"
+)
+EDGE_STYLE_TELEMETRY_FLOW = (
+    "edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;"
+    "strokeColor=#FF6600;strokeWidth=1;dashed=1;dashPattern=4 4;"
+    "endArrow=open;endFill=0;"
+)
+MSFT_EDGE_STYLE_TELEMETRY_DEPENDENCY = (
+    "edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;"
+    "strokeColor=#AA00AA;strokeWidth=1;dashed=1;dashPattern=8 3;"
+    "endArrow=open;endFill=0;"
+)
+MSFT_EDGE_STYLE_TELEMETRY_FLOW = (
+    "edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;"
+    "strokeColor=#FF6600;strokeWidth=1;dashed=1;dashPattern=4 4;"
+    "endArrow=open;endFill=0;"
+)
 MSFT_TYPE_HEADER_STYLE = "text;html=1;align=left;verticalAlign=top;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=11;fontStyle=1;fontColor=default;"
 
 # Network detail compact mode — resource types hidden from the diagram and
@@ -132,6 +153,10 @@ def _edge_style(kind: str, msft: bool = False) -> str:
         return MSFT_EDGE_STYLE_ASSOCIATION if msft else EDGE_STYLE_ASSOCIATION
     if kind in _PEERING_EDGE_KINDS:
         return MSFT_EDGE_STYLE_PEERING if msft else EDGE_STYLE_PEERING
+    if kind == "appInsights->dependency":
+        return MSFT_EDGE_STYLE_TELEMETRY_DEPENDENCY if msft else EDGE_STYLE_TELEMETRY_DEPENDENCY
+    if kind == "flowLog->flow":
+        return MSFT_EDGE_STYLE_TELEMETRY_FLOW if msft else EDGE_STYLE_TELEMETRY_FLOW
     return MSFT_EDGE_STYLE_TRAFFIC if msft else EDGE_STYLE_TRAFFIC
 
 
@@ -673,9 +698,30 @@ def _build_network_membership(
                         placed.add(target_id)
                         break
 
+    # Place resources that connect directly to a subnet (firewall, bastion, appGw, containerEnv)
+    _direct_subnet_kinds = {
+        "firewall->subnet", "bastion->subnet",
+        "appGw->subnet", "containerEnv->subnet",
+    }
+    for e in edges:
+        if e["kind"] in _direct_subnet_kinds:
+            res_id = normalize_id(e["source"])
+            sid = normalize_id(e["target"])
+            if res_id not in placed:
+                subnet_members[sid].append(res_id)
+                placed.add(res_id)
+
     # Sort members deterministically
     for sid in subnet_members:
         subnet_members[sid].sort()
+
+    # Prune vnet_subnets to only subnets that have at least one placed resource.
+    # This prevents subnets from shared/hub VNets that don't serve any in-scope
+    # resource from appearing as empty containers in the diagram.
+    _referenced_subnets: set = set(subnet_members.keys())
+    for vid in list(vnet_subnets.keys()):
+        vnet_subnets[vid] = [sid for sid in vnet_subnets[vid] if sid in _referenced_subnets]
+    vnet_subnets = {vid: sids for vid, sids in vnet_subnets.items() if sids}
 
     # Collect unattached nodes (not a VNet, not a subnet, not placed)
     unattached = []
@@ -1708,6 +1754,27 @@ def generate_drawio(cfg: Config) -> None:
         }
         net_context_annotations = _build_network_context_annotations(nodes, edges)
 
+    # In full mode (BANDS/REGION>RG>TYPE layouts), subnets from shared VNets that
+    # have no in-scope resources would appear as noise.  Compute the set of
+    # "used" subnets — any subnet referenced by a direct resource->subnet edge —
+    # and mark unreferenced subnets as orphaned so we can skip them.
+    _subnet_placement_kinds = {
+        "nic->subnet", "privateEndpoint->subnet", "webApp->subnet",
+        "containerEnv->subnet", "appGw->subnet",
+        "firewall->subnet", "bastion->subnet",
+    }
+    _used_subnet_ids: set = {
+        normalize_id(e["target"])
+        for e in edges
+        if e["kind"] in _subnet_placement_kinds
+    }
+    orphaned_subnet_ids: set = {
+        n["id"]
+        for n in nodes
+        if n.get("type", "").lower() == "microsoft.network/virtualnetworks/subnets"
+        and n["id"] not in _used_subnet_ids
+    }
+
     # Find assets dir relative to this file
     assets_dir = Path(__file__).parent.parent.parent / "assets"
     icon_map = _load_icon_map(assets_dir)
@@ -1788,6 +1855,11 @@ def generate_drawio(cfg: Config) -> None:
 
         # Skip VNet/subnet nodes in VNET>SUBNET mode — shown as containers
         if is_vnet_layout and node.get("type", "") in vnet_subnet_types:
+            continue
+
+        # Skip subnets that have no in-scope resources attached (orphaned subnets
+        # from shared/hub VNets that serve other teams outside the seed RGs).
+        if not is_vnet_layout and nid in orphaned_subnet_ids:
             continue
 
         # Skip plumbing nodes in compact mode
@@ -2034,6 +2106,9 @@ def generate_drawio(cfg: Config) -> None:
             continue
         # In compact mode skip edges that touch hidden plumbing nodes
         if compact_mode and (e["source"] in compact_hidden_ids or e["target"] in compact_hidden_ids):
+            continue
+        # Skip edges that touch orphaned (unscoped) subnets
+        if not is_vnet_layout and (e["source"] in orphaned_subnet_ids or e["target"] in orphaned_subnet_ids):
             continue
         if e["kind"] == "subnet->routeTable":
             continue  # shown via callout
