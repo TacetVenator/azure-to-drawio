@@ -255,6 +255,44 @@ def _edge_style(kind: str, msft: bool = False) -> str:
     return MSFT_EDGE_STYLE_TRAFFIC if msft else EDGE_STYLE_TRAFFIC
 
 
+# ---------------------------------------------------------------------------
+# Edge label helpers
+# ---------------------------------------------------------------------------
+
+_EDGE_LABELS: Dict[str, str] = {
+    "internet->publicIp":             "HTTPS",
+    "onPrem->gateway":                "VPN / ExpressRoute",
+    "vnet->peeredVnet":               "VNet Peering",
+    "privateEndpoint->targetService": "Private Link",
+    "privateEndpoint->subnet":        "subnet",
+    "nic->subnet":                    "subnet",
+    "nic->nsg":                       "NSG",
+    "nic->asg":                       "ASG",
+    "subnet->nsg":                    "NSG",
+    "subnet->vnet":                   "VNet",
+    "vm->nic":                        "NIC",
+    "vm->disk":                       "disk",
+    "vmss->nic":                      "NIC",
+    "appGw->subnet":                  "subnet",
+    "firewall->subnet":               "subnet",
+    "bastion->subnet":                "subnet",
+    "webApp->subnet":                 "VNet Integration",
+    "containerEnv->subnet":           "subnet",
+    "loadBalancer->backendPool":      "backend",
+    "appInsights->workspace":         "Log Analytics",
+    "appInsights->dependency":        "telemetry",
+    "flowLog->flow":                  "flow log",
+    "flowLog->traffic":               "traffic",
+    "activityLog->access":            "activity",
+    "rbac_assignment":                "RBAC",
+}
+
+
+def _edge_label(kind: str) -> str:
+    """Return a human-readable label for an edge kind, or empty string if none defined."""
+    return _EDGE_LABELS.get(kind, "")
+
+
 # Boundary node styles (Internet, On-Premises)
 BOUNDARY_INTERNET_STYLE = "shape=mxgraph.azure.cloud;fillColor=#0078D4;strokeColor=#005A9E;fontColor=#FFFFFF;verticalLabelPosition=bottom;verticalAlign=top;align=center;whiteSpace=wrap;html=1;"
 BOUNDARY_ONPREM_STYLE = "shape=mxgraph.azure.enterprise;fillColor=#7D7D7D;strokeColor=#555555;fontColor=#333333;verticalLabelPosition=bottom;verticalAlign=top;align=center;whiteSpace=wrap;html=1;"
@@ -852,8 +890,123 @@ def _grid_layout(
     return positions, content_w, content_h
 
 
+# ---------------------------------------------------------------------------
+# Subnet tier color helpers
+# ---------------------------------------------------------------------------
+
+# (keyword_fragments, fillColor, strokeColor) — first match wins
+_SUBNET_TIER_COLORS: List[Tuple[List[str], str, str]] = [
+    (["fw", "firewall", "nva", "palo", "dmz"],                    "#FFEBEE", "#C62828"),
+    (["gw", "gateway", "vpn", "er", "expressroute"],               "#F3E5F5", "#6A1B9A"),
+    (["bastion", "jump", "paw"],                                   "#E0F7FA", "#00695C"),
+    (["web", "front", "wfe", "ui", "ingress"],                     "#E3F2FD", "#1565C0"),
+    (["app", "back", "api", "mid", "svc", "service", "worker"],    "#E8F5E9", "#2E7D32"),
+    (["data", "db", "sql", "storage", "cache", "redis", "cosmos"], "#FFF3E0", "#E65100"),
+    (["pe", "endpoint", "private"],                                "#FFF8E1", "#F57F17"),
+    (["mgmt", "management", "ops", "admin", "infra", "shared",
+      "core"],                                                     "#EDE7F6", "#4527A0"),
+]
+
+_SUBNET_TIER_BASE = (
+    "rounded=1;whiteSpace=wrap;html=1;"
+    "verticalAlign=top;align=left;spacingLeft=8;spacingTop=4;"
+    "fontSize=11;dashed=1;dashPattern=5 5;arcSize=8;opacity=70;"
+)
+
+HUB_VNET_FILL = "#E8E8E8"
+HUB_VNET_STROKE = "#5D5D5D"
+SPOKE_VNET_FILL = "#F5F5F5"
+SPOKE_VNET_STROKE = "#9E9E9E"
+
+
+def _subnet_tier_style(subnet_name: str) -> Optional[str]:
+    """Return a draw.io style for a subnet based on name patterns, or None for the default."""
+    name = subnet_name.lower()
+    for keywords, fill, stroke in _SUBNET_TIER_COLORS:
+        if any(kw in name for kw in keywords):
+            return (
+                f"rounded=1;whiteSpace=wrap;html=1;fillColor={fill};strokeColor={stroke};"
+                "fontColor=#1A1A1A;verticalAlign=top;align=left;spacingLeft=8;spacingTop=4;"
+                "fontSize=11;dashed=1;dashPattern=5 5;arcSize=8;opacity=70;"
+            )
+    return None
+
+
+def _hub_vnet_style() -> str:
+    return (
+        f"rounded=1;whiteSpace=wrap;html=1;fillColor={HUB_VNET_FILL};strokeColor={HUB_VNET_STROKE};"
+        "fontColor=#1A1A1A;verticalAlign=top;align=left;spacingLeft=10;spacingTop=5;"
+        "fontSize=13;fontStyle=1;arcSize=6;opacity=70;"
+    )
+
+
+def _spoke_vnet_style() -> str:
+    return (
+        f"rounded=1;whiteSpace=wrap;html=1;fillColor={SPOKE_VNET_FILL};strokeColor={SPOKE_VNET_STROKE};"
+        "fontColor=#1A1A1A;verticalAlign=top;align=left;spacingLeft=10;spacingTop=5;"
+        "fontSize=13;fontStyle=1;arcSize=6;opacity=70;"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Hub VNet detection
+# ---------------------------------------------------------------------------
+
+_HUB_RESOURCE_TYPES = {
+    "microsoft.network/azurefirewalls",
+    "microsoft.network/virtualnetworkgateways",
+    "microsoft.network/expressroutecircuits",
+}
+_HUB_NAME_PATTERNS = ["hub", "transit", "shared-net", "shared-network", "core-net", "connectivity"]
+_HUB_PLACEMENT_EDGE_KINDS = {"firewall->subnet", "bastion->subnet", "appGw->subnet"}
+
+
+def _detect_hub_vnet_ids(nodes: List[Dict], edges: List[Dict]) -> set:
+    """Detect hub VNet IDs by presence of firewall/gateway resources or name patterns."""
+    # Build subnet -> VNet mapping
+    subnet_vnet: Dict[str, str] = {}
+    for e in edges:
+        if e["kind"] == "subnet->vnet":
+            subnet_vnet[normalize_id(e["source"])] = normalize_id(e["target"])
+    for n in nodes:
+        if n.get("type", "") == "microsoft.network/virtualnetworks/subnets" and "/subnets/" in n["id"]:
+            nid = n["id"]
+            if nid not in subnet_vnet:
+                subnet_vnet[nid] = nid.split("/subnets/")[0]
+
+    # Build resource -> subnet mapping from placement edges
+    resource_subnet: Dict[str, str] = {}
+    for e in edges:
+        if e["kind"] in _HUB_PLACEMENT_EDGE_KINDS:
+            resource_subnet[normalize_id(e["source"])] = normalize_id(e["target"])
+
+    hub_vnet_ids: set = set()
+
+    # Hub by presence of firewall/gateway resource type inside a VNet
+    for n in nodes:
+        if n.get("type", "").lower() in _HUB_RESOURCE_TYPES:
+            nid = normalize_id(n["id"])
+            sub_id = resource_subnet.get(nid)
+            if sub_id and sub_id in subnet_vnet:
+                hub_vnet_ids.add(subnet_vnet[sub_id])
+            # Also check ARM id: resource lives inside a subnet which lives inside a VNet
+            for sn_id, vnet_id in subnet_vnet.items():
+                if nid.startswith(sn_id + "/"):
+                    hub_vnet_ids.add(vnet_id)
+
+    # Hub by VNet name pattern
+    for n in nodes:
+        if n.get("type", "").lower() == "microsoft.network/virtualnetworks":
+            name = n.get("name", "").lower()
+            if any(p in name for p in _HUB_NAME_PATTERNS):
+                hub_vnet_ids.add(n["id"])
+
+    return hub_vnet_ids
+
+
 def layout_nodes_vnet(
     nodes: List[Dict], edges: List[Dict], spacing: float = 1.0,
+    subnet_colors: bool = False, hub_vnet_ids: Optional[set] = None,
 ) -> Tuple[
     Dict[str, Tuple[int, int, int, int]],    # node absolute positions
     List[Dict],                                # container rects (mixed abs/relative coords)
@@ -897,6 +1050,9 @@ def layout_nodes_vnet(
     positions: Dict[str, Tuple[int, int, int, int]] = {}
     containers: List[Dict] = []
 
+    if hub_vnet_ids is None:
+        hub_vnet_ids = set()
+
     # Group VNets by region for hierarchical layout
     all_vnets = sorted(vnet_subnets.keys())
     regions_to_vnets: Dict[str, List[str]] = defaultdict(list)
@@ -905,7 +1061,8 @@ def layout_nodes_vnet(
         region_name = (node.get("location", "unknown") if node else "unknown")
         regions_to_vnets[region_name].append(vnet_id)
     for r in regions_to_vnets:
-        regions_to_vnets[r].sort()
+        # Hubs first, then non-hubs — each group sorted alphabetically
+        regions_to_vnets[r].sort(key=lambda v: (0 if v in hub_vnet_ids else 1, v))
 
     # Regions are arranged left to right; region_cursor_x tracks the next region's left edge
     region_cursor_x = region_padding
@@ -969,10 +1126,14 @@ def layout_nodes_vnet(
                 subnet_rel_x = subnet_cursor_abs_x - abs_vnet_x  # = vnet_padding + prior_subnet_widths
                 subnet_rel_y = vnet_header                         # starts right below VNet title
 
+                sn_style = (
+                    (_subnet_tier_style(subnet_label) or SUBNET_STYLE)
+                    if subnet_colors else SUBNET_STYLE
+                )
                 containers.append({
                     "id": subnet_container_id,
                     "label": subnet_label,
-                    "style": SUBNET_STYLE,
+                    "style": sn_style,
                     "x": subnet_rel_x,
                     "y": subnet_rel_y,
                     "w": subnet_w,
@@ -992,10 +1153,15 @@ def layout_nodes_vnet(
             vnet_h = vnet_content_h + vnet_header + 2 * vnet_padding
 
             # VNet position is RELATIVE to its region container
+            if subnet_colors:
+                is_hub = vnet_id in hub_vnet_ids
+                vnet_style = _hub_vnet_style() if is_hub else _spoke_vnet_style()
+            else:
+                vnet_style = VNET_STYLE
             containers.append({
                 "id": vnet_container_id,
                 "label": vnet_label,
-                "style": VNET_STYLE,
+                "style": vnet_style,
                 "x": vnet_in_region_x,
                 "y": vnet_in_region_y,
                 "w": vnet_w,
@@ -2323,7 +2489,7 @@ def _render_l2r_mode(
         edge_id = f"e_{stable_id(e['source'] + e['target'] + e['kind'])}"
         ec = ET.SubElement(root, "mxCell")
         ec.set("id", edge_id)
-        ec.set("value", "")  # no edge labels in L2R mode
+        ec.set("value", _edge_label(e["kind"]) if cfg.edgeLabels else "")
         ec.set("style", L2R_EDGE_STYLE)
         ec.set("edge", "1")
         ec.set("source", src)
@@ -2348,6 +2514,221 @@ def _render_l2r_mode(
 
     _try_export(cfg, out_path, "svg")
     _try_export(cfg, out_path, "png")
+
+
+# ---------------------------------------------------------------------------
+# HUB>SPOKE layout
+# ---------------------------------------------------------------------------
+
+HS_TIER_GAP = 80         # vertical gap between tiers
+HS_VNET_H_GAP = 60       # horizontal gap between VNets within a tier
+HS_VNET_PAD = 20         # padding inside a VNet container
+HS_VNET_HEADER = 40      # VNet title bar height
+HS_SUBNET_PAD = 15       # padding inside a subnet container
+HS_SUBNET_HEADER = 30    # subnet title bar height
+HS_SUBNET_V_GAP = 10     # vertical gap between stacked subnets within a VNet
+HS_RESOURCE_COLS = 4     # max resource columns per subnet
+HS_MIN_VNET_W = 240      # minimum VNet container width
+HS_CANVAS_X = 60         # left margin
+HS_CANVAS_Y = 40         # top margin
+
+HS_ISOLATED_VNET_STYLE = (
+    "rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF9C4;strokeColor=#F9A825;"
+    "fontColor=#4E342E;verticalAlign=top;align=left;spacingLeft=10;spacingTop=5;"
+    "fontSize=13;fontStyle=1;arcSize=6;opacity=70;"
+)
+
+
+def layout_nodes_hub_spoke(
+    nodes: List[Dict],
+    edges: List[Dict],
+    spacing: float = 1.0,
+    subnet_colors: bool = False,
+    hub_vnet_ids: Optional[set] = None,
+) -> Tuple[
+    Dict[str, Tuple[int, int, int, int]],  # absolute positions
+    List[Dict],                             # containers
+]:
+    """HUB>SPOKE layout: top-down traffic flow visualization.
+
+    Tier arrangement (top → bottom):
+      1. Internet / On-Prem boundary nodes
+      2. Hub VNet(s)  — contain firewall / gateway subnets
+      3. Spoke VNet(s) — peered to a hub
+      4. Isolated VNets  — not peered to any hub
+      5. Unattached resources
+
+    Within each VNet, subnets are stacked vertically so the diagram reads
+    naturally from top to bottom.  Tier colours applied when subnet_colors=True.
+    """
+    s = lambda v: round(v * spacing)
+    vnet_pad    = s(HS_VNET_PAD)
+    vnet_header = s(HS_VNET_HEADER)
+    sn_pad      = s(HS_SUBNET_PAD)
+    sn_header   = s(HS_SUBNET_HEADER)
+    sn_v_gap    = s(HS_SUBNET_V_GAP)
+    vnet_h_gap  = s(HS_VNET_H_GAP)
+    tier_gap    = s(HS_TIER_GAP)
+    h_gap       = s(H_GAP)
+    v_gap       = s(V_GAP)
+
+    boundary_nodes = [n for n in nodes if n.get("type", "").startswith("__boundary__")]
+    regular_nodes  = [n for n in nodes if not n.get("type", "").startswith("__boundary__")]
+    boundary_ids   = {bn["id"] for bn in boundary_nodes}
+
+    node_by_id: Dict[str, Dict] = {n["id"]: n for n in regular_nodes}
+    vnet_subnets, subnet_members, unattached = _build_network_membership(regular_nodes, edges)
+    unattached = [uid for uid in unattached if uid not in boundary_ids]
+
+    if hub_vnet_ids is None:
+        hub_vnet_ids = _detect_hub_vnet_ids(regular_nodes, edges)
+
+    # Classify VNets into hub / spoke / isolated
+    peered_to_hub: set = set()
+    for e in edges:
+        if e["kind"] == "vnet->peeredVnet":
+            src = normalize_id(e["source"])
+            tgt = normalize_id(e["target"])
+            if src in hub_vnet_ids:
+                peered_to_hub.add(tgt)
+            if tgt in hub_vnet_ids:
+                peered_to_hub.add(src)
+
+    all_vnet_ids  = set(vnet_subnets.keys())
+    hub_vnets     = sorted(v for v in all_vnet_ids if v in hub_vnet_ids)
+    spoke_vnets   = sorted(v for v in all_vnet_ids if v in peered_to_hub and v not in hub_vnet_ids)
+    isolated_vnets = sorted(v for v in all_vnet_ids if v not in hub_vnet_ids and v not in peered_to_hub)
+
+    positions:  Dict[str, Tuple[int, int, int, int]] = {}
+    containers: List[Dict] = []
+
+    def _vnet_label(vnet_id: str) -> str:
+        n = node_by_id.get(vnet_id)
+        return n["name"] if n else vnet_id.split("/")[-1]
+
+    def _subnet_label(subnet_id: str) -> str:
+        n = node_by_id.get(subnet_id)
+        return n["name"] if n else subnet_id.split("/")[-1]
+
+    def _layout_vnet(vnet_id: str, abs_x: int, abs_y: int, is_hub: bool, is_isolated: bool) -> Tuple[int, int]:
+        """Place one VNet at (abs_x, abs_y). Returns (vnet_w, vnet_h)."""
+        subnet_ids  = vnet_subnets.get(vnet_id, [])
+        vnet_cid    = "hs_vnet_" + stable_id(vnet_id)
+        label       = _vnet_label(vnet_id)
+
+        if subnet_colors:
+            if is_isolated:
+                vnet_style = HS_ISOLATED_VNET_STYLE
+            elif is_hub:
+                vnet_style = _hub_vnet_style()
+            else:
+                vnet_style = _spoke_vnet_style()
+        else:
+            vnet_style = VNET_STYLE
+
+        # Stack subnets vertically inside the VNet
+        sn_rel_y     = vnet_header + vnet_pad   # starts right below title bar
+        max_sn_w     = 0
+        total_sn_h   = 0
+
+        for sn_id in subnet_ids:
+            members   = subnet_members.get(sn_id, [])
+            sn_label  = _subnet_label(sn_id)
+            sn_cid    = "hs_subnet_" + stable_id(sn_id)
+
+            # Absolute member positions (parented to LAYER_RESOURCES)
+            abs_member_x = abs_x + vnet_pad + sn_pad
+            abs_member_y = abs_y + sn_rel_y + sn_header
+            cols = max(1, min(HS_RESOURCE_COLS, len(members))) if members else 1
+            member_pos, content_w, content_h = _grid_layout(members, abs_member_x, abs_member_y, cols, spacing=spacing)
+            positions.update(member_pos)
+
+            sn_w = max(content_w, CELL_W) + 2 * sn_pad
+            sn_h = (content_h + sn_header + sn_pad) if members else (sn_header + sn_pad + CELL_H // 2)
+
+            sn_style = ((_subnet_tier_style(sn_label) or SUBNET_STYLE) if subnet_colors else SUBNET_STYLE)
+            containers.append({
+                "id":     sn_cid,
+                "label":  sn_label,
+                "style":  sn_style,
+                "x":      vnet_pad,       # relative to VNet
+                "y":      sn_rel_y,       # relative to VNet
+                "w":      sn_w,
+                "h":      sn_h,
+                "parent": vnet_cid,
+            })
+
+            max_sn_w    = max(max_sn_w, sn_w)
+            sn_rel_y   += sn_h + sn_v_gap
+            total_sn_h += sn_h + sn_v_gap
+
+        if total_sn_h > 0:
+            total_sn_h -= sn_v_gap  # remove trailing gap
+
+        vnet_w = max(max_sn_w + 2 * vnet_pad, HS_MIN_VNET_W)
+        vnet_h = (total_sn_h + vnet_header + 2 * vnet_pad) if subnet_ids else (vnet_header + 2 * vnet_pad + CELL_H)
+
+        containers.append({
+            "id":     vnet_cid,
+            "label":  label,
+            "style":  vnet_style,
+            "x":      abs_x,
+            "y":      abs_y,
+            "w":      vnet_w,
+            "h":      vnet_h,
+            "parent": "1",
+        })
+        return vnet_w, vnet_h
+
+    current_y = HS_CANVAS_Y
+
+    # Tier 0: boundary nodes
+    if boundary_nodes:
+        for i, bn in enumerate(boundary_nodes):
+            positions[bn["id"]] = (HS_CANVAS_X + i * (CELL_W + 60), current_y, CELL_W, CELL_H)
+        current_y += CELL_H + tier_gap
+
+    def _layout_tier(vnet_list: List[str], is_hub: bool, is_isolated: bool) -> int:
+        """Lay out a tier of VNets horizontally. Returns the maximum VNet height."""
+        cursor_x = HS_CANVAS_X
+        max_h = 0
+        for vnet_id in vnet_list:
+            vw, vh = _layout_vnet(vnet_id, cursor_x, current_y, is_hub=is_hub, is_isolated=is_isolated)
+            cursor_x += vw + vnet_h_gap
+            max_h = max(max_h, vh)
+        return max_h
+
+    if hub_vnets:
+        current_y += _layout_tier(hub_vnets, is_hub=True, is_isolated=False) + tier_gap
+
+    if spoke_vnets:
+        current_y += _layout_tier(spoke_vnets, is_hub=False, is_isolated=False) + tier_gap
+
+    if isolated_vnets:
+        current_y += _layout_tier(isolated_vnets, is_hub=False, is_isolated=True) + tier_gap
+
+    # Unattached resources
+    if unattached:
+        ua_cid  = "hs_unattached"
+        inner_x = HS_CANVAS_X + HS_VNET_PAD
+        inner_y = current_y + vnet_header
+        cols    = min(HS_RESOURCE_COLS, len(unattached))
+        ua_pos, content_w, content_h = _grid_layout(unattached, inner_x, inner_y, cols, spacing=spacing)
+        positions.update(ua_pos)
+        ua_w = max(content_w, CELL_W) + 2 * HS_VNET_PAD
+        ua_h = content_h + vnet_header + 2 * HS_VNET_PAD
+        containers.append({
+            "id":     ua_cid,
+            "label":  "Other Resources",
+            "style":  UNATTACHED_STYLE,
+            "x":      HS_CANVAS_X,
+            "y":      current_y,
+            "w":      ua_w,
+            "h":      ua_h,
+            "parent": "1",
+        })
+
+    return positions, containers
 
 
 def generate_drawio(cfg: Config) -> None:
@@ -2414,7 +2795,17 @@ def generate_drawio(cfg: Config) -> None:
     containers: List[Dict] = []
     sp = _spacing_factor(cfg.spacing)
     if cfg.layout == "VNET>SUBNET":
-        positions, containers = layout_nodes_vnet(nodes, edges, spacing=sp)
+        hub_ids = _detect_hub_vnet_ids(nodes, edges) if cfg.subnetColors else set()
+        positions, containers = layout_nodes_vnet(
+            nodes, edges, spacing=sp,
+            subnet_colors=cfg.subnetColors, hub_vnet_ids=hub_ids,
+        )
+    elif cfg.layout == "HUB>SPOKE":
+        hub_ids = _detect_hub_vnet_ids(nodes, edges)
+        positions, containers = layout_nodes_hub_spoke(
+            nodes, edges, spacing=sp,
+            subnet_colors=cfg.subnetColors, hub_vnet_ids=hub_ids,
+        )
     elif cfg.layout == "SUB>REGION>RG>NET":
         positions, containers = layout_nodes_sub_rg_net_bands(nodes, edges, spacing=sp)
     else:
@@ -2444,10 +2835,10 @@ def generate_drawio(cfg: Config) -> None:
         cg.set("height", str(cont["h"]))
         cg.set("as", "geometry")
 
-    # Add subnet icon decorations inside VNET>SUBNET subnet containers
-    if cfg.layout == "VNET>SUBNET":
+    # Add subnet icon decorations inside VNET>SUBNET and HUB>SPOKE subnet containers
+    if cfg.layout in {"VNET>SUBNET", "HUB>SPOKE"}:
         for cont in containers:
-            if cont["id"].startswith("subnet_"):
+            if cont["id"].startswith("subnet_") or cont["id"].startswith("hs_subnet_"):
                 icon_id = cont["id"] + "_icon"
                 ic = ET.SubElement(root, "mxCell")
                 ic.set("id", icon_id)
@@ -2471,7 +2862,7 @@ def generate_drawio(cfg: Config) -> None:
         "microsoft.network/virtualnetworks",
         "microsoft.network/virtualnetworks/subnets",
     }
-    is_vnet_layout = cfg.layout == "VNET>SUBNET"
+    is_vnet_layout = cfg.layout in {"VNET>SUBNET", "HUB>SPOKE"}
 
     for node in nodes:
         nid = node["id"]
@@ -2740,7 +3131,7 @@ def generate_drawio(cfg: Config) -> None:
         edge_id = f"e_{stable_id(e['source'] + e['target'] + e['kind'])}"
         ec = ET.SubElement(root, "mxCell")
         ec.set("id", edge_id)
-        ec.set("value", e["kind"])
+        ec.set("value", _edge_label(e["kind"]) if cfg.edgeLabels else "")
         ec.set("style", _edge_style(e["kind"], msft=False))
         ec.set("edge", "1")
         ec.set("source", src)
@@ -3278,7 +3669,7 @@ def _render_msft_mode(
         edge_id = f"e_{stable_id(e['source'] + e['target'] + e['kind'])}"
         ec = ET.SubElement(root, "mxCell")
         ec.set("id", edge_id)
-        ec.set("value", e["kind"])
+        ec.set("value", _edge_label(e["kind"]) if cfg.edgeLabels else "")
         ec.set("style", _edge_style(e["kind"], msft=True))
         ec.set("edge", "1")
         ec.set("source", src)

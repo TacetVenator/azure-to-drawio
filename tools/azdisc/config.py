@@ -9,7 +9,7 @@ from typing import List
 
 log = logging.getLogger(__name__)
 
-VALID_LAYOUTS = {"REGION>RG>TYPE", "VNET>SUBNET", "SUB>REGION>RG>NET"}
+VALID_LAYOUTS = {"REGION>RG>TYPE", "VNET>SUBNET", "SUB>REGION>RG>NET", "HUB>SPOKE"}
 VALID_DIAGRAM_MODES = {"BANDS", "MSFT", "L2R"}
 VALID_SPACINGS = {"compact", "spacious"}
 VALID_EXPAND_SCOPES = {"related", "all"}
@@ -32,6 +32,8 @@ class Config:
     expandScope: str = "related"
     inventoryGroupBy: str = "type"
     networkDetail: str = "full"
+    edgeLabels: bool = False
+    subnetColors: bool = False
 
     def out(self, filename: str) -> Path:
         return Path(self.outputDir) / filename
@@ -52,7 +54,7 @@ def load_config(path: str) -> Config:
         raise ValueError(f"Config missing required keys: {missing}")
     layout = data.get("layout", "REGION>RG>TYPE")
     if layout not in VALID_LAYOUTS:
-        raise ValueError(f"Unsupported layout: {layout!r}. Valid: {VALID_LAYOUTS}")
+        raise ValueError(f"Unsupported layout: {layout!r}. Valid: {sorted(VALID_LAYOUTS)}")
     diagram_mode = data.get("diagramMode", "BANDS")
     if diagram_mode not in VALID_DIAGRAM_MODES:
         raise ValueError(f"Unsupported diagramMode: {diagram_mode!r}. Valid: {sorted(VALID_DIAGRAM_MODES)}")
@@ -86,6 +88,8 @@ def load_config(path: str) -> Config:
         expandScope=expand_scope,
         inventoryGroupBy=inventory_group_by,
         networkDetail=network_detail,
+        edgeLabels=data.get("edgeLabels", False),
+        subnetColors=data.get("subnetColors", False),
     )
     log.info("Loaded config for app=%s, subs=%d, seedRGs=%d", cfg.app, len(cfg.subscriptions), len(cfg.seedResourceGroups))
     return cfg
