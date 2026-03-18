@@ -249,7 +249,7 @@ The tool reads a JSON configuration file. An example is provided at `app/myapp/c
 | `outputDir` | `string` | Yes | — | Directory where all output files are written. Created automatically if it does not exist. |
 | `includeRbac` | `bool` | No | `false` | When `true`, the RBAC stage queries `authorizationresources` for role assignments and adds `rbac_assignment` edges to the graph. |
 | `layout` | `string` | No | `"REGION>RG>TYPE"` | Diagram layout mode. Must be one of: `"REGION>RG>TYPE"`, `"VNET>SUBNET"`, `"SUB>REGION>RG>NET"`. See [Layout Modes](#layout-modes). |
-| `diagramMode` | `string` | No | `"BANDS"` | Diagram rendering mode. Must be one of: `"BANDS"`, `"MSFT"`. See [Diagram Modes](#diagram-modes). |
+| `diagramMode` | `string` | No | `"BANDS"` | Diagram rendering mode. Must be one of: `"BANDS"`, `"MSFT"`, `"L2R"`. See [Diagram Modes](#diagram-modes). |
 | `spacing` | `string` | No | `"compact"` | Diagram spacing preset. Must be one of: `"compact"`, `"spacious"`. See [Spacing](#spacing). |
 
 ---
@@ -406,6 +406,43 @@ UDR side panels are placed to the right of the region containers and connected t
 
 **Best for:** Architecture documentation, presentations, Microsoft Architecture Center-style diagrams.
 
+### `L2R`
+
+Left-to-Right rendering mode. Resources and network items within each resource group are split into two side-by-side sections: compute/storage resources on the left, directly-attached network resources on the right. Network items not directly connected to resources in the seed RGs are omitted from the main canvas and summarised in a context box instead.
+
+```
+┌── Subscription ...00000001 ────────────────────────────────────────────────┐
+│  ┌── Region: eastus ─────────────────────────────────────────────────────┐ │
+│  │  ┌── RG: rg-prod ───────────────────────────────────────────────────┐ │ │
+│  │  │  Resources                  │  Network                           │ │ │
+│  │  │  ┌────────┐ ┌────────┐      │  ┌────────┐ ┌────────┐ ┌────────┐  │ │ │
+│  │  │  │ vm-web │ │ vm-app │      │  │  vnet  │ │  nsg   │ │  udr   │  │ │ │
+│  │  │  └────────┘ └────────┘      │  └────────┘ └────────┘ └────────┘  │ │ │
+│  │  └──────────────────────────────────────────────────────────────────┘ │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+└────────────────────────────────────────────────────────────────────────────┘
+┌── Network context (indirect) ─────────────────────────────────────────────┐
+│  hub-vnet (peering) · shared-nsg                                           │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+Key differences from `BANDS` and `MSFT` modes:
+
+| Feature | BANDS | MSFT | L2R |
+|---------|-------|------|-----|
+| Region grouping | Implicit | Explicit dashed container | Explicit dashed container |
+| Resource group grouping | Implicit | Rounded container | Rounded container |
+| Node parenting | All nodes → root | Hierarchical: region → RG → node | Hierarchical: sub → region → RG → node |
+| Subscription grouping | None | None | Explicit container |
+| Resource / network split | None | Networking vs. Compute categories | Left (resources) / Right (network) columns |
+| Network filtering | All shown | All shown | Only directly-attached items shown |
+| UDR display | Callout boxes | Side panels | Context box (indirect items) |
+| Edge style | Labeled orthogonal | Orthogonal without labels | Minimal orthogonal, no labels |
+
+Each resource group container shows a "Resources" header on the left and a "Network" header on the right. Only network items with a direct attachment edge from a resource in the seed RGs appear in the diagram; all other network items (hub VNets, shared NSGs, etc.) are listed in a context box below the subscriptions.
+
+**Best for:** Application-centric views where the emphasis is on compute workloads with their immediately-attached network infrastructure, without the noise of unrelated network resources.
+
 ---
 
 ## Spacing
@@ -417,7 +454,7 @@ The `spacing` config field controls whitespace between icons in the diagram. Whe
 | `"compact"` | Default. Current behavior — tightest layout. |
 | `"spacious"` | 1.8x gaps and padding between icons. Labels no longer overlap. |
 
-Only the whitespace between icons is scaled. Icon cell sizes (`120x80` in BANDS, `110x70` in MSFT) remain unchanged, so icons look the same — they're just further apart.
+Only the whitespace between icons is scaled. Icon cell sizes (`120x80` in BANDS, `110x70` in MSFT and L2R) remain unchanged, so icons look the same — they're just further apart.
 
 **Example — enable spacious layout:**
 
@@ -433,7 +470,7 @@ Only the whitespace between icons is scaled. Icon cell sizes (`120x80` in BANDS,
 }
 ```
 
-The spacing option works with all layout modes (`REGION>RG>TYPE`, `VNET>SUBNET`, `SUB>REGION>RG>NET`) and all diagram modes (`BANDS`, `MSFT`). In `VNET>SUBNET` mode, container padding (VNet boxes, subnet boxes) is also scaled so inner resources have more room. In `MSFT` mode, RG containers, region containers, and type section headers all grow proportionally.
+The spacing option works with all layout modes (`REGION>RG>TYPE`, `VNET>SUBNET`, `SUB>REGION>RG>NET`) and all diagram modes (`BANDS`, `MSFT`, `L2R`). In `VNET>SUBNET` mode, container padding (VNet boxes, subnet boxes) is also scaled so inner resources have more room. In `MSFT` mode, RG containers, region containers, and type section headers all grow proportionally. In `L2R` mode, all container padding and inter-icon gaps scale proportionally.
 
 **When to use spacious:**
 - Diagrams with long resource names (labels overlap their neighbors)
@@ -806,7 +843,7 @@ azure-to-drawio/
 ├── app/myapp/
 │   └── config.json                    # Example configuration file
 └── .github/workflows/
-    └── tests.yml                      # CI: pytest, BANDS + MSFT diagram generation, artifact upload, PR comments
+    └── tests.yml                      # CI: pytest, all layout × mode combinations via test-all, artifact upload, PR comments
 ```
 
 ---
@@ -824,7 +861,7 @@ All tests run entirely offline using fixture data — no Azure credentials or ne
 - **Stable IDs** — Determinism, fixed length (16 hex chars), case insensitivity
 - **Edge extraction** — All 22 edge kinds individually (including firewall, bastion, container apps, app insights, app gateway, logic apps), sort order, no duplicates
 - **Child resources** — Type detection heuristic, parent ID derivation, attribute collection (VM SKU/image, SQL SKU)
-- **Layout engines** — `REGION>RG>TYPE`, `VNET>SUBNET`, `SUB>REGION>RG>NET`, and `MSFT` mode: determinism, positive coordinates, no overlapping nodes, correct cell dimensions
+- **Layout engines** — `REGION>RG>TYPE`, `VNET>SUBNET`, `SUB>REGION>RG>NET`, `MSFT` mode, and `L2R` mode: determinism, positive coordinates, no overlapping nodes, correct cell dimensions
 - **Spacing presets** — `compact` (default, backward compatible) and `spacious` (1.8x gaps): config validation, bounding box growth, cell sizes unchanged, label gap sufficiency, no overlaps, integration with all layout/diagram mode combinations
 - **VNET>SUBNET containers** — VNet/subnet container cells exist, correct parent nesting, expected labels
 - **MSFT mode** — Region/RG container hierarchy, type section headers, hierarchical parenting via `parent` attribute, UDR side panels with route details, deterministic layout
@@ -845,11 +882,9 @@ The workflow at `.github/workflows/tests.yml` runs on every push and pull reques
 1. Sets up Python 3.11 and installs `pytest`
 2. Installs the draw.io Desktop CLI (with an `xvfb-run` wrapper for headless export)
 3. Runs the full pytest suite
-4. Generates integration diagrams from the `app_contoso.json` fixture in **both** `BANDS` and `MSFT` diagram modes
-5. Uploads separate artifact bundles for each mode:
-   - `test-diagrams-bands` — `diagram.drawio`, `diagram.svg`, `diagram.png`
-   - `test-diagrams-msft` — `diagram.drawio`, `diagram.svg`, `diagram.png`, `routing.md`, `icons_used.json`
-6. On pull requests, posts (or updates) two separate PR comments — one for each diagram mode — with statistics (node/edge count, icon coverage, UDR counts, PNG size) and download links
+4. Generates integration diagrams for every fixture × layout × diagram mode combination via `test-all` (currently 5 fixtures × 3 layouts × 3 modes = 45 combinations)
+5. Uploads the full `out/test-all` tree as the `test-diagrams-all-combinations` artifact
+6. On pull requests, posts (or updates) a PR comment with a table of node/edge counts and PNG availability for every combination
 
 ---
 

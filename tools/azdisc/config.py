@@ -10,7 +10,7 @@ from typing import List
 log = logging.getLogger(__name__)
 
 VALID_LAYOUTS = {"REGION>RG>TYPE", "VNET>SUBNET", "SUB>REGION>RG>NET"}
-VALID_DIAGRAM_MODES = {"BANDS", "MSFT"}
+VALID_DIAGRAM_MODES = {"BANDS", "MSFT", "L2R"}
 VALID_SPACINGS = {"compact", "spacious"}
 VALID_EXPAND_SCOPES = {"related", "all"}
 VALID_INVENTORY_GROUP_BYS = {"type", "rg"}
@@ -55,7 +55,7 @@ def load_config(path: str) -> Config:
         raise ValueError(f"Unsupported layout: {layout!r}. Valid: {VALID_LAYOUTS}")
     diagram_mode = data.get("diagramMode", "BANDS")
     if diagram_mode not in VALID_DIAGRAM_MODES:
-        raise ValueError(f"Unsupported diagramMode: {diagram_mode!r}. Valid: {VALID_DIAGRAM_MODES}")
+        raise ValueError(f"Unsupported diagramMode: {diagram_mode!r}. Valid: {sorted(VALID_DIAGRAM_MODES)}")
     spacing = data.get("spacing", "compact")
     if spacing not in VALID_SPACINGS:
         raise ValueError(f"Unsupported spacing: {spacing!r}. Valid: {VALID_SPACINGS}")
