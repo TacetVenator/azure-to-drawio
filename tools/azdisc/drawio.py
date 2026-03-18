@@ -184,6 +184,11 @@ L2R_EDGE_STYLE = (
     "edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;"
     "strokeColor=#546E7A;strokeWidth=1.5;"
 )
+# Blue dashed edge style for VNET/Subnet/NIC connections
+L2R_NET_EDGE_STYLE = (
+    "edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;"
+    "strokeColor=#1976D2;strokeWidth=2;dashed=1;dashPattern=6 4;"
+)
 
 # Network types shown on the right (network section) in L2R mode
 _L2R_NETWORK_TYPES = {
@@ -210,6 +215,11 @@ _L2R_NETWORK_TYPES = {
 # Edges drawn in L2R mode — only resource→network attachment edges + boundaries
 _L2R_DRAW_EDGE_KINDS = {
     "vm->nic",
+    "nic->subnet",
+    "subnet->vnet",
+    "nic->nsg",
+    "subnet->nsg",
+    "subnet->routeTable",
     "webApp->subnet",
     "containerEnv->subnet",
     "privateEndpoint->subnet",
@@ -2429,6 +2439,11 @@ def _render_l2r_mode(
         parent_id = node_parents.get(nid, LAYER_RESOURCES)
 
         style = _node_style(node, icon_map, msft_icons)
+        # Force text color to black for L2R mode
+        if "fontColor=" not in style:
+            style += ";fontColor=#000000;"
+        else:
+            style = re.sub(r"fontColor=#[0-9A-Fa-f]+", "fontColor=#000000", style)
         t = node.get("type", "")
         if style == EXTERNAL_STYLE:
             pass
@@ -2490,7 +2505,11 @@ def _render_l2r_mode(
         ec = ET.SubElement(root, "mxCell")
         ec.set("id", edge_id)
         ec.set("value", _edge_label(e["kind"]) if cfg.edgeLabels else "")
-        ec.set("style", L2R_EDGE_STYLE)
+        # Use blue dashed style for VNET/Subnet/NIC edges
+        if e["kind"] in {"nic->subnet", "subnet->vnet"}:
+            ec.set("style", L2R_NET_EDGE_STYLE)
+        else:
+            ec.set("style", L2R_EDGE_STYLE)
         ec.set("edge", "1")
         ec.set("source", src)
         ec.set("target", tgt)
