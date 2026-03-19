@@ -84,7 +84,21 @@ def _extract_related_ids(resource: Dict) -> Set[str]:
 
     elif t == "microsoft.network/virtualnetworks/subnets" or "/subnets/" in (resource.get("id") or "").lower():
         _add(_safe_get(p, "networkSecurityGroup", "id"))
-        _add(_safe_get(p, "routeTable", "id"))
+        rt_id = _safe_get(p, "routeTable", "id")
+        if rt_id:
+            ids.add(normalize_id(rt_id))
+            # Always try to resolve UDR even if in different RG/sub
+            # Add parent RG and subscription for cross-sub scenarios
+            parts = rt_id.split("/")
+            if "subscriptions" in parts and "resourceGroups" in parts:
+                try:
+                    sub_idx = parts.index("subscriptions") + 1
+                    rg_idx = parts.index("resourceGroups") + 1
+                    sub_id = parts[sub_idx]
+                    rg_name = parts[rg_idx]
+                    ids.add(f"/subscriptions/{sub_id}/resourceGroups/{rg_name}")
+                except Exception:
+                    pass
 
     elif t == "microsoft.network/networksecuritygroups":
         for rule in _safe_get(p, "securityRules") or []:
@@ -244,8 +258,6 @@ def run_expand(cfg: Config) -> None:
         referenced = {normalize_id(i) for i in referenced}
 
         # Derive parent resource IDs for child resources (e.g. VNET from subnet ID).
-        # This ensures cross-resource-group parent resources are fetched even when
-        # they are not directly referenced in any property.
         parent_ids = _derive_parent_ids(referenced)
         referenced.update(parent_ids)
 
@@ -254,7 +266,14 @@ def run_expand(cfg: Config) -> None:
             log.info("Expansion converged after %d iteration(s).", iteration)
             break
         log.info("Iteration %d: fetching %d missing resources", iteration + 1, len(missing))
-        fetched = query_by_ids(sorted(missing), cfg.subscriptions)
+        # Support cross-subscription/resource group fetch
+        fetched = []
+        for m in sorted(missing):
+            # If m is a full ARM ID, try to fetch from all subscriptions
+            if m.startswith("/subscriptions/"):
+                fetched.extend(query_by_ids([m], cfg.subscriptions))
+            else:
+                fetched.extend(query_by_ids([m], cfg.subscriptions))
         fetched_ids = set()
         for r in fetched:
             nid = normalize_id(r["id"])
