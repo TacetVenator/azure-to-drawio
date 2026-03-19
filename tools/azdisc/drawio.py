@@ -129,6 +129,11 @@ MSFT_TYPE_HEADER_STYLE = "text;html=1;align=left;verticalAlign=top;resizable=0;p
 
 # ---------------------------------------------------------------------------
 # L2R mode styles and constants
+# Blue dotted edge style for VM-to-SQL connectivity
+L2R_SQL_EDGE_STYLE = (
+    "edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;"
+    "strokeColor=#1976D2;strokeWidth=2;dashed=1;dashPattern=4 4;"
+)
 # ---------------------------------------------------------------------------
 
 # L2R layout dimensions
@@ -214,6 +219,7 @@ _L2R_NETWORK_TYPES = {
 
 # Edges drawn in L2R mode — only resource→network attachment edges + boundaries
 _L2R_DRAW_EDGE_KINDS = {
+    # Core resource-network attachment edges
     "vm->nic",
     "nic->subnet",
     "subnet->vnet",
@@ -230,6 +236,14 @@ _L2R_DRAW_EDGE_KINDS = {
     "onPrem->gateway",
     "appInsights->dependency",
     "flowLog->flow",
+    # Added: peering and attachment edges for network clarity
+    "vnet->peeredVnet",
+    "publicIp->attachment",
+    "loadBalancer->backendNic",
+    "firewall->publicIp",
+    "bastion->publicIp",
+    "vm->disk",
+    # Add more as needed for network visibility
 }
 
 # Network detail compact mode — resource types hidden from the diagram and
@@ -2458,14 +2472,17 @@ def _render_l2r_mode(
 
         _emit_resource_cell(root, node, sid, style, x, y, w, h, parent_id=parent_id)
 
+
+    # Calculate far-right x for info boxes
+    max_abs_x = max(
+        (c["x"] + c["w"] for c in containers if c.get("parent") == "1"),
+        default=100,
+    )
+    ctx_x = max_abs_x + 60
+    ctx_y = 60
+
     # Emit the indirect network context info box at the far right
     if indirect_info:
-        max_abs_x = max(
-            (c["x"] + c["w"] for c in containers if c.get("parent") == "1"),
-            default=100,
-        )
-        ctx_x = max_abs_x + 60
-        ctx_y = 60
         ctx_title = "Network Context"
         ctx_separator = "\u2500" * 22
         ctx_label = "\n".join([ctx_title, ctx_separator] + indirect_info)
@@ -2486,7 +2503,124 @@ def _render_l2r_mode(
         cbg.set("height", str(ctx_h))
         cbg.set("as", "geometry")
 
+    # --- Custom summary info box ---
+    # Build summary details for NICs, VNETs, Subnets, VMs, and public entrypoints
+    node_by_id = {n["id"]: n for n in nodes}
+    edges_from = defaultdict(list)
+    for e in edges:
+        edges_from[e["source"]].append((e["kind"], e["target"]))
+
+    # Collect NICs
+    nics = [n for n in nodes if n.get("type", "").lower() == "microsoft.network/networkinterfaces"]
+    nics_lines = []
+    for nic in nics:
+        name = nic.get("name", "?")
+        ip = None
+        ipconfigs = nic.get("properties", {}).get("ipConfigurations", [])
+        if ipconfigs:
+            ip = ipconfigs[0].get("properties", {}).get("privateIPAddress")
+        nics_lines.append(f"- {name}: {ip if ip else 'N/A'}")
+
+    # Collect VNETs
+    vnets = [n for n in nodes if n.get("type", "").lower() == "microsoft.network/virtualnetworks"]
+    vnet_lines = []
+    for vnet in vnets:
+        name = vnet.get("name", "?")
+        cidrs = vnet.get("properties", {}).get("addressSpace", {}).get("addressPrefixes", [])
+        vnet_lines.append(f"- {name}: {', '.join(cidrs) if cidrs else 'N/A'}")
+
+    # Collect Subnets
+    subnets = [n for n in nodes if n.get("type", "").lower() == "microsoft.network/virtualnetworks/subnets"]
+    subnet_lines = []
+    for subnet in subnets:
+        name = subnet.get("name", "?")
+        cidr = subnet.get("properties", {}).get("addressPrefix")
+        subnet_lines.append(f"- {name}: {cidr if cidr else 'N/A'}")
+
+    # Collect VMs
+    vms = [n for n in nodes if n.get("type", "").lower() == "microsoft.compute/virtualmachines"]
+    vm_lines = []
+    for vm in vms:
+        name = vm.get("name", "?")
+        # Disks
+        disks = []
+        os_disk = vm.get("properties", {}).get("storageProfile", {}).get("osDisk", {})
+        if os_disk.get("name"):
+            disks.append(os_disk["name"])
+        for dd in vm.get("properties", {}).get("storageProfile", {}).get("dataDisks", []) or []:
+            if dd.get("name"):
+                disks.append(dd["name"])
+        # NICs
+        vm_nics = []
+        for kind, tgt in edges_from.get(vm["id"], []):
+            if kind == "vm->nic":
+                nic = node_by_id.get(tgt)
+                if nic:
+                    vm_nics.append(nic.get("name", tgt.split("/")[-1]))
+        vm_lines.append(f"- {name}")
+        if disks:
+            for d in disks:
+                vm_lines.append(f"   - Storage disk: {d}")
+        if vm_nics:
+            for n in vm_nics:
+                vm_lines.append(f"   - NIC: {n}")
+
+    # Collect public entrypoints (public IPs)
+    public_ips = [n for n in nodes if n.get("type", "").lower() == "microsoft.network/publicipaddresses"]
+    public_lines = []
+    for pip in public_ips:
+        name = pip.get("name", "?")
+        ip = pip.get("properties", {}).get("ipAddress")
+        public_lines.append(f"- {name}: {ip if ip else 'N/A'} (Public Entrypoint)")
+
+    # Compose summary text
+    summary_lines = []
+    if public_lines:
+        summary_lines.append("Public Entrypoints:")
+        summary_lines.extend(public_lines)
+        summary_lines.append("")
+    if nics_lines:
+        summary_lines.append("NICs:")
+        summary_lines.extend(nics_lines)
+        summary_lines.append("")
+    if vnet_lines:
+        summary_lines.append("VNETs:")
+        summary_lines.extend(vnet_lines)
+        summary_lines.append("")
+    if subnet_lines:
+        summary_lines.append("Subnets:")
+        summary_lines.extend(subnet_lines)
+        summary_lines.append("")
+    if vm_lines:
+        summary_lines.append("Virtual Machines:")
+        summary_lines.extend(vm_lines)
+        summary_lines.append("")
+
+    if summary_lines:
+        summary_title = "Resource Summary"
+        summary_separator = "\u2500" * 22
+        summary_label = "\n".join([summary_title, summary_separator] + summary_lines)
+        n_lines = summary_label.count("\n") + 1
+        summary_w = 340
+        summary_h = max(100, 16 * n_lines + 24)
+        # Place to the right of the context box (or at ctx_x if no context box)
+        summary_x = ctx_x + 340 + 20
+        summary_y = ctx_y
+        sb = ET.SubElement(root, "mxCell")
+        sb.set("id", "l2r_summary_box")
+        sb.set("value", summary_label)
+        sb.set("style", L2R_CONTEXT_BOX_STYLE + ";fontColor=#4E342E;")
+        sb.set("vertex", "1")
+        sb.set("parent", LAYER_LABELS)
+        sbg = ET.SubElement(sb, "mxGeometry")
+        sbg.set("x", str(summary_x))
+        sbg.set("y", str(summary_y))
+        sbg.set("width", str(summary_w))
+        sbg.set("height", str(summary_h))
+        sbg.set("as", "geometry")
+
     # Emit edges — only the minimal set defined for L2R mode
+
     for e in edges:
         if e["kind"] not in _L2R_DRAW_EDGE_KINDS:
             continue
@@ -2496,16 +2630,21 @@ def _render_l2r_mode(
         tgt = node_id_map.get(tgt_raw) or node_id_map.get(e["target"])
         if not src or not tgt:
             continue
-        # Only draw edges where both endpoints are visible in the diagram
-        if e["source"] not in visible_node_ids and src_raw not in visible_node_ids:
-            continue
-        if e["target"] not in visible_node_ids and tgt_raw not in visible_node_ids:
-            continue
+        # Always draw NIC->Subnet and Subnet->VNET edges if both endpoints are visible
+        if e["kind"] in {"nic->subnet", "subnet->vnet"}:
+            if src_raw not in visible_node_ids or tgt_raw not in visible_node_ids:
+                continue
+        else:
+            # Only draw edges where both endpoints are visible in the diagram
+            if e["source"] not in visible_node_ids and src_raw not in visible_node_ids:
+                continue
+            if e["target"] not in visible_node_ids and tgt_raw not in visible_node_ids:
+                continue
         edge_id = f"e_{stable_id(e['source'] + e['target'] + e['kind'])}"
         ec = ET.SubElement(root, "mxCell")
         ec.set("id", edge_id)
         ec.set("value", _edge_label(e["kind"]) if cfg.edgeLabels else "")
-        # Use blue dashed style for VNET/Subnet/NIC edges
+        # Use blue dashed style for NIC->Subnet and Subnet->VNET edges
         if e["kind"] in {"nic->subnet", "subnet->vnet"}:
             ec.set("style", L2R_NET_EDGE_STYLE)
         else:
@@ -2517,6 +2656,91 @@ def _render_l2r_mode(
         eg = ET.SubElement(ec, "mxGeometry")
         eg.set("relative", "1")
         eg.set("as", "geometry")
+
+
+    # --- Generalized inferred connectivity edges (blue dotted) ---
+    from collections import defaultdict
+    def get_vm_nics(vm):
+        nics = []
+        for kind, tgt in edges_from.get(vm["id"], []):
+            if kind == "vm->nic":
+                nic = node_by_id.get(tgt)
+                if nic:
+                    nics.append(nic)
+        return nics
+    def get_nic_subnet(nic):
+        ipconfigs = nic.get("properties", {}).get("ipConfigurations", [])
+        if ipconfigs:
+            return ipconfigs[0].get("properties", {}).get("subnet", {}).get("id")
+        return None
+    def get_subnet_nsg(subnet_id):
+        # Find NSG attached to this subnet
+        for e in edges:
+            if e["kind"] == "subnet->nsg" and normalize_id(e["source"]) == normalize_id(subnet_id):
+                return normalize_id(e["target"])
+        return None
+    def nsg_allows(nsg_id, src_ip="*", dst_port="1433"):
+        # Simple check: allow if any rule allows src_ip to dst_port (default: SQL port)
+        nsg_summaries = extract_nsg_summaries(nodes, edges)
+        rules = nsg_summaries.get(nsg_id, {}).get("rules", [])
+        for rule in rules:
+            if rule["access"].lower() == "allow":
+                # Check protocol/port (simplified)
+                if rule["dstPort"] in (dst_port, "*"):
+                    return True
+        return False
+
+    # Resource pairs to check: (source_type, target_type, label, default_port)
+    inferred_pairs = [
+        ("microsoft.compute/virtualmachines", "microsoft.sql/servers", "SQL access", "1433"),
+        ("microsoft.web/sites", "microsoft.sql/servers", "SQL access", "1433"),
+        ("microsoft.compute/virtualmachines", "microsoft.storage/storageaccounts", "Storage access", "443"),
+        ("microsoft.web/sites", "microsoft.storage/storageaccounts", "Storage access", "443"),
+        ("microsoft.network/privateendpoints", "microsoft.sql/servers", "Private Link", "1433"),
+        ("microsoft.network/privateendpoints", "microsoft.storage/storageaccounts", "Private Link", "443"),
+    ]
+    drawn_pairs = set()
+    for src_type, tgt_type, label, port in inferred_pairs:
+        srcs = [n for n in nodes if n.get("type", "").lower() == src_type]
+        tgts = [n for n in nodes if n.get("type", "").lower() == tgt_type]
+        for src in srcs:
+            src_rg = src.get("resourceGroup", "").lower()
+            for tgt in tgts:
+                if tgt.get("resourceGroup", "").lower() != src_rg:
+                    continue
+                pair = (src["id"], tgt["id"], label)
+                if pair in drawn_pairs:
+                    continue
+                # NSG/ASG check: for VMs and Web Apps, check attached NIC/subnet NSGs
+                allowed = True
+                if src_type in ("microsoft.compute/virtualmachines", "microsoft.web/sites"):
+                    nics = get_vm_nics(src) if src_type == "microsoft.compute/virtualmachines" else []
+                    if nics:
+                        for nic in nics:
+                            subnet_id = get_nic_subnet(nic)
+                            nsg_id = get_subnet_nsg(subnet_id) if subnet_id else None
+                            if nsg_id and not nsg_allows(nsg_id, dst_port=port):
+                                allowed = False
+                                break
+                if not allowed:
+                    continue
+                drawn_pairs.add(pair)
+                src_cell = node_id_map.get(src["id"])
+                tgt_cell = node_id_map.get(tgt["id"])
+                if not src_cell or not tgt_cell:
+                    continue
+                edge_id = f"e_{stable_id(src['id'] + tgt['id'] + label)}"
+                ec = ET.SubElement(root, "mxCell")
+                ec.set("id", edge_id)
+                ec.set("value", label if cfg.edgeLabels else "")
+                ec.set("style", L2R_SQL_EDGE_STYLE)
+                ec.set("edge", "1")
+                ec.set("source", src_cell)
+                ec.set("target", tgt_cell)
+                ec.set("parent", LAYER_TRAFFIC_EDGES)
+                eg = ET.SubElement(ec, "mxGeometry")
+                eg.set("relative", "1")
+                eg.set("as", "geometry")
 
     # Write diagram.drawio
     tree = ET.ElementTree(mxfile)

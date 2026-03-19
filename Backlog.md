@@ -249,3 +249,17 @@ Overlay Azure Policy assignments and compliance state onto the diagram. Non-comp
 **Priority:** Low
 
 A dedicated layout mode showing private endpoint chains across VNets and subscriptions, with DNS resolution paths and private DNS zone associations.
+
+
+---
+# Brain dump prompts. 
+
+```
+Add a feature to create a master report that consolidates, links, and explains all discovery output for architecture documentation or migration preparation.
+It needs to:
+Identify all relevant discovery outputs and their formats (e.g., JSON, diagrams, logs).
+Structure the report with clear sections for each type of information (inventory, topology, dependencies, routing, etc.).
+Link to or embed each output, with explanations for context.
+Ensure the report is easy to navigate and suitable for migration or architecture review.
+Start by exploring the discover.py and related files to understand what outputs are generated, then draft a plan for the report structure.
+```
