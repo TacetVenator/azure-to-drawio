@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+import ipaddress
 from typing import Any, Dict, List
 
 log = logging.getLogger(__name__)
@@ -30,11 +31,13 @@ def _run_az(args: List[str]) -> Dict[str, Any]:
 
 def query(kusto: str, subscriptions: List[str]) -> List[Dict[str, Any]]:
     """Run a Kusto query against ARG and return all rows (handles paging)."""
+    results = []
+    skip = 0
+    all_rows: List[Dict[str, Any]] = []
+    # Query all subscriptions at once (ARG supports multi-sub)
     sub_args = []
     for s in subscriptions:
         sub_args += ["--subscriptions", s]
-    all_rows: List[Dict[str, Any]] = []
-    skip = 0
     while True:
         data = _run_az(
             ["graph", "query", "--graph-query", kusto,
@@ -56,7 +59,49 @@ def query_by_ids(ids: List[str], subscriptions: List[str]) -> List[Dict[str, Any
     all_results: List[Dict[str, Any]] = []
     for i in range(0, len(ids), _BATCH_SIZE):
         batch = ids[i: i + _BATCH_SIZE]
-        id_list = ", ".join(f"'{rid}'" for rid in batch)
-        kusto = f"resources | where id in~ ({id_list}) | project id, name, type, location, subscriptionId, resourceGroup, tags, sku, kind, systemData, properties"
-        all_results.extend(query(kusto, subscriptions))
+        # Group batch by subscription
+        batch_by_sub = {}
+        for rid in batch:
+            # Extract subscription from ARM ID
+            parts = rid.split("/")
+            if "subscriptions" in parts:
+                sub_idx = parts.index("subscriptions") + 1
+                sub_id = parts[sub_idx]
+                batch_by_sub.setdefault(sub_id, []).append(rid)
+            else:
+                batch_by_sub.setdefault("default", []).append(rid)
+        for sub_id, batch_ids in batch_by_sub.items():
+            id_list = ", ".join(f"'{rid}'" for rid in batch_ids)
+            kusto = f"resources | where id in~ ({id_list}) | project id, name, type, location, subscriptionId, resourceGroup, tags, sku, kind, systemData, properties"
+            # Only query the relevant subscription
+            sub_args = ["--subscriptions", sub_id] if sub_id != "default" else []
+            data = _run_az(
+                ["graph", "query", "--graph-query", kusto,
+                 "--first", str(_MAX_ARG_ROWS)]
+                + sub_args
+            )
+            rows = data.get("data", [])
+            all_results.extend(rows)
     return all_results
+
+
+def filter_resources_by_cidr(resources, cidr_blocks):
+    """Filter resources whose IPs/subnets are within the given CIDR blocks."""
+    networks = [ipaddress.ip_network(cidr) for cidr in cidr_blocks]
+    filtered = []
+    for r in resources:
+        # Example: check subnet property
+        subnet = r.get("properties", {}).get("addressPrefix")
+        if subnet:
+            try:
+                net = ipaddress.ip_network(subnet, strict=False)
+                if any(net.subnet_of(n) or net.overlaps(n) for n in networks):
+                    filtered.append(r)
+                else:
+                    log.info(f"Excluded {r.get('id')} not in CIDR scope")
+            except ValueError:
+                log.warning(f"Invalid subnet {subnet} for resource {r.get('id')}")
+        else:
+            # Optionally handle other IP properties
+            filtered.append(r)  # Keep if no subnet info
+    return filtered
