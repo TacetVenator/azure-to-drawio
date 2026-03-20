@@ -2964,6 +2964,8 @@ def generate_drawio(cfg: Config) -> None:
                 ig.set("as", "geometry")
 
     node_id_map: Dict[str, str] = {}
+    container_node_id_map: Dict[str, str] = {}
+    emitted_node_ids: set[str] = set()
 
     # In VNET>SUBNET mode, VNet and subnet nodes are represented as containers
     # so they should not also be emitted as icon cells.
@@ -2980,6 +2982,19 @@ def generate_drawio(cfg: Config) -> None:
 
         # Skip VNet/subnet nodes in VNET>SUBNET mode — shown as containers
         if is_vnet_layout and node.get("type", "") in vnet_subnet_types:
+            node_type = node.get("type", "").lower()
+            if node_type == "microsoft.network/virtualnetworks":
+                container_node_id_map[nid] = (
+                    "hs_vnet_" + stable_id(nid)
+                    if cfg.layout == "HUB>SPOKE"
+                    else "vnet_" + stable_id(nid)
+                )
+            elif node_type == "microsoft.network/virtualnetworks/subnets":
+                container_node_id_map[nid] = (
+                    "hs_subnet_" + stable_id(nid)
+                    if cfg.layout == "HUB>SPOKE"
+                    else "subnet_" + stable_id(nid)
+                )
             continue
 
         # Skip subnets that have no in-scope resources attached (orphaned subnets
@@ -3011,6 +3026,7 @@ def generate_drawio(cfg: Config) -> None:
             icons_used["mapped"][t] = icons_used["mapped"].get(t, 0) + 1
 
         _emit_resource_cell(root, node, sid, style, x, y, w, h, parent_id=LAYER_RESOURCES)
+        emitted_node_ids.add(sid)
 
     # Add UDR callouts for route tables (full mode only — compact uses annotations)
     route_table_nodes = [] if compact_mode else [
@@ -3224,9 +3240,10 @@ def generate_drawio(cfg: Config) -> None:
             aeg.set("as", "geometry")
 
     # Add edges with differentiated styles
+    valid_edge_endpoint_ids = container_id_set | emitted_node_ids
     for i, e in enumerate(edges):
-        src = node_id_map.get(e["source"])
-        tgt = node_id_map.get(e["target"])
+        src = container_node_id_map.get(e["source"]) or node_id_map.get(e["source"])
+        tgt = container_node_id_map.get(e["target"]) or node_id_map.get(e["target"])
         if not src or not tgt:
             continue
         # In compact mode skip edges that touch hidden plumbing nodes
@@ -3234,6 +3251,8 @@ def generate_drawio(cfg: Config) -> None:
             continue
         # Skip edges that touch orphaned (unscoped) subnets
         if not is_vnet_layout and (e["source"] in orphaned_subnet_ids or e["target"] in orphaned_subnet_ids):
+            continue
+        if src not in valid_edge_endpoint_ids or tgt not in valid_edge_endpoint_ids:
             continue
         if e["kind"] == "subnet->routeTable":
             continue  # shown via callout
@@ -3650,6 +3669,7 @@ def _render_msft_mode(
             continue
 
         x, y, w, h = positions[nid]
+        # Resource nodes should be parented to their RG container
         parent_id = node_parents.get(nid, "1")
 
         style = _node_style(node, icon_map, msft_icons)

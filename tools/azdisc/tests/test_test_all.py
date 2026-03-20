@@ -10,6 +10,7 @@ import pytest
 
 from tools.azdisc.config import Config, VALID_LAYOUTS, VALID_DIAGRAM_MODES
 from tools.azdisc.graph import build_graph
+from tools.azdisc.tests.test_integration import assert_drawio_references_resolve
 from tools.azdisc.test_all import (
     run_test_all,
     run_render_all,
@@ -83,6 +84,13 @@ class TestRenderCombinations:
             tree = ET.parse(str(combo_dir / "diagram.drawio"))
             assert tree.getroot().tag == "mxfile"
 
+    def test_each_combo_drawio_references_resolve(self, tmp_path):
+        graph = _make_graph(tmp_path / "build")
+        out = tmp_path / "out"
+        render_combinations(graph, "test", ["sub"], ["rg"], out)
+        for combo_dir in out.iterdir():
+            assert_drawio_references_resolve(combo_dir / "diagram.drawio")
+
     def test_graph_json_written_per_combo(self, tmp_path):
         graph = _make_graph(tmp_path / "build")
         out = tmp_path / "out"
@@ -136,6 +144,11 @@ class TestRunTestAll:
         for drawio_path in tmp_path.rglob("diagram.drawio"):
             root = ET.parse(str(drawio_path)).getroot()
             assert root.tag == "mxfile", f"Invalid root in {drawio_path}"
+
+    def test_each_combination_drawio_references_resolve(self, tmp_path):
+        run_test_all(str(tmp_path))
+        for drawio_path in tmp_path.rglob("diagram.drawio"):
+            assert_drawio_references_resolve(drawio_path)
 
     def test_no_build_temp_dirs_left_behind(self, tmp_path):
         run_test_all(str(tmp_path))

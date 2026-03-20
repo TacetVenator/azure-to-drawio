@@ -21,6 +21,19 @@ from tools.azdisc.drawio import generate_drawio, _try_export
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+def assert_drawio_references_resolve(drawio_path: Path) -> None:
+    """Assert that all draw.io ID references point to existing cells."""
+    root = ET.parse(str(drawio_path)).getroot()
+    ids = {el.get("id") for el in root.findall(".//*[@id]")}
+    missing = []
+    for attr in ("parent", "source", "target"):
+        for el in root.findall(f".//*[@{attr}]"):
+            ref = el.get(attr)
+            if ref not in ids:
+                missing.append((attr, el.get("id"), ref))
+    assert not missing, f"Unresolved draw.io references in {drawio_path}: {missing[:10]}"
+
+
 def _make_config(tmp_path: Path) -> Config:
     """Create a Config that writes output into the pytest tmp dir."""
     return Config(
@@ -157,6 +170,10 @@ class TestDrawioGeneration:
         tree = ET.parse(str(drawio_path))
         root = tree.getroot()
         assert root.tag == "mxfile"
+
+    def test_drawio_references_are_valid(self, tmp_path):
+        self._generate(tmp_path)
+        assert_drawio_references_resolve(tmp_path / "diagram.drawio")
 
     def test_drawio_has_diagram_element(self, tmp_path):
         self._generate(tmp_path)
