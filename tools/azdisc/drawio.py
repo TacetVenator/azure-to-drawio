@@ -2471,6 +2471,115 @@ def _render_l2r_mode(
         cbg.set("height", str(ctx_h))
         cbg.set("as", "geometry")
 
+        # Emit custom summary info box (NICs, VNETs, Subnets, VMs, Public IPs)
+        try:
+            node_by_id = {n["id"]: n for n in nodes}
+            edges_from = defaultdict(list)
+            for e in edges:
+                edges_from[e["source"]].append((e["kind"], e["target"]))
+
+            nics = [n for n in nodes if n.get("type", "").lower() == "microsoft.network/networkinterfaces"]
+            nics_lines = []
+            for nic in nics:
+                name = nic.get("name", "?")
+                ip = None
+                ipconfigs = nic.get("properties", {}).get("ipConfigurations", [])
+                if ipconfigs:
+                    ip = ipconfigs[0].get("properties", {}).get("privateIPAddress")
+                nics_lines.append(f"- {name}: {ip if ip else 'N/A'}")
+
+            vnets = [n for n in nodes if n.get("type", "").lower() == "microsoft.network/virtualnetworks"]
+            vnet_lines = []
+            for vnet in vnets:
+                name = vnet.get("name", "?")
+                cidrs = vnet.get("properties", {}).get("addressSpace", {}).get("addressPrefixes", [])
+                vnet_lines.append(f"- {name}: {', '.join(cidrs) if cidrs else 'N/A'}")
+
+            subnets = [n for n in nodes if n.get("type", "").lower() == "microsoft.network/virtualnetworks/subnets"]
+            subnet_lines = []
+            for subnet in subnets:
+                name = subnet.get("name", "?")
+                cidr = subnet.get("properties", {}).get("addressPrefix")
+                subnet_lines.append(f"- {name}: {cidr if cidr else 'N/A'}")
+
+            vms = [n for n in nodes if n.get("type", "").lower() == "microsoft.compute/virtualmachines"]
+            vm_lines = []
+            for vm in vms:
+                name = vm.get("name", "?")
+                disks = []
+                os_disk = vm.get("properties", {}).get("storageProfile", {}).get("osDisk", {})
+                if os_disk.get("name"):
+                    disks.append(os_disk["name"])
+                for dd in vm.get("properties", {}).get("storageProfile", {}).get("dataDisks", []) or []:
+                    if dd.get("name"):
+                        disks.append(dd["name"])
+                vm_nics = []
+                for kind, tgt in edges_from.get(vm["id"], []):
+                    if kind == "vm->nic":
+                        nic = node_by_id.get(tgt)
+                        if nic:
+                            vm_nics.append(nic.get("name", tgt.split("/")[-1]))
+                vm_lines.append(f"- {name}")
+                if disks:
+                    for d in disks:
+                        vm_lines.append(f"   - Storage disk: {d}")
+                if vm_nics:
+                    for n in vm_nics:
+                        vm_lines.append(f"   - NIC: {n}")
+
+            public_ips = [n for n in nodes if n.get("type", "").lower() == "microsoft.network/publicipaddresses"]
+            public_lines = []
+            for pip in public_ips:
+                name = pip.get("name", "?")
+                ip = pip.get("properties", {}).get("ipAddress")
+                public_lines.append(f"- {name}: {ip if ip else 'N/A'} (Public Entrypoint)")
+
+            summary_lines = []
+            if public_lines:
+                summary_lines.append("Public Entrypoints:")
+                summary_lines.extend(public_lines)
+                summary_lines.append("")
+            if nics_lines:
+                summary_lines.append("NICs:")
+                summary_lines.extend(nics_lines)
+                summary_lines.append("")
+            if vnet_lines:
+                summary_lines.append("VNETs:")
+                summary_lines.extend(vnet_lines)
+                summary_lines.append("")
+            if subnet_lines:
+                summary_lines.append("Subnets:")
+                summary_lines.extend(subnet_lines)
+                summary_lines.append("")
+            if vm_lines:
+                summary_lines.append("Virtual Machines:")
+                summary_lines.extend(vm_lines)
+                summary_lines.append("")
+
+            if summary_lines:
+                summary_title = "Resource Summary"
+                summary_separator = "\u2500" * 22
+                summary_label = "\n".join([summary_title, summary_separator] + summary_lines)
+                n_lines = summary_label.count("\n") + 1
+                summary_w = 340
+                summary_h = max(100, 16 * n_lines + 24)
+                # Place to the right of the context box (or at ctx_x if no context box)
+                summary_x = ctx_x + 340 + 20 if 'ctx_x' in locals() else 400
+                summary_y = ctx_y if 'ctx_y' in locals() else 60
+                sb = ET.SubElement(root, "mxCell")
+                sb.set("id", "l2r_summary_box")
+                sb.set("value", summary_label)
+                sb.set("style", L2R_CONTEXT_BOX_STYLE + ";fontColor=#4E342E;")
+                sb.set("vertex", "1")
+                sb.set("parent", LAYER_LABELS)
+                sbg = ET.SubElement(sb, "mxGeometry")
+                sbg.set("x", str(summary_x))
+                sbg.set("y", str(summary_y))
+                sbg.set("width", str(summary_w))
+                sbg.set("height", str(summary_h))
+                sbg.set("as", "geometry")
+        except Exception as ex:
+            log.warning("Failed to generate summary info box: %s", ex)
     # Emit edges — only the minimal set defined for L2R mode
     for e in edges:
         if e["kind"] not in _L2R_DRAW_EDGE_KINDS:
