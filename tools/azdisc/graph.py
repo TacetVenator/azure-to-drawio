@@ -97,6 +97,7 @@ def build_node(resource: Dict, is_external: bool = False) -> Dict:
         "resourceGroup": resource.get("resourceGroup", "").lower(),
         "subscriptionId": resource.get("subscriptionId", ""),
         "properties": resource.get("properties") or {},
+        "tags": resource.get("tags") or {},
         "isExternal": is_external,
         "childResources": [],
     }

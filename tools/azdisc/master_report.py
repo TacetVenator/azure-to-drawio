@@ -3,7 +3,7 @@
 Generates a Markdown report consolidating all discovery outputs:
 - inventory.csv, inventory.yaml
 - diagram.drawio
-- catalog.md, edges.md, routing.md
+- catalog.md, edges.md, routing.md, migration.md
 - rbac.json
 - unresolved.json
 
@@ -37,6 +37,7 @@ def generate_master_report(cfg: Config) -> None:
         "- [diagram.drawio](diagram.drawio): Draw.io diagram file.",
         "- [catalog.md](catalog.md): Resource catalog summary.",
         "- [edges.md](edges.md): Resource relationships and dependencies.",
+        "- [migration.md](migration.md): Migration-oriented exposure and dependency assessment.",
         "",
         "---",
         "",

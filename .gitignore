@@ -207,3 +207,4 @@ cython_debug/
 
 # Test results
 /test-results/
+.nvmrc

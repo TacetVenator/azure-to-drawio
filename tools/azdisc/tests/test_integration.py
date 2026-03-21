@@ -237,6 +237,29 @@ class TestDrawioGeneration:
         for name in expected_names:
             assert name in labels, f"Missing label '{name}' in diagram"
 
+    def test_external_inferred_resource_uses_azure_icon_style(self, tmp_path):
+        _seed_output_files(tmp_path)
+        unresolved = [
+            "/subscriptions/sub1/resourcegroups/rg-shared/providers/microsoft.storage/storageaccounts/stshared"
+        ]
+        (tmp_path / "unresolved.json").write_text(json.dumps(unresolved))
+        cfg = _make_config(tmp_path)
+        build_graph(cfg)
+        generate_drawio(cfg)
+
+        drawio_path = tmp_path / "diagram.drawio"
+        tree = ET.parse(str(drawio_path))
+        vertices = tree.findall(".//mxCell[@vertex='1']")
+        target = next(v for v in vertices if v.get("value") == "stshared (external)")
+        style = target.get("style", "")
+
+        assert "Storage_Accounts.svg" in style
+        assert "strokeColor=#b85450" in style
+        assert "dashed=1" in style
+
+        xml_text = drawio_path.read_text()
+        assert "Red dashed resource: unresolved or out-of-scope dependency" in xml_text
+
 
 # ── PNG export ───────────────────────────────────────────────────────────
 

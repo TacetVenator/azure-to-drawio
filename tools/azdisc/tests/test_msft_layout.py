@@ -385,16 +385,10 @@ class TestMsftDrawioGeneration:
                 f"RG {rg.get('id')} parent={rg.get('parent')} not a region"
             )
 
-    def test_resource_nodes_have_rg_parent(self, tmp_path):
-        """Resource cells should have an RG container as parent."""
+    def test_resource_nodes_use_resources_layer(self, tmp_path):
+        """Resource cells should be emitted on the Resources layer."""
         self._generate(tmp_path)
         tree = ET.parse(str(tmp_path / "diagram.drawio"))
-
-        containers = tree.findall(".//mxCell[@connectable='0']")
-        rg_ids = {
-            c.get("id") for c in containers
-            if (c.get("id") or "").startswith("msft_rg_")
-        }
 
         # Non-container vertex cells (excluding id=0, id=1, containers, headers)
         all_vertices = tree.findall(".//mxCell[@vertex='1']")
@@ -407,12 +401,13 @@ class TestMsftDrawioGeneration:
             and not v.get("id", "").startswith("msft_th_")
             and not v.get("id", "").startswith("msft_udr_")
             and not v.get("id", "").startswith("msft_nsg_")
+            and not v.get("id", "").endswith("network_legend")
             and v.get("value") not in boundary_labels
         ]
 
         for cell in resource_cells:
-            assert cell.get("parent") in rg_ids, (
-                f"Resource {cell.get('value')} parent={cell.get('parent')} not an RG"
+            assert cell.get("parent") == "layer_resources", (
+                f"Resource {cell.get('value')} parent={cell.get('parent')} not Resources layer"
             )
 
     def test_drawio_contains_vertex_cells(self, tmp_path):

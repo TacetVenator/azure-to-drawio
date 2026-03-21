@@ -270,13 +270,12 @@ class TestSpacingIntegration:
         vertices = tree.findall(".//mxCell[@vertex='1']")
         assert len(vertices) >= 10
 
-    def test_spacious_vnet_generates_valid_xml(self, tmp_path):
+    def test_removed_vnet_layout_rejected(self, tmp_path):
         _seed(tmp_path)
         cfg = _make_config(tmp_path, spacing="spacious", layout="VNET>SUBNET")
         build_graph(cfg)
-        generate_drawio(cfg)
-        tree = ET.parse(str(tmp_path / "diagram.drawio"))
-        assert tree.getroot().tag == "mxfile"
+        with pytest.raises(ValueError, match="Unsupported layout"):
+            generate_drawio(cfg)
 
     def test_spacious_msft_generates_valid_xml(self, tmp_path):
         _seed(tmp_path)

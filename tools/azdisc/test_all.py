@@ -1,4 +1,4 @@
-"""Diagram generation for all layout × diagramMode combinations.
+"""Diagram generation for the supported layout × diagramMode combinations.
 
 Two entry points:
   - run_test_all(): for CI / development — exercises all combinations against
@@ -108,7 +108,7 @@ def render_combinations(
 
 
 def run_test_all(output_root: str = "out/test-all") -> None:
-    """Generate diagrams for every fixture × layout × diagramMode combination.
+    """Generate diagrams for every fixture × supported layout × diagramMode combination.
 
     The graph is built once per fixture (not once per combo) for efficiency.
     Each combination gets its own subfolder under <output_root>/<fixture_stem>/.
@@ -202,7 +202,7 @@ def run_report_all(cfg: Config) -> None:
     """Generate all layout × diagramMode × spacing combinations and a Markdown report.
 
     Reads graph.json from cfg.outputDir (produced by the 'graph' stage) and
-    writes each of the 12 combinations (3 layouts × 2 modes × 2 spacings) into
+    writes each supported combination into
     a variants/<layout>_<mode>_<spacing>/ subfolder, then writes a single
     variants/report.md that embeds the PNG for each variant (where available)
     and links to the draw.io file.

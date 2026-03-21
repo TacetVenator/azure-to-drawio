@@ -75,6 +75,7 @@ class TestRenderCombinations:
             assert (combo_dir / "catalog.md").exists(), combo_dir
             assert (combo_dir / "edges.md").exists(), combo_dir
             assert (combo_dir / "routing.md").exists(), combo_dir
+            assert (combo_dir / "migration.md").exists(), combo_dir
 
     def test_each_combo_drawio_is_valid_xml(self, tmp_path):
         graph = _make_graph(tmp_path / "build")
@@ -100,13 +101,13 @@ class TestRenderCombinations:
             assert "nodes" in data and "edges" in data
 
     def test_sub_rg_net_variant_folders_exist(self, tmp_path):
-        """SUB>REGION>RG>NET should produce BANDS and MSFT variant folders."""
+        """SUB>REGION>RG>NET should produce MSFT and L2R variant folders."""
         graph = _make_graph(tmp_path / "build")
         out = tmp_path / "out"
         render_combinations(graph, "test", ["sub"], ["rg"], out)
-        assert (out / "SUB-REGION-RG-NET_BANDS").is_dir()
         assert (out / "SUB-REGION-RG-NET_MSFT").is_dir()
-        for mode in ("BANDS", "MSFT"):
+        assert (out / "SUB-REGION-RG-NET_L2R").is_dir()
+        for mode in ("MSFT", "L2R"):
             drawio = out / f"SUB-REGION-RG-NET_{mode}" / "diagram.drawio"
             assert drawio.exists(), f"Missing drawio for SUB-REGION-RG-NET_{mode}"
             root = ET.parse(str(drawio)).getroot()
@@ -121,7 +122,7 @@ class TestRenderCombinations:
         sub_dirs = [d for d in lz_dir.iterdir() if d.is_dir()]
         assert len(sub_dirs) == len(VALID_LAYOUTS) * len(VALID_DIAGRAM_MODES)
         # SUB>REGION>RG>NET variants should have subscription containers
-        for mode in ("BANDS", "MSFT"):
+        for mode in ("MSFT", "L2R"):
             drawio = lz_dir / f"SUB-REGION-RG-NET_{mode}" / "diagram.drawio"
             assert drawio.exists()
 

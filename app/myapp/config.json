@@ -4,6 +4,16 @@
   "seedResourceGroups": ["rg-app-dev", "rg-app-prod"],
   "outputDir": "app/myapp/out",
   "includeRbac": true,
-  "layout": "REGION>RG>TYPE",
-  "diagramMode": "BANDS"
+  "enableTelemetry": false,
+  "telemetryLookbackDays": 7,
+  "layout": "SUB>REGION>RG>NET",
+  "diagramMode": "MSFT",
+  "spacing": "compact",
+  "expandScope": "related",
+  "inventoryGroupBy": "type",
+  "networkDetail": "full",
+  "edgeLabels": false,
+  "subnetColors": false,
+  "groupByTag": ["Application"],
+  "layoutMagic": false
 }

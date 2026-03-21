@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from tools.azdisc.drawio import (
+    _load_icon_map,
     _load_msft_icon_index,
     _match_msft_icon,
     _msft_svg_style,
@@ -218,6 +219,21 @@ def test_node_style_unknown_when_no_match():
 def test_node_style_external_node():
     node = {"id": "ext1", "type": "external", "isExternal": True}
     assert _node_style(node, {}, {}) == EXTERNAL_STYLE
+
+
+def test_node_style_external_inferred_type_uses_icon_style():
+    assets_dir = Path(__file__).resolve().parents[3] / "assets"
+    icon_map = _load_icon_map(assets_dir)
+    node = {
+        "id": "/subscriptions/sub1/resourcegroups/rg-shared/providers/microsoft.storage/storageaccounts/stshared",
+        "type": "microsoft.storage/storageaccounts",
+        "isExternal": True,
+    }
+    style = _node_style(node, icon_map, {})
+    assert style != EXTERNAL_STYLE
+    assert "Storage_Accounts.svg" in style
+    assert "strokeColor=#b85450" in style
+    assert "dashed=1" in style
 
 
 # ---------------------------------------------------------------------------

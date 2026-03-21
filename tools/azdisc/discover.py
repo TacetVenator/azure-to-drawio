@@ -15,9 +15,46 @@ log = logging.getLogger(__name__)
 _MAX_ITERATIONS = 50
 
 
+def _kusto_quote(value: str) -> str:
+    return value.replace("'", "''")
+
+
 def _rg_filter(rgs: List[str]) -> str:
     quoted = ", ".join(f"'{rg.lower()}'" for rg in rgs)
     return f"resources | where resourceGroup in~ ({quoted}) | project id, name, type, location, subscriptionId, resourceGroup, tags, sku, kind, systemData, properties"
+
+
+def _seed_query(cfg: Config) -> str:
+    clauses: List[str] = []
+    if cfg.seedResourceGroups:
+        quoted = ", ".join(f"'{_kusto_quote(rg.lower())}'" for rg in cfg.seedResourceGroups)
+        clauses.append(f"resourceGroup in~ ({quoted})")
+    for key, value in sorted(cfg.seedTags.items(), key=lambda item: item[0].lower()):
+        clauses.append(
+            f"tostring(tags['{_kusto_quote(key)}']) =~ '{_kusto_quote(value)}'"
+        )
+    for key in sorted(cfg.seedTagKeys, key=str.lower):
+        clauses.append(f"isnotempty(tostring(tags['{_kusto_quote(key)}']))")
+    if not clauses:
+        raise ValueError("At least one seed scope is required")
+    where_clause = " or ".join(f"({clause})" for clause in clauses)
+    return (
+        "resources | where "
+        f"{where_clause} "
+        "| project id, name, type, location, subscriptionId, resourceGroup, tags, sku, kind, systemData, properties"
+    )
+
+
+def _seed_scope_summary(cfg: Config) -> str:
+    parts: List[str] = []
+    if cfg.seedResourceGroups:
+        parts.append(f"RGs={cfg.seedResourceGroups}")
+    if cfg.seedTags:
+        tag_parts = [f"{key}={value}" for key, value in sorted(cfg.seedTags.items(), key=lambda item: item[0].lower())]
+        parts.append(f"tags={tag_parts}")
+    if cfg.seedTagKeys:
+        parts.append(f"tagKeys={cfg.seedTagKeys}")
+    return ", ".join(parts)
 
 
 def _safe_get(obj, *keys):
@@ -223,8 +260,8 @@ def _synthesize_subnets_from_vnets(
 
 
 def run_seed(cfg: Config) -> List[Dict]:
-    log.info("Seeding resources from RGs: %s", cfg.seedResourceGroups)
-    rows = query(_rg_filter(cfg.seedResourceGroups), cfg.subscriptions)
+    log.info("Seeding resources from: %s", _seed_scope_summary(cfg))
+    rows = query(_seed_query(cfg), cfg.subscriptions)
     cfg.ensure_output_dir()
     out = cfg.out("seed.json")
     out.write_text(json.dumps(rows, indent=2, sort_keys=True))

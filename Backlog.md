@@ -2,9 +2,197 @@
 
 Planned improvements and future work for azure-to-drawio, roughly ordered by priority.
 
+## Migration Discovery
+
+### Read-only migration assessment mode
+
+**Priority:** High
+
+Add a migration-focused reporting mode for teams documenting an existing Azure estate before moving into a landing zone.
+
+This mode must work within these constraints:
+- No new Python dependencies
+- No writes or configuration changes in Azure
+- Usable from VDI / hardened corporate laptops
+- Expected access level is often Global Reader only
+- Entra ID visibility may or may not be available
+
+**Goals:**
+- Answer "what is deployed?"
+- Answer "what appears to talk to what?"
+- Answer "how is it exposed?"
+- Answer "what is missing from the evidence?"
+- Provide advice on what to check next when visibility is incomplete
+
+**Work:**
+- Add a migration-oriented report that consolidates inventory, edges, routing, and exposure hints into a single decision-friendly document
+- Clearly distinguish `discovered`, `inferred`, and `unknown` facts
+- Add a "confidence / evidence" marker per relationship source:
+  - ARG / ARM configuration
+  - RBAC visibility
+  - Telemetry-derived
+  - unresolved external reference
+- Add a "next checks" section when permissions or logging gaps limit the output
+
+---
+
+### Tag-seeded discovery (`seedTag` / app-tag discovery)
+
+**Priority:** High
+
+Support starting discovery from one or more tags instead of only `seedResourceGroups`.
+
+This is critical for migration work where an application is scattered across multiple resource groups and subscriptions but consistently tagged, for example:
+- `Application=checkout`
+- `App=my-api`
+- `Workload=crm`
+
+**Work:**
+- Add config support for tag-based seeds, for example:
+  - `seedTags`: exact tag/value pairs
+  - `seedTagKeys`: any resource carrying one of these keys
+- Add an ARG query path that seeds from tags rather than RG names
+- Allow combining tag seeds and RG seeds
+- Document precedence and expected noise level
+- Add app grouping support so diagrams and reports can show a likely application boundary
+
+**Nice-to-have heuristics:**
+- Special handling for `groupByTag=["any"]`
+- Common app tag aliases: `Application`, `App`, `Service`, `Workload`, `System`, `Product`
+
+---
+
+### Exposure report
+
+**Priority:** High
+
+Add a dedicated report for "how is this exposed?" aimed at migration and security review.
+
+**Work:**
+- Identify public entry points where visible from ARM / ARG:
+  - Public IPs
+  - Public load balancers
+  - Application Gateways
+  - Front Door / CDN
+  - Traffic Manager
+  - App Service public endpoints
+  - Storage / Key Vault / SQL public network access settings
+- Summarize private exposure:
+  - Private Endpoints
+  - Private DNS zones
+  - VNet integration
+  - NSG / UDR context already visible in the graph
+- For each exposed service, show:
+  - entry resource
+  - backend / dependent target if inferable
+  - subnet / NSG / route table context if available
+  - whether the evidence is direct or inferred
+- Flag ambiguous cases where the current permissions are insufficient
+
+---
+
+### Missing telemetry and logging advisory
+
+**Priority:** High
+
+Do not assume telemetry exists. Instead, detect likely observability gaps and tell the user what to verify or enable later.
+
+**Work:**
+- Add a report section that checks for the presence of:
+  - Log Analytics workspaces
+  - Application Insights
+  - NSG flow log evidence where visible
+  - Diagnostic settings / monitor resources where discoverable
+- If telemetry is missing or inaccessible, output advisory guidance rather than failing
+- Add clear text such as:
+  - "No App Insights components found in scope"
+  - "No Log Analytics workspace found for this application"
+  - "Unable to confirm NSG flow logs with current permissions"
+- Recommend next checks without attempting to change Azure
+
+**Important:**
+- This project should remain read-only
+- Recommendations must be phrased as follow-up guidance, not automated actions
+
+---
+
+### Shared service and migration-wave analysis
+
+**Priority:** High
+
+Help migration teams understand what must move together and what is shared platform infrastructure.
+
+**Work:**
+- Detect probable shared services:
+  - hub VNets
+  - shared private DNS
+  - shared Log Analytics
+  - shared Key Vaults
+  - shared App Configuration / registries / monitoring
+- Flag cross-RG and cross-subscription dependencies prominently
+- Add a "migration blockers / coupling" view:
+  - shared dependencies
+  - unresolved external references
+  - dependencies outside the seed scope
+- Add a first-pass move-group report:
+  - application resources
+  - shared platform dependencies
+  - ambiguous / unknown dependencies
+
+---
+
+### Optional Entra ID enrichment with graceful fallback
+
+**Priority:** Medium
+
+If Entra ID visibility is available, enrich the output. If it is not, report the gap and continue.
+
+**Work:**
+- Detect and document managed identities and service principals where visible from ARM-side data
+- If Graph / Entra access is available, optionally resolve principal display names and app registrations
+- If not available, continue with object IDs and explicitly say identity detail is incomplete
+- Add documentation around expected limitations under Global Reader-only access
+
+---
+
+### Migration-focused master report
+
+**Priority:** Medium
+
+Extend the existing reporting into a single migration-ready document for stakeholders with low Azure familiarity.
+
+**Sections to add:**
+- What was discovered
+- Application boundary / tag grouping
+- External exposure
+- Key dependencies
+- Shared platform dependencies
+- Missing visibility / missing telemetry
+- Recommended manual validation steps before migration
+- Landing-zone fit observations
+
+**Design goal:**
+- The report should be understandable by delivery teams, architects, and project managers, not just Azure specialists.
+
 ---
 
 ## Icon Coverage
+
+### Use Azure icons for unresolved resources when type is inferable
+
+**Priority:** High
+
+Unresolved / external placeholder nodes currently render as generic red ellipses even when the ARM ID is specific enough to infer an Azure resource type such as VNet, subnet, storage account, or Key Vault.
+
+This loses useful visual context during migration analysis, especially when a dependency points to a shared platform resource outside the current subscription scope.
+
+**Work:**
+- Keep the external / unresolved semantics, but allow icon rendering when `_infer_type_from_id()` yields a known Azure resource type
+- Preserve a clear visual distinction from in-scope resources, for example via border color, badge, or label suffix
+- Fall back to the current external ellipse only when the type remains unknown
+- Add tests covering inferred-type external nodes in the diagram output
+
+---
 
 ### Expand `azure_icon_map.json` to cover all draw.io `azure2` icons
 
@@ -181,6 +369,18 @@ Integrate with Azure Cost Management API to annotate resources with their monthl
 **Priority:** Medium
 
 Allow `config.json` to specify tag filters (include/exclude resources by tag) and color rules (e.g., `"environment=prod"` → red border, `"environment=dev"` → green border).
+
+### Observed-vs-inferred dependency evidence
+
+**Priority:** Medium
+
+Add metadata to relationships so reports can distinguish:
+- configuration-derived dependencies
+- telemetry-observed dependencies
+- RBAC / identity relationships
+- unresolved or external references
+
+This would make migration reports more trustworthy for teams with limited Azure knowledge.
 
 ---
 

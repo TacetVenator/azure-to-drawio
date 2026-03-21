@@ -441,8 +441,9 @@ class TestCrossRgDiagramOutput:
             subscriptions=["sub1"],
             seedResourceGroups=["rg-compute"],
             outputDir=str(tmp_path),
-            layout="VNET>SUBNET",
-            networkDetail="full",  # these tests verify UDR/NSG callout shapes
+            layout="SUB>REGION>RG>NET",
+            diagramMode="MSFT",
+            networkDetail="full",
         )
         build_graph(cfg)
         generate_drawio(cfg)
@@ -452,33 +453,27 @@ class TestCrossRgDiagramOutput:
         self._generate(tmp_path)
         assert (tmp_path / "diagram.drawio").exists()
 
-    def test_drawio_has_vnet_container(self, tmp_path):
+    def test_drawio_has_rg_containers(self, tmp_path):
         self._generate(tmp_path)
         tree = ET.parse(str(tmp_path / "diagram.drawio"))
         containers = tree.findall(".//mxCell[@connectable='0']")
         labels = {c.get("value") for c in containers}
-        assert "spoke-vnet01" in labels, f"Missing VNET container, got: {labels}"
+        assert "rg-compute" in labels
+        assert "rg-networking" in labels
 
-    def test_drawio_has_subnet_container(self, tmp_path):
-        self._generate(tmp_path)
-        tree = ET.parse(str(tmp_path / "diagram.drawio"))
-        containers = tree.findall(".//mxCell[@connectable='0']")
-        labels = {c.get("value") for c in containers}
-        assert "cprmg-subnet01" in labels, f"Missing subnet container, got: {labels}"
-
-    def test_drawio_has_udr_callout(self, tmp_path):
+    def test_drawio_has_udr_panel(self, tmp_path):
         self._generate(tmp_path)
         tree = ET.parse(str(tmp_path / "diagram.drawio"))
         vertices = tree.findall(".//mxCell[@vertex='1']")
-        udr_callouts = [
+        udr_panels = [
             v for v in vertices
-            if v.get("id", "").startswith("udr_")
-            and "Routes:" in (v.get("value") or "")
+            if v.get("id", "").startswith("msft_udr_")
+            and "UDR:" in (v.get("value") or "")
         ]
-        assert len(udr_callouts) >= 1, "Expected UDR callout with route details"
-        callout_text = udr_callouts[0].get("value", "")
-        assert "0.0.0.0/0" in callout_text
-        assert "172.16.0.0/12" in callout_text
+        assert len(udr_panels) >= 1, "Expected MSFT UDR panel with route details"
+        panel_text = udr_panels[0].get("value", "")
+        assert "0.0.0.0/0" in panel_text
+        assert "172.16.0.0/12" in panel_text
 
     def test_drawio_has_vm_node(self, tmp_path):
         self._generate(tmp_path)
@@ -493,15 +488,15 @@ class TestCrossRgDiagramOutput:
         edges = tree.findall(".//mxCell[@edge='1']")
         assert len(edges) >= 3, f"Expected >=3 edges, got {len(edges)}"
 
-    def test_drawio_udr_callout_edge_connects_to_route_table(self, tmp_path):
-        """UDR callout edge should connect from the route table node, not a subnet container."""
+    def test_drawio_udr_panel_edge_connects_to_route_table(self, tmp_path):
+        """UDR detail edges should connect to rendered nodes in MSFT mode."""
         self._generate(tmp_path)
         tree = ET.parse(str(tmp_path / "diagram.drawio"))
         udr_edges = [
             e for e in tree.findall(".//mxCell[@edge='1']")
-            if e.get("id", "").startswith("udr_edge_")
+            if e.get("id", "").startswith("msft_udr_edge_")
         ]
-        assert len(udr_edges) >= 1, "Expected at least one UDR callout edge"
+        assert len(udr_edges) >= 1, "Expected at least one UDR panel edge"
 
         # Collect all element IDs (mxCell + UserObject, since resource nodes
         # use UserObject wrappers whose id is the stable_id)

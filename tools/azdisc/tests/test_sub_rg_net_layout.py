@@ -434,8 +434,92 @@ class TestSubRgNetDrawioGeneration:
         tree = ET.parse(str(tmp_path / "diagram.drawio"))
         vertices = tree.findall(".//mxCell[@vertex='1']")
         labels = {v.get("value") for v in vertices if v.get("value")}
-        for name in ["fw-hub", "bastion-hub", "vnet-hub", "ca-api", "sql-data", "kv-app"]:
+        for name in ["fw-hub", "bastion-hub", "vnet-hub (Hub)", "ca-api", "sql-data", "kv-app"]:
             assert name in labels, f"Missing resource label '{name}'"
+
+    def test_resources_are_emitted_on_resources_layer(self, tmp_path):
+        self._generate(tmp_path)
+        tree = ET.parse(str(tmp_path / "diagram.drawio"))
+        vertices = [v for v in tree.findall(".//mxCell[@vertex='1']") if v.get("connectable") != "0"]
+        resource_vertices = [
+            v for v in vertices
+            if not v.get("id", "").startswith("msft_th_")
+            and not v.get("id", "").startswith("msft_udr_")
+            and not v.get("id", "").startswith("msft_nsg_")
+            and not v.get("id", "").endswith("network_legend")
+        ]
+        assert resource_vertices
+        for vertex in resource_vertices:
+            assert vertex.get("parent") == "layer_resources"
+
+    def test_network_legend_present(self, tmp_path):
+        self._generate(tmp_path)
+        tree = ET.parse(str(tmp_path / "diagram.drawio"))
+        legend = tree.find(".//mxCell[@id='msft_network_legend']")
+        assert legend is not None
+        assert "Network Legend" in (legend.get("value") or "")
+
+    def test_group_by_tag_creates_tag_headers(self, tmp_path):
+        inventory = [
+            {
+                "id": "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Compute/virtualMachines/vm-a",
+                "name": "vm-a",
+                "type": "Microsoft.Compute/virtualMachines",
+                "location": "eastus",
+                "subscriptionId": "sub1",
+                "resourceGroup": "rg1",
+                "tags": {"Application": "checkout"},
+                "properties": {},
+            },
+            {
+                "id": "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.KeyVault/vaults/kv-a",
+                "name": "kv-a",
+                "type": "Microsoft.KeyVault/vaults",
+                "location": "eastus",
+                "subscriptionId": "sub1",
+                "resourceGroup": "rg1",
+                "tags": {"Application": "checkout"},
+                "properties": {},
+            },
+        ]
+        (tmp_path / "inventory.json").write_text(json.dumps(inventory))
+        (tmp_path / "unresolved.json").write_text("[]")
+        cfg = Config(
+            app="tag-group-test",
+            subscriptions=["sub1"],
+            seedResourceGroups=["rg1"],
+            outputDir=str(tmp_path),
+            layout="SUB>REGION>RG>NET",
+            diagramMode="MSFT",
+            groupByTag=["Application"],
+        )
+        build_graph(cfg)
+        from tools.azdisc.drawio import generate_drawio
+        generate_drawio(cfg)
+        tree = ET.parse(str(tmp_path / "diagram.drawio"))
+        labels = {v.get("value") for v in tree.findall(".//mxCell[@vertex='1']") if v.get("value")}
+        assert "Application: checkout" in labels
+
+    def test_layout_magic_changes_output(self, tmp_path):
+        import tempfile
+
+        _seed_output_files(tmp_path)
+        cfg = _make_sub_rg_net_config(tmp_path)
+        build_graph(cfg)
+        from tools.azdisc.drawio import generate_drawio
+        generate_drawio(cfg)
+        xml_plain = (tmp_path / "diagram.drawio").read_text()
+
+        with tempfile.TemporaryDirectory() as tmp2:
+            tmp2_path = Path(tmp2)
+            _seed_output_files(tmp2_path)
+            cfg_magic = _make_sub_rg_net_config(tmp2_path)
+            cfg_magic.layoutMagic = True
+            build_graph(cfg_magic)
+            generate_drawio(cfg_magic)
+            xml_magic = (tmp2_path / "diagram.drawio").read_text()
+
+        assert xml_plain != xml_magic
 
     def test_icons_used_json(self, tmp_path):
         self._generate(tmp_path)
@@ -466,8 +550,8 @@ class TestSubRgNetDrawioGeneration:
 
         assert xml1 == xml2, "SUB>REGION>RG>NET output is not deterministic"
 
-    def test_bands_mode_also_works(self, tmp_path):
-        """SUB>REGION>RG>NET layout should also work with BANDS mode."""
+    def test_removed_bands_mode_rejected(self, tmp_path):
+        """BANDS mode should be rejected on the reduced renderer surface."""
         _seed_output_files(tmp_path)
         cfg = Config(
             app="landing-zone-bands",
@@ -479,64 +563,8 @@ class TestSubRgNetDrawioGeneration:
         )
         build_graph(cfg)
         from tools.azdisc.drawio import generate_drawio
-        generate_drawio(cfg)
-        assert (tmp_path / "diagram.drawio").exists()
-
-    def test_bands_and_msft_produce_different_output(self, tmp_path):
-        """BANDS and MSFT modes should produce different diagrams for SUB>REGION>RG>NET."""
-        import tempfile
-
-        _seed_output_files(tmp_path)
-        cfg_msft = _make_sub_rg_net_config(tmp_path)
-        build_graph(cfg_msft)
-        from tools.azdisc.drawio import generate_drawio
-        generate_drawio(cfg_msft)
-        xml_msft = (tmp_path / "diagram.drawio").read_text()
-
-        with tempfile.TemporaryDirectory() as tmp2:
-            tmp2_path = Path(tmp2)
-            _seed_output_files(tmp2_path)
-            cfg_bands = Config(
-                app="landing-zone-bands",
-                subscriptions=cfg_msft.subscriptions,
-                seedResourceGroups=cfg_msft.seedResourceGroups,
-                outputDir=str(tmp2_path),
-                layout="SUB>REGION>RG>NET",
-                diagramMode="BANDS",
-            )
-            build_graph(cfg_bands)
-            generate_drawio(cfg_bands)
-            xml_bands = (tmp2_path / "diagram.drawio").read_text()
-
-        assert xml_msft != xml_bands, (
-            "BANDS and MSFT modes should produce different XML for SUB>REGION>RG>NET"
-        )
-
-    def test_bands_mode_has_flat_containers(self, tmp_path):
-        """BANDS mode containers should all be parented to root (flat)."""
-        _seed_output_files(tmp_path)
-        cfg = Config(
-            app="landing-zone-bands",
-            subscriptions=["00000000-aaaa-0000-0000-000000000001",
-                           "00000000-bbbb-0000-0000-000000000002",
-                           "00000000-cccc-0000-0000-000000000003"],
-            seedResourceGroups=["rg-connectivity-prod", "rg-app-prod", "rg-data-prod"],
-            outputDir=str(tmp_path),
-            layout="SUB>REGION>RG>NET",
-            diagramMode="BANDS",
-        )
-        build_graph(cfg)
-        from tools.azdisc.drawio import generate_drawio
-        generate_drawio(cfg)
-
-        tree = ET.parse(str(tmp_path / "diagram.drawio"))
-        containers = tree.findall(".//mxCell[@connectable='0']")
-        valid_parents = {"1", "layer_containers"}
-        for c in containers:
-            assert c.get("parent") in valid_parents, (
-                f"BANDS container {c.get('id')} should have parent in {valid_parents}, "
-                f"got '{c.get('parent')}'"
-            )
+        with pytest.raises(ValueError, match="Unsupported diagramMode"):
+            generate_drawio(cfg)
 
 
 # ── _subscription_label unit tests ───────────────────────────────────────
@@ -1078,12 +1106,13 @@ class TestNsgInDiagram:
             outputDir=cfg.outputDir,
             layout=cfg.layout,
             diagramMode=cfg.diagramMode,
-            networkDetail="full",  # test verifies BANDS NSG panel shapes
+            networkDetail="full",
         )
         build_graph(cfg)
         from tools.azdisc.drawio import generate_drawio
-        generate_drawio(cfg)
-        return ET.parse(str(tmp_path / "diagram.drawio"))
+        with pytest.raises(ValueError, match="Unsupported diagramMode"):
+            generate_drawio(cfg)
+        return None
 
     def test_msft_nsg_panels_present(self, tmp_path):
         tree = self._generate_msft(tmp_path)
@@ -1105,14 +1134,5 @@ class TestNsgInDiagram:
         nsg_edges = [e for e in edge_cells if e.get("id", "").startswith("msft_nsg_edge_")]
         assert len(nsg_edges) >= 1, "Expected NSG detail edges in MSFT mode"
 
-    def test_bands_nsg_panels_present(self, tmp_path):
-        tree = self._generate_bands(tmp_path)
-        vertices = tree.findall(".//mxCell[@vertex='1']")
-        nsg_panels = [v for v in vertices if v.get("id", "").startswith("nsg_panel_")]
-        assert len(nsg_panels) >= 1, "Expected at least one NSG panel in BANDS mode"
-
-    def test_bands_nsg_edges_exist(self, tmp_path):
-        tree = self._generate_bands(tmp_path)
-        edge_cells = tree.findall(".//mxCell[@edge='1']")
-        nsg_edges = [e for e in edge_cells if e.get("id", "").startswith("nsg_edge_")]
-        assert len(nsg_edges) >= 1, "Expected NSG detail edges in BANDS mode"
+    def test_bands_mode_rejected_for_nsg_diagram(self, tmp_path):
+        self._generate_bands(tmp_path)

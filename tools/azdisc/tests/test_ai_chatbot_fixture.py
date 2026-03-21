@@ -233,44 +233,13 @@ class TestAiChatbotBandsLayout:
 # ── VNET>SUBNET layout tests ────────────────────────────────────────────
 
 
-class TestAiChatbotVnetLayout:
-    """Test VNET>SUBNET layout mode with the AI chatbot fixture."""
+class TestAiChatbotUnsupportedLayouts:
+    """Removed layouts should be rejected explicitly."""
 
-    def test_generates_valid_xml(self, tmp_path):
+    def test_vnet_subnet_layout_rejected(self, tmp_path):
         graph, cfg = _build(tmp_path, layout="VNET>SUBNET")
-        generate_drawio(cfg)
-        tree = ET.parse(str(tmp_path / "diagram.drawio"))
-        assert tree.getroot().tag == "mxfile"
-
-    def test_two_vnet_containers(self, tmp_path):
-        graph, _ = _build(tmp_path)
-        nodes, edges = graph["nodes"], graph["edges"]
-        _, containers = layout_nodes_vnet(nodes, edges)
-        vnet_containers = [c for c in containers
-                           if c["id"].startswith("vnet_") and not c["id"].startswith("vnet_region_")]
-        assert len(vnet_containers) == 2, (
-            f"Expected 2 VNet containers, got {len(vnet_containers)}"
-        )
-
-    def test_subnet_containers(self, tmp_path):
-        graph, _ = _build(tmp_path)
-        nodes, edges = graph["nodes"], graph["edges"]
-        _, containers = layout_nodes_vnet(nodes, edges)
-        subnet_containers = [c for c in containers
-                             if c["id"].startswith("subnet_")]
-        # 3 spoke subnets + 2 hub subnets = 5
-        assert len(subnet_containers) == 5, (
-            f"Expected 5 subnet containers, got {len(subnet_containers)}"
-        )
-
-    def test_container_labels(self, tmp_path):
-        graph, _ = _build(tmp_path)
-        nodes, edges = graph["nodes"], graph["edges"]
-        _, containers = layout_nodes_vnet(nodes, edges)
-        labels = {c["label"] for c in containers}
-        for name in ["vnet-ai-chat", "vnet-hub", "snet-apps",
-                      "snet-private-endpoints", "AzureFirewallSubnet"]:
-            assert name in labels, f"Missing container label: {name}"
+        with pytest.raises(ValueError, match="Unsupported layout"):
+            generate_drawio(cfg)
 
 
 # ── MSFT layout tests ───────────────────────────────────────────────────
