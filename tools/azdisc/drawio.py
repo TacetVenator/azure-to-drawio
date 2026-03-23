@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .config import Config, VALID_DIAGRAM_MODES, VALID_LAYOUTS
-from .util import normalize_id, stable_id
+from .util import load_json_file, normalize_id, stable_id
 
 log = logging.getLogger(__name__)
 
@@ -579,7 +579,12 @@ def _get(obj: Any, *keys) -> Any:
 def _load_icon_map(assets_dir: Path) -> Dict[str, str]:
     icon_map_path = assets_dir / "azure_icon_map.json"
     if icon_map_path.exists():
-        return json.loads(icon_map_path.read_text())
+        return load_json_file(
+            icon_map_path,
+            context="Azure icon map",
+            expected_type=dict,
+            advice="Repair assets/azure_icon_map.json.",
+        )
     return {}
 
 
@@ -2948,7 +2953,12 @@ def generate_drawio(cfg: Config) -> None:
     graph_path = cfg.out("graph.json")
     if not graph_path.exists():
         raise FileNotFoundError("graph.json not found. Run 'graph' first.")
-    graph = json.loads(graph_path.read_text())
+    graph = load_json_file(
+        graph_path,
+        context="Draw.io stage graph artifact",
+        expected_type=dict,
+        advice="Fix graph.json or rerun the graph stage.",
+    )
     nodes: List[Dict] = graph["nodes"]
     edges: List[Dict] = graph["edges"]
 

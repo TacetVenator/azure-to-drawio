@@ -8,7 +8,7 @@ from typing import Dict, List, Set
 
 from .arg import query, query_by_ids
 from .config import Config
-from .util import extract_arm_ids, normalize_id
+from .util import extract_arm_ids, load_json_file, normalize_id
 
 log = logging.getLogger(__name__)
 
@@ -273,7 +273,12 @@ def run_expand(cfg: Config) -> None:
     seed_path = cfg.out("seed.json")
     if not seed_path.exists():
         raise FileNotFoundError(f"seed.json not found at {seed_path}. Run 'seed' first.")
-    seed: List[Dict] = json.loads(seed_path.read_text())
+    seed: List[Dict] = load_json_file(
+        seed_path,
+        context="Seed stage artifact",
+        expected_type=list,
+        advice="Fix seed.json or rerun the seed stage.",
+    )
 
     collected: Dict[str, Dict] = {normalize_id(r["id"]): r for r in seed}
     unresolved: Set[str] = set()
@@ -340,7 +345,12 @@ def run_rbac(cfg: Config) -> None:
     inv_path = cfg.out("inventory.json")
     if not inv_path.exists():
         raise FileNotFoundError("inventory.json not found. Run 'expand' first.")
-    inventory: List[Dict] = json.loads(inv_path.read_text())
+    inventory: List[Dict] = load_json_file(
+        inv_path,
+        context="Expand stage artifact",
+        expected_type=list,
+        advice="Fix inventory.json or rerun the expand stage.",
+    )
     scopes = {normalize_id(r["id"]) for r in inventory}
     scopes.update({r.get("resourceGroup", "").lower() for r in inventory if r.get("resourceGroup")})
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
 from .config import Config
-from .util import normalize_id
+from .util import load_json_file, normalize_id
 
 log = logging.getLogger(__name__)
 
@@ -23,19 +23,34 @@ def generate_docs(cfg: Config) -> None:
     graph_path = cfg.out("graph.json")
     if not graph_path.exists():
         raise FileNotFoundError("graph.json not found. Run 'graph' first.")
-    graph = json.loads(graph_path.read_text())
+    graph = load_json_file(
+        graph_path,
+        context="Docs stage graph artifact",
+        expected_type=dict,
+        advice="Fix graph.json or rerun the graph stage.",
+    )
     nodes: List[Dict] = graph["nodes"]
     edges: List[Dict] = graph["edges"]
 
     unresolved: List[str] = []
     unresolved_path = cfg.out("unresolved.json")
     if unresolved_path.exists():
-        unresolved = json.loads(unresolved_path.read_text())
+        unresolved = load_json_file(
+            unresolved_path,
+            context="Docs stage unresolved references",
+            expected_type=list,
+            advice="Fix unresolved.json or rerun the expand stage.",
+        )
 
     inventory: List[Dict] = []
     inventory_path = cfg.out("inventory.json")
     if inventory_path.exists():
-        inventory = json.loads(inventory_path.read_text())
+        inventory = load_json_file(
+            inventory_path,
+            context="Docs stage inventory artifact",
+            expected_type=list,
+            advice="Fix inventory.json or rerun the expand stage.",
+        )
 
     rbac_present = cfg.out("rbac.json").exists()
 

@@ -1,11 +1,12 @@
 """Wrapper around `az graph query` for Azure Resource Graph."""
 from __future__ import annotations
 
-import json
 import logging
 import subprocess
 import ipaddress
 from typing import Any, Dict, List
+
+from .util import parse_json_text
 
 log = logging.getLogger(__name__)
 
@@ -23,10 +24,18 @@ def _run_az(args: List[str]) -> Dict[str, Any]:
             f"  cmd: {' '.join(cmd)}\n"
             f"  stderr: {result.stderr.strip()}"
         )
-    try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"Failed to parse az output as JSON: {e}\nOutput: {result.stdout[:500]}")
+    if not result.stdout.strip():
+        raise RuntimeError(
+            f"Azure CLI returned empty stdout for: {' '.join(cmd)}. "
+            f"stderr: {result.stderr.strip() or '<empty>'}"
+        )
+    return parse_json_text(
+        result.stdout,
+        source=' '.join(cmd),
+        context='Azure CLI JSON output',
+        expected_type=dict,
+        advice='Re-run the command with --verbose or check whether az emitted warnings or non-JSON output to stdout.',
+    )
 
 
 def query(kusto: str, subscriptions: List[str]) -> List[Dict[str, Any]]:

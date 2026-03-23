@@ -43,6 +43,7 @@ from .graph import build_graph
 from .drawio import generate_drawio
 from .docs import generate_docs
 from .inventory import generate_csv, generate_yaml
+from .util import load_json_file
 
 log = logging.getLogger(__name__)
 
@@ -141,7 +142,11 @@ def run_test_all(output_root: str = "out/test-all") -> None:
             outputDir=str(build_dir),
         )
         build_graph(build_cfg)
-        graph = json.loads((build_dir / "graph.json").read_text())
+        graph = load_json_file(
+            build_dir / "graph.json",
+            context="test-all generated graph",
+            expected_type=dict,
+        )
         shutil.rmtree(build_dir)
 
         s, f = render_combinations(
@@ -177,7 +182,12 @@ def run_render_all(cfg: Config) -> None:
             f"graph.json not found at {graph_path}. Run 'graph' (or 'run') first."
         )
 
-    graph = json.loads(graph_path.read_text())
+    graph = load_json_file(
+        graph_path,
+        context="render-all graph artifact",
+        expected_type=dict,
+        advice="Fix graph.json or rerun the graph stage.",
+    )
     variants_root = cfg.out("variants")
     n_combos = len(VALID_LAYOUTS) * len(VALID_DIAGRAM_MODES)
 
@@ -217,7 +227,12 @@ def run_report_all(cfg: Config) -> None:
             f"graph.json not found at {graph_path}. Run 'graph' (or 'run') first."
         )
 
-    graph = json.loads(graph_path.read_text())
+    graph = load_json_file(
+        graph_path,
+        context="report-all graph artifact",
+        expected_type=dict,
+        advice="Fix graph.json or rerun the graph stage.",
+    )
     variants_root = cfg.out("variants")
     n_combos = len(VALID_LAYOUTS) * len(VALID_DIAGRAM_MODES) * len(VALID_SPACINGS)
 

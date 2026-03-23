@@ -1,8 +1,13 @@
 """Utility helpers: logging setup, stable IDs, ARM ID parsing."""
+from __future__ import annotations
+
 import hashlib
+import json
 import logging
 import re
 import sys
+from pathlib import Path
+from typing import Any, Optional, Type
 
 ARM_ID_RE = re.compile(
     r'/subscriptions/[^\s/]+/(?:resourcegroups/[^\s/]+/)?providers/[^\s/]+(?:/[^\s/]+/[^\s/]+)*',
@@ -63,3 +68,68 @@ def extract_arm_ids(obj, seen=None):
     elif isinstance(obj, list):
         for item in obj:
             yield from extract_arm_ids(item, seen)
+
+
+def _json_excerpt(text: str, pos: int, radius: int = 60) -> str:
+    start = max(0, pos - radius)
+    end = min(len(text), pos + radius)
+    excerpt = text[start:end].replace("\n", "\\n")
+    pointer = pos - start
+    return f"{excerpt}\n{' ' * pointer}^"
+
+
+def parse_json_text(
+    text: str,
+    *,
+    source: str,
+    context: str,
+    expected_type: Optional[Type[Any]] = None,
+    advice: Optional[str] = None,
+) -> Any:
+    """Parse JSON text with actionable error context."""
+    if not text.strip():
+        message = f"{context} from {source} is empty."
+        if advice:
+            message = f"{message} {advice}"
+        raise RuntimeError(message)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        excerpt = _json_excerpt(text, exc.pos)
+        message = (
+            f"{context} from {source} is invalid JSON at "
+            f"line {exc.lineno} column {exc.colno}: {exc.msg}.\n"
+            f"Excerpt: {excerpt}"
+        )
+        if advice:
+            message = f"{message}\n{advice}"
+        raise RuntimeError(message) from exc
+    if expected_type is not None and not isinstance(data, expected_type):
+        expected_name = getattr(expected_type, "__name__", str(expected_type))
+        actual_name = type(data).__name__
+        message = (
+            f"{context} from {source} has unexpected JSON shape: "
+            f"expected {expected_name}, got {actual_name}."
+        )
+        if advice:
+            message = f"{message} {advice}"
+        raise RuntimeError(message)
+    return data
+
+
+def load_json_file(
+    path: Path,
+    *,
+    context: str,
+    expected_type: Optional[Type[Any]] = None,
+    advice: Optional[str] = None,
+) -> Any:
+    """Read and parse a JSON file with actionable error context."""
+    return parse_json_text(
+        path.read_text(),
+        source=str(path),
+        context=context,
+        expected_type=expected_type,
+        advice=advice,
+    )
+

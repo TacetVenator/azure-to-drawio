@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .config import Config
+from .util import load_json_file
 
 log = logging.getLogger(__name__)
 
@@ -39,7 +40,12 @@ def _load_inventory(cfg: Config) -> List[Dict]:
         raise FileNotFoundError(
             f"inventory.json not found at {inv_path}. Run 'expand' (or 'run') first."
         )
-    return json.loads(inv_path.read_text())
+    return load_json_file(
+        inv_path,
+        context="Inventory export input",
+        expected_type=list,
+        advice="Fix inventory.json or rerun the expand stage.",
+    )
 
 
 # ---------------------------------------------------------------------------

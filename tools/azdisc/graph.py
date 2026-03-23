@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .config import Config
-from .util import normalize_id, stable_id
+from .util import load_json_file, normalize_id, stable_id
 
 log = logging.getLogger(__name__)
 
@@ -285,10 +285,20 @@ def build_graph(cfg: Config) -> Dict:
     inv_path = cfg.out("inventory.json")
     if not inv_path.exists():
         raise FileNotFoundError("inventory.json not found. Run 'expand' first.")
-    inventory: List[Dict] = json.loads(inv_path.read_text())
+    inventory: List[Dict] = load_json_file(
+        inv_path,
+        context="Graph stage inventory",
+        expected_type=list,
+        advice="Fix inventory.json or rerun the expand stage.",
+    )
 
     unresolved_path = cfg.out("unresolved.json")
-    unresolved: List[str] = json.loads(unresolved_path.read_text()) if unresolved_path.exists() else []
+    unresolved: List[str] = load_json_file(
+        unresolved_path,
+        context="Graph stage unresolved references",
+        expected_type=list,
+        advice="Fix unresolved.json or rerun the expand stage.",
+    ) if unresolved_path.exists() else []
 
     # Separate child resources from standalone resources
     parent_resources = []
@@ -348,7 +358,12 @@ def build_graph(cfg: Config) -> Dict:
     # Add RBAC edges if available
     rbac_path = cfg.out("rbac.json")
     if rbac_path.exists():
-        rbac = json.loads(rbac_path.read_text())
+        rbac = load_json_file(
+            rbac_path,
+            context="Graph stage RBAC artifact",
+            expected_type=list,
+            advice="Fix rbac.json or rerun the RBAC stage.",
+        )
         edges = add_rbac_edges(edges, rbac)
 
     graph = {"nodes": nodes, "edges": edges}
