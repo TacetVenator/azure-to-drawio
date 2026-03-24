@@ -18,6 +18,9 @@ VALID_INVENTORY_GROUP_BYS = {"type", "rg"}
 VALID_NETWORK_DETAILS = {"compact", "full"}
 VALID_APPLICATION_SPLIT_MODES = {"tag-value"}
 VALID_APPLICATION_SPLIT_OUTPUT_LAYOUTS = {"subdirs"}
+VALID_MIGRATION_PLAN_AUDIENCES = {"mixed", "technical", "executive"}
+VALID_MIGRATION_PLAN_APPLICATION_SCOPES = {"root", "split", "both"}
+APPLICATION_SPLIT_DEFAULT_TAG_KEYS = ["Application", "App", "Workload", "Service"]
 
 
 @dataclass
@@ -31,6 +34,15 @@ class ApplicationSplitConfig:
 
 
 @dataclass
+class MigrationPlanConfig:
+    enabled: bool = False
+    outputDir: str = ""
+    audience: str = "mixed"
+    applicationScope: str = "both"
+    includeCopilotPrompts: bool = True
+
+
+@dataclass
 class Config:
     app: str
     subscriptions: List[str]
@@ -38,7 +50,9 @@ class Config:
     outputDir: str
     seedTags: Dict[str, str] = field(default_factory=dict)
     seedTagKeys: List[str] = field(default_factory=list)
+    seedEntireSubscriptions: bool = False
     includeRbac: bool = False
+    includePolicy: bool = False
     enableTelemetry: bool = False
     telemetryLookbackDays: int = 7
     layout: str = "SUB>REGION>RG>NET"
@@ -52,6 +66,7 @@ class Config:
     groupByTag: List[str] = field(default_factory=list)
     layoutMagic: bool = False
     applicationSplit: ApplicationSplitConfig = field(default_factory=ApplicationSplitConfig)
+    migrationPlan: MigrationPlanConfig = field(default_factory=MigrationPlanConfig)
 
     def out(self, filename: str) -> Path:
         return Path(self.outputDir) / filename
@@ -91,7 +106,7 @@ def _load_application_split(data: object) -> ApplicationSplitConfig:
             f"Unsupported applicationSplit.mode: {mode!r}. Valid: {sorted(VALID_APPLICATION_SPLIT_MODES)}"
         )
 
-    tag_keys = _validate_string_list("applicationSplit.tagKeys", data.get("tagKeys", ["Application"]))
+    tag_keys = _validate_string_list("applicationSplit.tagKeys", data.get("tagKeys", APPLICATION_SPLIT_DEFAULT_TAG_KEYS))
     values = _validate_string_list("applicationSplit.values", data.get("values", ["*"]))
 
     include_shared = data.get("includeSharedDependencies", True)
@@ -118,6 +133,49 @@ def _load_application_split(data: object) -> ApplicationSplitConfig:
     )
 
 
+def _load_migration_plan(data: object) -> MigrationPlanConfig:
+    if data is None:
+        return MigrationPlanConfig()
+    if not isinstance(data, dict):
+        raise ValueError(f"migrationPlan must be an object, got {data!r}")
+
+    enabled = data.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ValueError(f"migrationPlan.enabled must be a boolean, got {enabled!r}")
+
+    output_dir = data.get("outputDir", "")
+    if not isinstance(output_dir, str):
+        raise ValueError(f"migrationPlan.outputDir must be a string, got {output_dir!r}")
+
+    audience = data.get("audience", "mixed")
+    if audience not in VALID_MIGRATION_PLAN_AUDIENCES:
+        raise ValueError(
+            f"Unsupported migrationPlan.audience: {audience!r}. Valid: {sorted(VALID_MIGRATION_PLAN_AUDIENCES)}"
+        )
+
+    application_scope = data.get("applicationScope", "both")
+    if application_scope not in VALID_MIGRATION_PLAN_APPLICATION_SCOPES:
+        raise ValueError(
+            "Unsupported migrationPlan.applicationScope: "
+            f"{application_scope!r}. Valid: {sorted(VALID_MIGRATION_PLAN_APPLICATION_SCOPES)}"
+        )
+
+    include_copilot_prompts = data.get("includeCopilotPrompts", True)
+    if not isinstance(include_copilot_prompts, bool):
+        raise ValueError(
+            "migrationPlan.includeCopilotPrompts must be a boolean, "
+            f"got {include_copilot_prompts!r}"
+        )
+
+    return MigrationPlanConfig(
+        enabled=enabled,
+        outputDir=output_dir.strip(),
+        audience=audience,
+        applicationScope=application_scope,
+        includeCopilotPrompts=include_copilot_prompts,
+    )
+
+
 def load_config(path: str) -> Config:
     p = Path(path)
     if not p.exists():
@@ -138,8 +196,15 @@ def load_config(path: str) -> Config:
     seed_rgs = _validate_string_list("seedResourceGroups", data.get("seedResourceGroups", []))
     seed_tags = _validate_seed_tags(data.get("seedTags", {}))
     seed_tag_keys = _validate_string_list("seedTagKeys", data.get("seedTagKeys", []))
-    if not seed_rgs and not seed_tags and not seed_tag_keys:
-        raise ValueError("Config must include at least one of seedResourceGroups, seedTags, or seedTagKeys")
+    seed_entire_subscriptions = data.get("seedEntireSubscriptions", False)
+    if not isinstance(seed_entire_subscriptions, bool):
+        raise ValueError(
+            f"seedEntireSubscriptions must be a boolean, got {seed_entire_subscriptions!r}"
+        )
+    if not seed_rgs and not seed_tags and not seed_tag_keys and not seed_entire_subscriptions:
+        raise ValueError(
+            "Config must include at least one of seedResourceGroups, seedTags, seedTagKeys, or seedEntireSubscriptions"
+        )
 
     layout = data.get("layout", "SUB>REGION>RG>NET")
     if layout not in VALID_LAYOUTS:
@@ -181,11 +246,16 @@ def load_config(path: str) -> Config:
     if not isinstance(include_rbac, bool):
         raise ValueError(f"includeRbac must be a boolean, got {include_rbac!r}")
 
+    include_policy = data.get("includePolicy", False)
+    if not isinstance(include_policy, bool):
+        raise ValueError(f"includePolicy must be a boolean, got {include_policy!r}")
+
     lookback_days = data.get("telemetryLookbackDays", 7)
     if not isinstance(lookback_days, int) or lookback_days < 1:
         raise ValueError(f"telemetryLookbackDays must be a positive integer, got {lookback_days!r}")
 
     application_split = _load_application_split(data.get("applicationSplit"))
+    migration_plan = _load_migration_plan(data.get("migrationPlan"))
 
     cfg = Config(
         app=data["app"],
@@ -194,7 +264,9 @@ def load_config(path: str) -> Config:
         outputDir=data["outputDir"],
         seedTags=seed_tags,
         seedTagKeys=seed_tag_keys,
+        seedEntireSubscriptions=seed_entire_subscriptions,
         includeRbac=include_rbac,
+        includePolicy=include_policy,
         enableTelemetry=enable_telemetry,
         telemetryLookbackDays=lookback_days,
         layout=layout,
@@ -208,14 +280,19 @@ def load_config(path: str) -> Config:
         groupByTag=group_by_tag,
         layoutMagic=layout_magic,
         applicationSplit=application_split,
+        migrationPlan=migration_plan,
     )
     log.info(
-        "Loaded config for app=%s, subs=%d, seedRGs=%d, seedTags=%d, seedTagKeys=%d, appSplit=%s",
+        "Loaded config for app=%s, subs=%d, seedRGs=%d, seedTags=%d, seedTagKeys=%d, seedAllSubs=%s, includeRbac=%s, includePolicy=%s, appSplit=%s, migrationPlan=%s",
         cfg.app,
         len(cfg.subscriptions),
         len(cfg.seedResourceGroups),
         len(cfg.seedTags),
         len(cfg.seedTagKeys),
+        cfg.seedEntireSubscriptions,
+        cfg.includeRbac,
+        cfg.includePolicy,
         cfg.applicationSplit.enabled,
+        cfg.migrationPlan.enabled,
     )
     return cfg

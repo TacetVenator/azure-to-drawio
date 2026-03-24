@@ -76,7 +76,7 @@ def _resolve_split_values(resources: List[Dict[str, Any]], tag_keys: List[str], 
 
 def build_split_preview(cfg: Config) -> str:
     split_cfg = cfg.applicationSplit
-    tag_keys = split_cfg.tagKeys or ["Application"]
+    tag_keys = split_cfg.tagKeys or _COMMON_APP_TAG_KEYS
 
     inventory_path = cfg.out("inventory.json")
     seed_path = cfg.out("seed.json")
@@ -177,6 +177,15 @@ def _filter_rbac_entries(rbac_rows: List[Dict[str, Any]], inventory: List[Dict[s
         if not scope:
             continue
         if scope in included_ids or scope in rg_scopes or any(rid.startswith(scope + "/") for rid in included_ids):
+            filtered.append(row)
+    return filtered
+
+
+def _filter_policy_entries(policy_rows: List[Dict[str, Any]], included_ids: Set[str]) -> List[Dict[str, Any]]:
+    filtered = []
+    for row in policy_rows:
+        resource_id = normalize_id(row.get("resourceId") or ((row.get("properties") or {}).get("resourceId") or ""))
+        if resource_id and resource_id in included_ids:
             filtered.append(row)
     return filtered
 
@@ -289,7 +298,17 @@ def run_split(cfg: Config) -> List[Dict[str, Any]]:
             advice="Fix rbac.json or rerun the RBAC stage.",
         )
 
-    tag_keys = split_cfg.tagKeys or _COMMON_APP_TAG_KEYS[:1]
+    policy_rows: List[Dict[str, Any]] = []
+    policy_path = cfg.out("policy.json")
+    if policy_path.exists():
+        policy_rows = load_json_file(
+            policy_path,
+            context="Split stage Azure Policy artifact",
+            expected_type=list,
+            advice="Fix policy.json or rerun the policy stage.",
+        )
+
+    tag_keys = split_cfg.tagKeys or _COMMON_APP_TAG_KEYS
     values = _resolve_split_values(inventory, tag_keys, split_cfg.values or ["*"])
 
     applications_root = Path(cfg.outputDir) / "applications"
@@ -315,10 +334,17 @@ def run_split(cfg: Config) -> List[Dict[str, Any]]:
         (slice_dir / "unresolved.json").write_text(json.dumps(sorted(projected["unresolved"]), indent=2))
         (slice_dir / "graph.json").write_text(json.dumps(projected["graph"], indent=2, sort_keys=True))
 
+        included_node_ids = {normalize_id(node["id"]) for node in projected["graph"]["nodes"]}
+
         if rbac_rows:
-            filtered_rbac = _filter_rbac_entries(rbac_rows, projected["inventory"], {normalize_id(n["id"]) for n in projected["graph"]["nodes"]})
+            filtered_rbac = _filter_rbac_entries(rbac_rows, projected["inventory"], included_node_ids)
             if filtered_rbac:
                 (slice_dir / "rbac.json").write_text(json.dumps(filtered_rbac, indent=2, sort_keys=True))
+
+        if policy_rows:
+            filtered_policy = _filter_policy_entries(policy_rows, included_node_ids)
+            if filtered_policy:
+                (slice_dir / "policy.json").write_text(json.dumps(filtered_policy, indent=2, sort_keys=True))
 
         manifest = {
             "application": value,

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from .config import Config
-from .util import normalize_id
+from .util import load_json_file, normalize_id, parse_json_text
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +45,8 @@ _HOSTNAME_SUFFIXES = [
     ".mysql.database.azure.com",
     ".postgres.database.azure.com",
 ]
+
+_LA_WORKSPACE_CACHE: Dict[str, str] = {}
 
 
 def _looks_like_uuid(s: str) -> bool:
@@ -96,30 +98,108 @@ def _collect_nic_ips(nodes: List[Dict]) -> Dict[str, str]:
     return ip_map
 
 
-def _run_la_query(workspace_id: str, kql: str, subscriptions: List[str]) -> List[Dict]:
-    """Run a Log Analytics query via az CLI. Returns list of row dicts or [] on failure."""
+def _resolve_la_workspace_identifier(workspace_ref: str) -> str:
+    """Resolve a workspace ARM ID to a Log Analytics customer ID for querying."""
+    workspace_ref = workspace_ref.strip()
+    if not workspace_ref:
+        return workspace_ref
+    if not workspace_ref.lower().startswith("/subscriptions/"):
+        return workspace_ref
+
+    cached = _LA_WORKSPACE_CACHE.get(workspace_ref)
+    if cached:
+        return cached
+
     cmd = [
-        "az", "monitor", "log-analytics", "query",
-        "--workspace", workspace_id,
-        "--analytics-query", kql,
+        "az", "monitor", "log-analytics", "workspace", "show",
+        "--ids", workspace_ref,
         "--output", "json",
     ]
-    log.debug("Running LA query on workspace %s", workspace_id)
     try:
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             log.warning(
-                "Log Analytics query failed for workspace %s: %s",
+                "Failed to resolve Log Analytics workspace %s to a customer ID; telemetry query will use the raw reference. stderr: %s",
+                workspace_ref,
+                result.stderr.strip() or "<empty>",
+            )
+            return workspace_ref
+        raw = parse_json_text(
+            result.stdout,
+            source=' '.join(cmd),
+            context='Log Analytics workspace metadata',
+            expected_type=dict,
+            advice='Check Azure CLI output and verify the workspace ID is valid.',
+        )
+    except RuntimeError as exc:
+        log.warning(
+            "Failed to parse workspace metadata while resolving %s: %s. Telemetry query will use the raw reference.",
+            workspace_ref,
+            exc,
+        )
+        return workspace_ref
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "Unexpected error resolving Log Analytics workspace %s: %s. Telemetry query will use the raw reference.",
+            workspace_ref,
+            exc,
+        )
+        return workspace_ref
+
+    customer_id = (raw.get("customerId") or ((raw.get("properties") or {}).get("customerId") or "")).strip()
+    if customer_id:
+        _LA_WORKSPACE_CACHE[workspace_ref] = customer_id
+        return customer_id
+
+    log.warning(
+        "Workspace metadata for %s did not include customerId. Telemetry query will use the raw reference.",
+        workspace_ref,
+    )
+    return workspace_ref
+
+
+
+def _run_la_query(workspace_id: str, kql: str, subscriptions: List[str]) -> List[Dict]:
+    """Run a Log Analytics query via az CLI. Returns list of row dicts or [] on failure."""
+    query_workspace = _resolve_la_workspace_identifier(workspace_id)
+    cmd = [
+        "az", "monitor", "log-analytics", "query",
+        "--workspace", query_workspace,
+        "--analytics-query", kql,
+        "--output", "json",
+    ]
+    log.debug("Running LA query on workspace %s (query target %s)", workspace_id, query_workspace)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            log.warning(
+                "Log Analytics query failed for workspace %s (query target %s). stderr: %s. Troubleshooting: verify the workspace exists, resolve its customerId, and check Azure CLI access with `az monitor log-analytics workspace show --ids <workspace-arm-id>`.",
                 workspace_id,
-                result.stderr.strip(),
+                query_workspace,
+                result.stderr.strip() or "<empty>",
             )
             return []
-        raw = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        log.warning("Failed to parse LA query output as JSON: %s", exc)
+        raw = parse_json_text(
+            result.stdout,
+            source=' '.join(cmd),
+            context='Log Analytics query JSON output',
+            advice='Check Azure CLI output, workspace access, and the KQL query.',
+        )
+    except RuntimeError as exc:
+        log.warning(
+            "Failed to parse LA query output as JSON for workspace %s (query target %s): %s",
+            workspace_id,
+            query_workspace,
+            exc,
+        )
         return []
     except Exception as exc:  # noqa: BLE001
-        log.warning("Unexpected error running LA query: %s", exc)
+        log.warning(
+            "Unexpected error running LA query for workspace %s (query target %s): %s",
+            workspace_id,
+            query_workspace,
+            exc,
+        )
         return []
 
     # Support both direct list output and {"tables": [...]} envelope
@@ -278,8 +358,14 @@ def _phase_activity_log(cfg: Config, nodes: List[Dict]) -> List[Dict]:
                     "Activity log query failed for RG %s: %s", rg, result.stderr.strip()
                 )
                 continue
-            events: List[Dict] = json.loads(result.stdout)
-        except json.JSONDecodeError as exc:
+            events = parse_json_text(
+                result.stdout,
+                source=' '.join(cmd),
+                context=f'Activity log JSON output for RG {rg}',
+                expected_type=list,
+                advice='Check Azure CLI output and verify access to monitor activity logs.',
+            )
+        except RuntimeError as exc:
             log.warning("Failed to parse activity log JSON for RG %s: %s", rg, exc)
             continue
         except Exception as exc:  # noqa: BLE001
@@ -438,7 +524,12 @@ def run_telemetry_enrichment(cfg: Config) -> None:
     if not graph_path.exists():
         raise FileNotFoundError(f"graph.json not found at {graph_path}")
 
-    graph = json.loads(graph_path.read_text())
+    graph = load_json_file(
+        graph_path,
+        context='Telemetry stage graph artifact',
+        expected_type=dict,
+        advice='Fix graph.json or rerun the graph stage before telemetry enrichment.',
+    )
     nodes: List[Dict] = graph.get("nodes", [])
     existing_edges: List[Dict] = graph.get("edges", [])
 

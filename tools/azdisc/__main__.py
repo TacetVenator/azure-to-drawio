@@ -6,16 +6,18 @@ import logging
 import sys
 
 from .config import load_config
-from .discover import run_expand, run_rbac, run_seed
+from .discover import run_expand, run_policy, run_rbac, run_seed
 from .docs import generate_docs
 from .drawio import generate_drawio
 from .graph import build_graph
 from .inventory import generate_csv, generate_yaml
 from .master_report import generate_master_report
+from .migration_plan import generate_migration_plan
 from .split import build_split_preview, run_split
 from .telemetry import run_telemetry_enrichment
 from .test_all import run_render_all, run_report_all, run_test_all
 from .util import setup_logging
+from .wizard import run_wizard
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +45,16 @@ def cmd_seed(args) -> None:
 def cmd_expand(args) -> None:
     cfg = load_config(args.config)
     run_expand(cfg)
+
+
+def cmd_rbac(args) -> None:
+    cfg = load_config(args.config)
+    run_rbac(cfg)
+
+
+def cmd_policy(args) -> None:
+    cfg = load_config(args.config)
+    run_policy(cfg)
 
 
 def cmd_graph(args) -> None:
@@ -89,11 +101,21 @@ def cmd_telemetry(args) -> None:
     run_telemetry_enrichment(cfg)
 
 
+def cmd_migration_plan(args) -> None:
+    cfg = load_config(args.config)
+    generate_migration_plan(cfg)
+
+
+def cmd_wizard(args) -> None:
+    run_wizard(args.config)
+
+
 def cmd_run(args) -> None:
     cfg = load_config(args.config)
     run_seed(cfg)
     run_expand(cfg)
     run_rbac(cfg)
+    run_policy(cfg)
     build_graph(cfg)
     if cfg.enableTelemetry:
         run_telemetry_enrichment(cfg)
@@ -101,13 +123,15 @@ def cmd_run(args) -> None:
     generate_docs(cfg)
     if cfg.applicationSplit.enabled:
         run_split(cfg)
+    if cfg.migrationPlan.enabled:
+        generate_migration_plan(cfg)
     log.info("Pipeline complete for app=%s", cfg.app)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="python3 -m tools.azdisc",
-        description="Azure Resource Graph → draw.io diagram tool",
+        description="Azure Resource Graph -> draw.io diagram tool",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -117,22 +141,26 @@ def main() -> None:
         ("telemetry", cmd_telemetry, "Enrich graph with App Insights, Activity Log, and Flow Log telemetry"),
         ("seed", cmd_seed, "Seed resources from RGs"),
         ("expand", cmd_expand, "Expand resources transitively"),
+        ("rbac", cmd_rbac, "Collect RBAC assignments for discovered resources"),
+        ("policy", cmd_policy, "Collect Azure Policy state for discovered resources"),
         ("graph", cmd_graph, "Build graph model"),
         ("drawio", cmd_drawio, "Generate draw.io diagram"),
         ("docs", cmd_docs, "Generate documentation"),
         ("split-preview", cmd_split_preview, "Preview application split candidates from seed/inventory artifacts"),
         ("split", cmd_split, "Generate per-application outputs from an existing inventory/graph"),
+        ("migration-plan", cmd_migration_plan, "Generate migration planning packs from existing discovery artifacts"),
+        ("wizard", cmd_wizard, "Interactively create config, instructions, and optionally execute the workflow"),
         ("inventory-csv", cmd_inventory_csv, "Generate inventory.csv from inventory.json"),
         ("inventory-yaml", cmd_inventory_yaml, "Generate inventory.yaml from inventory.json"),
-        ("render-all", cmd_render_all, "Generate all layout × mode variants from an existing graph"),
-        ("report-all", cmd_report_all, "Generate a Markdown report of all layout × mode × spacing variants"),
+        ("render-all", cmd_render_all, "Generate all layout x mode variants from an existing graph"),
+        ("report-all", cmd_report_all, "Generate a Markdown report of all layout x mode x spacing variants"),
         ("master-report", cmd_master_report, "Generate a consolidated master architecture report"),
     ]:
         p = sub.add_parser(name, help=help_text)
         p.add_argument("config", help="Path to config.json")
         p.set_defaults(func=func)
 
-    p_test_all = sub.add_parser("test-all", help="Generate all layout × mode combinations from fixtures")
+    p_test_all = sub.add_parser("test-all", help="Generate all layout x mode combinations from fixtures")
     p_test_all.add_argument(
         "-o", "--output", default="out/test-all",
         help="Root output directory (default: out/test-all)",

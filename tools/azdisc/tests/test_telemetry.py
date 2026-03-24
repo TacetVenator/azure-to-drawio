@@ -8,9 +8,12 @@ import pytest
 
 from tools.azdisc.config import Config, load_config
 from tools.azdisc.telemetry import (
+    _LA_WORKSPACE_CACHE,
     _collect_nic_ips,
     _looks_like_uuid,
     _resolve_hostname,
+    _resolve_la_workspace_identifier,
+    _run_la_query,
     run_telemetry_enrichment,
 )
 
@@ -216,6 +219,65 @@ class TestCollectNicIps:
 
 
 # ---------------------------------------------------------------------------
+# Tests: Log Analytics workspace resolution and query handling
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_la_workspace_identifier_converts_arm_id_to_customer_id(monkeypatch):
+    _LA_WORKSPACE_CACHE.clear()
+    workspace_arm_id = "/subscriptions/sub1/resourceGroups/rg-log/providers/Microsoft.OperationalInsights/workspaces/ws1"
+
+    calls = []
+
+    class Result:
+        def __init__(self, returncode, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_run(cmd, capture_output, text):
+        calls.append(cmd)
+        return Result(0, json.dumps({"customerId": "customer-guid-1234"}))
+
+    monkeypatch.setattr("tools.azdisc.telemetry.subprocess.run", fake_run)
+
+    resolved = _resolve_la_workspace_identifier(workspace_arm_id)
+
+    assert resolved == "customer-guid-1234"
+    assert calls[0][:5] == ["az", "monitor", "log-analytics", "workspace", "show"]
+    assert calls[0][5:] == ["--ids", workspace_arm_id, "--output", "json"]
+
+
+def test_run_la_query_uses_resolved_customer_id_and_logs_troubleshooting(monkeypatch, caplog):
+    _LA_WORKSPACE_CACHE.clear()
+    workspace_arm_id = "/subscriptions/sub1/resourceGroups/rg-log/providers/Microsoft.OperationalInsights/workspaces/ws1"
+
+    calls = []
+
+    class Result:
+        def __init__(self, returncode, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_run(cmd, capture_output, text):
+        calls.append(cmd)
+        if cmd[:5] == ["az", "monitor", "log-analytics", "workspace", "show"]:
+            return Result(0, json.dumps({"customerId": "customer-guid-1234"}))
+        return Result(1, "", "ERROR: (PathNotFoundError) The requested path does not exist")
+
+    monkeypatch.setattr("tools.azdisc.telemetry.subprocess.run", fake_run)
+
+    rows = _run_la_query(workspace_arm_id, "AppDependencies | take 1", ["sub1"])
+
+    assert rows == []
+    assert calls[1][:4] == ["az", "monitor", "log-analytics", "query"]
+    assert "customer-guid-1234" in calls[1]
+    assert "Troubleshooting:" in caplog.text
+    assert "query target customer-guid-1234" in caplog.text
+
+
+# ---------------------------------------------------------------------------
 # Tests: _looks_like_uuid
 # ---------------------------------------------------------------------------
 
@@ -252,6 +314,16 @@ def test_run_telemetry_enrichment_missing_graph_json(tmp_path):
     cfg = _make_config(tmp_path)
     with pytest.raises(FileNotFoundError, match="graph.json"):
         run_telemetry_enrichment(cfg)
+
+
+def test_run_telemetry_enrichment_reports_invalid_graph_json(tmp_path):
+    (tmp_path / "graph.json").write_text('{"nodes": [}')
+    cfg = _make_config(tmp_path)
+
+    with pytest.raises(RuntimeError, match="Telemetry stage graph artifact") as excinfo:
+        run_telemetry_enrichment(cfg)
+
+    assert "graph.json" in str(excinfo.value)
 
 
 # ---------------------------------------------------------------------------

@@ -5,24 +5,25 @@ Automatically discover Azure resources via [Azure Resource Graph](https://learn.
 ## How It Works
 
 ```
-Azure Resource Graph  ──►  Seed  ──►  Expand  ──►  RBAC  ──►  Graph  ──►  Draw.io  ──►  Docs
-    (az graph query)       │           │            │          │            │              │
-                           ▼           ▼            ▼          ▼            ▼              ▼
-                       seed.json   inventory.json  rbac.json  graph.json  diagram.drawio  catalog.md
-                                   unresolved.json                        diagram.svg     edges.md
-                                                                          diagram.png     routing.md
-                                                                                           migration.md
-                                                                          icons_used.json
+Azure Resource Graph  ──►  Seed  ──►  Expand  ──►  RBAC  ──►  Policy  ──►  Graph  ──►  Draw.io  ──►  Docs
+    (az graph query)       │           │            │          │             │            │              │
+                           ▼           ▼            ▼          ▼             ▼            ▼              ▼
+                       seed.json   inventory.json  rbac.json  policy.json  graph.json  diagram.drawio  catalog.md
+                                   unresolved.json                                      diagram.svg     edges.md
+                                                                                         diagram.png     routing.md
+                                                                                                          migration.md
+                                                                                         icons_used.json
 ```
 
-The tool runs a six-stage pipeline. Each stage reads the previous stage's output from the configured `outputDir`, so stages can be re-run independently:
+The tool runs a seven-stage pipeline. Each stage reads the previous stage's output from the configured `outputDir`, so stages can be re-run independently:
 
 1. **Seed** — Queries Azure Resource Graph (ARG) for all resources in the configured seed scope: resource groups, exact tag matches, and/or tag-key presence. Writes `seed.json`.
 2. **Expand** — Reads `seed.json`, recursively extracts ARM ID references from resource properties, and fetches any resources not yet collected. Iterates up to 50 rounds until no new IDs are found. Writes `inventory.json` (the full resource set) and `unresolved.json` (IDs referenced but not found in Azure).
 3. **RBAC** *(optional, `includeRbac: true`)* — Reads `inventory.json`, queries `authorizationresources` for role assignments scoped to discovered resources, and writes `rbac.json`.
-4. **Graph** — Reads `inventory.json`, `unresolved.json`, and optionally `rbac.json`. Builds a normalized graph model: separates parent and child resources, merges children (VM extensions, SQL firewall rules, etc.) into parent node attributes, extracts typed edges from resource properties, and adds placeholder nodes for unresolved external references. Writes `graph.json`.
-5. **Draw.io** — Reads `graph.json` and the icon map from `assets/azure_icon_map.json`. Computes the supported deterministic layout (`SUB>REGION>RG>NET`), generates draw.io XML with positioned nodes, styled icons, edges, UDR callout boxes, and attribute info boxes. Writes `diagram.drawio` and `icons_used.json`. If the `drawio` CLI is on `PATH`, also exports `diagram.svg` and `diagram.png`.
-6. **Docs** — Reads `graph.json`, `unresolved.json`, and any available `inventory.json` / `rbac.json` artifacts. Generates four Markdown reports: `catalog.md`, `edges.md`, `routing.md`, and `migration.md`.
+4. **Policy** *(optional, `includePolicy: true`)* — Reads `inventory.json`, queries Azure Policy state for the discovered resource IDs, and writes `policy.json`.
+5. **Graph** — Reads `inventory.json`, `unresolved.json`, and optionally `rbac.json`. Builds a normalized graph model: separates parent and child resources, merges children (VM extensions, SQL firewall rules, etc.) into parent node attributes, extracts typed edges from resource properties, and adds placeholder nodes for unresolved external references. Writes `graph.json`.
+6. **Draw.io** — Reads `graph.json` and the icon map from `assets/azure_icon_map.json`. Computes the supported deterministic layout (`SUB>REGION>RG>NET`), generates draw.io XML with positioned nodes, styled icons, edges, UDR callout boxes, and attribute info boxes. Writes `diagram.drawio` and `icons_used.json`. If the `drawio` CLI is on `PATH`, also exports `diagram.svg` and `diagram.png`.
+7. **Docs** — Reads `graph.json`, `unresolved.json`, and any available `inventory.json` / `rbac.json` artifacts. Generates four Markdown reports: `catalog.md`, `edges.md`, `routing.md`, and `migration.md`.
 
 ---
 
@@ -52,7 +53,7 @@ python3 -m tools.azdisc [-v] <command> <config.json>
 
 #### `run` — Run the full pipeline
 
-Executes all six stages in order: seed, expand, rbac, graph, drawio, docs.
+Executes all pipeline stages in order: seed, expand, rbac, policy, graph, drawio, docs. When `applicationSplit.enabled` is `true`, `run` also generates per-application outputs after the root diagram and docs are written. When `migrationPlan.enabled` is `true`, `run` generates migration planning packs after any split outputs are available.
 
 ```bash
 python3 -m tools.azdisc run app/myapp/config.json
@@ -60,25 +61,68 @@ python3 -m tools.azdisc run app/myapp/config.json
 
 This is the most common way to use the tool. A single command produces the complete diagram and all documentation from scratch.
 
-#### `seed` — Seed resources from resource groups
+#### `wizard` — Interactively create config, instructions, and outputs
 
-Queries Azure Resource Graph for all resources in the configured seed scope and writes `seed.json` to the output directory.
+Starts an interactive workflow that asks about scope, intent, governance, application slicing, migration planning, and execution preferences. The wizard writes a config file, writes a Markdown instruction pack next to it, and can optionally execute the selected workflow immediately.
+
+```bash
+python3 -m tools.azdisc wizard app/myapp/config.json
+```
+
+Use this when you want the tool to guide you from initial scope definition through discovery, diagrams, split reporting, migration planning, and Copilot-ready prompts.
+
+**Produces:** the chosen `config.json`, `<config>_wizard_instructions.md`, and optionally the selected discovery/report outputs if you choose to execute immediately.
+
+#### `rbac` — Collect RBAC assignments for discovered resources
+
+Reads `inventory.json`, queries Azure Resource Graph authorization resources, filters role assignments to the discovered scope, and writes `rbac.json`.
+
+```bash
+python3 -m tools.azdisc rbac app/myapp/config.json
+```
+
+**Requires:** `inventory.json` in the output directory, Azure CLI authenticated.
+**Produces:** `rbac.json`
+
+#### `policy` — Collect Azure Policy state for discovered resources
+
+Reads `inventory.json`, queries Azure Policy state for the discovered resource IDs, and writes `policy.json`. This is useful when you want per-resource compliance context without re-running discovery.
+
+```bash
+python3 -m tools.azdisc policy app/myapp/config.json
+```
+
+Only policy state records whose `resourceId` matches the discovered inventory are kept in the artifact.
+
+**Requires:** `inventory.json` in the output directory, Azure CLI authenticated.
+**Produces:** `policy.json`
+
+#### `seed` — Seed resources from the configured discovery scope
+
+Queries Azure Resource Graph for the configured seed scope and writes `seed.json` to the output directory.
 
 ```bash
 python3 -m tools.azdisc seed app/myapp/config.json
 ```
+
+The tool supports four seed patterns. You must configure at least one of them:
+
+- `seedResourceGroups`: start from one or more specific resource groups
+- `seedTags`: start from exact tag/value matches such as `Application=SAP`
+- `seedTagKeys`: start from resources that merely have a tag key such as `Application`, regardless of value
+- `seedEntireSubscriptions`: start from all resources in the listed `subscriptions`
+
+ARG results are automatically paged and batched across all configured subscriptions.
 
 For resource-group seeding, the underlying Kusto query is:
 
 ```kusto
 resources
 | where resourceGroup in~ ('rg-app-dev', 'rg-app-prod')
-| project id, name, type, location, subscriptionId, resourceGroup, properties
+| project id, name, type, location, subscriptionId, resourceGroup, tags, sku, kind, systemData, properties
 ```
 
-ARG results are automatically paged (1000 rows per page) and batched across all configured subscriptions.
-
-You can also seed by tag:
+For exact tag-based seeding, the query matches the configured tag/value pair exactly, case-insensitively:
 
 ```json
 {
@@ -91,7 +135,9 @@ You can also seed by tag:
 }
 ```
 
-Or by tag-key presence:
+Use `seedTags` when you already know the application or workload value you want to scope discovery around. Multiple configured pairs are treated as additional seed criteria.
+
+For tag-key presence seeding, the query only checks that the key exists:
 
 ```json
 {
@@ -101,6 +147,32 @@ Or by tag-key presence:
   "seedTagKeys": ["Application"]
 }
 ```
+
+Use `seedTagKeys` when you want to discover all tagged workloads first and decide later which tag values matter. This pairs well with `split-preview` and `applicationSplit.values: ["*"]`.
+
+For broad environment baselines, seed all resources in the listed subscriptions:
+
+```json
+{
+  "app": "landing-zone-baseline",
+  "subscriptions": ["<hub-sub>", "<app-sub>", "<data-sub>"],
+  "outputDir": "app/landing-zone/out",
+  "seedEntireSubscriptions": true
+}
+```
+
+Use `seedEntireSubscriptions` for tenant or landing-zone style baselines when RG or tag scoping would miss important shared services.
+
+Important distinction:
+- seed scope controls what enters `seed.json` before expansion
+- `applicationSplit` is a post-discovery reporting and rendering feature that slices the already discovered inventory into per-application outputs
+
+A common tag-driven workflow is:
+
+1. Seed by `seedTagKeys` or a shared resource group.
+2. Run `expand` or `run` to build the full inventory.
+3. Run `split-preview` to inspect common tag values such as `Application`, `App`, `Workload`, or `Service`.
+4. Enable `applicationSplit` and run `split` to generate per-application diagrams and docs.
 
 **Requires:** Azure CLI authenticated (`az login`).
 **Produces:** `seed.json`
@@ -164,6 +236,45 @@ This produces 2 variants (1 layout × 2 modes) so you can compare how your archi
 **Requires:** `graph.json` in the output directory (run `graph` or `run` first).
 **Produces:** `variants/` directory with subfolders for each combination.
 
+#### `split-preview` — Inspect common tags and candidate application values
+
+Reads `inventory.json` if present, otherwise `seed.json`, and summarizes common tag keys and candidate application values for the configured split keys.
+
+```bash
+python3 -m tools.azdisc split-preview app/myapp/config.json
+```
+
+Use this after `seed` or `expand` when multiple apps share one resource group and you want to decide how to split diagrams by tags such as `Application`, `App`, `Workload`, or `Service`.
+
+**Requires:** `seed.json` or `inventory.json` in the output directory.
+**Produces:** console preview only
+
+#### `split` — Generate per-application diagrams and reports
+
+Reads the root `inventory.json` and `graph.json`, projects one slice per configured application value, and writes separate inventory, graph, diagram, docs, and report files under `applications/<slug>/`.
+
+```bash
+python3 -m tools.azdisc split app/myapp/config.json
+```
+
+This is the post-discovery rendering path for common tags. Set `applicationSplit.tagKeys` to the tag names you care about and set `applicationSplit.values` to `["*"]` to auto-discover values from the extracted inventory.
+
+**Requires:** `applicationSplit.enabled: true`, plus `inventory.json` and `graph.json` in the output directory.
+**Produces:** `applications/<slug>/...` plus `applications.md`
+
+#### `migration-plan` — Generate migration planning packs
+
+Reads the existing discovery artifacts and writes a migration planning pack under `migration-plan/`, plus per-application packs under `migration-plan/applications/<slug>/` when split outputs exist and the configured scope includes them.
+
+```bash
+python3 -m tools.azdisc migration-plan app/myapp/config.json
+```
+
+Use this when you need deterministic migration templates, stakeholder questions, decision logs, wave planning, and Copilot prompts without re-running Azure discovery.
+
+**Requires:** `graph.json` in the output directory. Root and split packs also consume `inventory.json`, `unresolved.json`, `policy.json`, and `rbac.json` when present.
+**Produces:** `migration-plan/migration-plan.md`, `migration-plan/migration-questionnaire.md`, `migration-plan/migration-decisions.md`, `migration-plan/decision-trees.md`, `migration-plan/wave-plan.md`, `migration-plan/stakeholder-pack.md`, `migration-plan/technical-gaps.md`, optional `migration-plan/copilot-prompts.md`, and `migration-plan.json`
+
 #### `report-all` — Generate a Markdown report of all diagram variants
 
 Reads the existing `graph.json` from your output directory and generates all supported combinations of layout, diagram mode, and spacing preset (1 × 2 × 2). Each variant is written to a `variants/<layout>_<mode>_<spacing>/` subfolder, and a single `variants/report.md` is produced that links to every variant — embedding PNG previews where the `drawio` CLI is available.
@@ -200,6 +311,14 @@ python3 -m tools.azdisc docs app/myapp/config.json
 
 ### Typical Workflows
 
+**Start with the guided wizard:**
+
+```bash
+python3 -m tools.azdisc wizard app/myapp/config.json
+```
+
+The wizard writes a config, writes a matching instruction pack, and can optionally execute the selected workflow immediately. It supports resource-group scoping, tag-based scoping, and full listed-subscription seeding.
+
 **Full run from scratch:**
 
 ```bash
@@ -228,6 +347,33 @@ python3 -m tools.azdisc expand app/myapp/config.json
 python3 -m tools.azdisc graph app/myapp/config.json
 python3 -m tools.azdisc docs app/myapp/config.json
 ```
+
+**Collect compliance after discovery without re-running seed/expand:**
+
+```bash
+python3 -m tools.azdisc expand app/myapp/config.json
+python3 -m tools.azdisc policy app/myapp/config.json
+```
+
+**Render per-application diagrams from common tags after extraction:**
+
+```bash
+python3 -m tools.azdisc run app/myapp/config.json
+python3 -m tools.azdisc split-preview app/myapp/config.json
+# set applicationSplit.enabled=true and applicationSplit.values=["*"] in config.json
+python3 -m tools.azdisc split app/myapp/config.json
+```
+
+This workflow is useful when several applications live in the same resource group and you want separate diagrams based on tags discovered in the extracted data.
+
+**Generate migration planning templates after discovery:**
+
+```bash
+python3 -m tools.azdisc run app/myapp/config.json
+python3 -m tools.azdisc migration-plan app/myapp/config.json
+```
+
+If `migrationPlan.enabled` is `true`, `run` writes the same planning pack automatically after root and split artifacts are ready.
 
 **Generate a Markdown report of all 12 diagram variants (layout × mode × spacing):**
 
@@ -258,6 +404,7 @@ The tool reads a JSON configuration file. An example is provided at `app/myapp/c
   "seedResourceGroups": ["rg-app-dev", "rg-app-prod"],
   "outputDir": "app/myapp/out",
   "includeRbac": true,
+  "includePolicy": true,
   "enableTelemetry": false,
   "telemetryLookbackDays": 7,
   "layout": "SUB>REGION>RG>NET",
@@ -269,7 +416,20 @@ The tool reads a JSON configuration file. An example is provided at `app/myapp/c
   "edgeLabels": false,
   "subnetColors": false,
   "groupByTag": ["Application"],
-  "layoutMagic": false
+  "layoutMagic": false,
+  "applicationSplit": {
+    "enabled": true,
+    "tagKeys": ["Application", "App", "Workload", "Service"],
+    "values": ["*"],
+    "includeSharedDependencies": true,
+    "outputLayout": "subdirs"
+  },
+  "migrationPlan": {
+    "enabled": true,
+    "audience": "mixed",
+    "applicationScope": "both",
+    "includeCopilotPrompts": true
+  }
 }
 ```
 
@@ -282,8 +442,10 @@ The tool reads a JSON configuration file. An example is provided at `app/myapp/c
 | `seedResourceGroups` | `string[]` | No | `[]` | list of non-empty strings | Resource groups used as the initial discovery seed. |
 | `seedTags` | `object` | No | `{}` | object of non-empty string pairs | Exact tag/value pairs used as additional seed criteria. A resource matches if any configured pair matches. |
 | `seedTagKeys` | `string[]` | No | `[]` | list of non-empty strings | Seed resources by tag-key presence, regardless of value. |
+| `seedEntireSubscriptions` | `bool` | No | `false` | `true`, `false` | Seeds all resources in the listed `subscriptions`. Use this for broad environment baselines when you want more than RG- or tag-scoped discovery. |
 | `outputDir` | `string` | Yes | — | — | Directory where all generated files are written. Created automatically if needed. |
 | `includeRbac` | `bool` | No | `false` | `true`, `false` | When `true`, runs the RBAC stage and writes `rbac.json`, adding `rbac_assignment` edges to the graph. |
+| `includePolicy` | `bool` | No | `false` | `true`, `false` | When `true`, runs the Azure Policy stage and writes `policy.json` with policy state records for discovered resources. |
 | `enableTelemetry` | `bool` | No | `false` | `true`, `false` | When `true`, the `run` command executes telemetry enrichment after graph generation. |
 | `telemetryLookbackDays` | `int` | No | `7` | positive integers | Lookback window used by telemetry queries. |
 | `layout` | `string` | No | `"SUB>REGION>RG>NET"` | `"SUB>REGION>RG>NET"` | The only supported layout. Groups nodes as subscription → region → resource group, with separate Networking and Resources sections inside each RG. |
@@ -296,8 +458,99 @@ The tool reads a JSON configuration file. An example is provided at `app/myapp/c
 | `subnetColors` | `bool` | No | `false` | `true`, `false` | Reserved for subnet/VNet-style layouts. The current supported render surface does not use this flag. |
 | `groupByTag` | `string[]` | No | `[]` | list of non-empty strings | Splits the Resources section into additional tag-based subsections. `["any"]` checks common app/workload tag names and groups untagged resources under `Untagged`. |
 | `layoutMagic` | `bool` | No | `false` | `true`, `false` | Enables degree-aware ordering and adaptive column counts to produce a different, often denser layout. |
+| `applicationSplit` | `object` | No | disabled | see below | Optional post-discovery slicing of inventory, graph, diagram, and reports into per-application outputs based on tags. |
+| `migrationPlan` | `object` | No | disabled | see below | Optional migration planning pack generation from existing discovery artifacts. |
 
-At least one of `seedResourceGroups`, `seedTags`, or `seedTagKeys` must be provided.
+At least one of `seedResourceGroups`, `seedTags`, `seedTagKeys`, or `seedEntireSubscriptions` must be provided.
+
+### Choosing A Seed Strategy
+
+Use these rules of thumb:
+
+- Choose `seedResourceGroups` when the environment is already cleanly separated by resource group.
+- Choose `seedTags` when you know the exact application or workload value to target, such as `Application=SAP`.
+- Choose `seedTagKeys` when you want to discover tagged workloads first and decide later which values to split by.
+- Choose `seedEntireSubscriptions` when you are building a broad baseline of a shared platform, landing zone, or poorly tagged estate.
+
+You can combine `seedResourceGroups`, `seedTags`, and `seedTagKeys`. The seed stage treats them as additive scope criteria. `seedEntireSubscriptions` is the broadest mode and is typically used on its own.
+
+### `applicationSplit`
+
+Use `applicationSplit` when multiple applications share the same resource group and you want separate outputs after discovery.
+
+```json
+{
+  "applicationSplit": {
+    "enabled": true,
+    "tagKeys": ["Application", "App", "Workload", "Service"],
+    "values": ["*"],
+    "includeSharedDependencies": true,
+    "outputLayout": "subdirs"
+  },
+  "migrationPlan": {
+    "enabled": true,
+    "audience": "mixed",
+    "applicationScope": "both",
+    "includeCopilotPrompts": true
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | `bool` | `false` | Enables the split stage. |
+| `mode` | `string` | `"tag-value"` | Current split mode. Only `tag-value` is supported. |
+| `tagKeys` | `string[]` | `["Application", "App", "Workload", "Service"]` | Tag keys checked in order when assigning resources to an application slice. |
+| `values` | `string[]` | `["*"]` | Explicit application values to render, or `["*"]` to auto-discover values from the extracted data. |
+| `includeSharedDependencies` | `bool` | `true` | Includes shared, untagged, or contextual dependencies needed to keep each application slice coherent. |
+| `outputLayout` | `string` | `"subdirs"` | Output layout for split artifacts. Only `subdirs` is supported. |
+
+With `values: ["*"]`, you can:
+
+1. Run `seed` or `run`.
+2. Run `split-preview` to inspect common tags and candidate values.
+3. Run `split` to generate `applications/<slug>/diagram.drawio`, docs, and inventory files for each discovered value.
+
+Recommended tag-based discovery patterns:
+
+- If you already know the target app value, use `seedTags` such as `{"Application": "SAP"}` and optionally still enable `applicationSplit` for separate reporting.
+- If several apps share one resource group, seed that RG or use `seedTagKeys`, then use `split-preview` and `applicationSplit` to separate them after discovery.
+- If tags are inconsistent, use `seedEntireSubscriptions` or broader RG seeding first, then narrow the reporting view with `applicationSplit.tagKeys`.
+
+### `migrationPlan`
+
+Use `migrationPlan` to generate migration planning packs from the artifacts already written to `outputDir`. The dedicated `migration-plan` command never needs to query Azure again if the required artifacts already exist.
+
+```json
+{
+  "migrationPlan": {
+    "enabled": true,
+    "outputDir": "migration-plan",
+    "audience": "mixed",
+    "applicationScope": "both",
+    "includeCopilotPrompts": true
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | `bool` | `false` | When `true`, `run` also generates migration planning packs after discovery, docs, and any configured split outputs complete. |
+| `outputDir` | `string` | `"migration-plan"` under `outputDir` | Output folder for generated planning artifacts. Relative paths are resolved under the main `outputDir`. |
+| `audience` | `string` | `"mixed"` | Planning pack tone and emphasis. Valid values: `mixed`, `technical`, `executive`. |
+| `applicationScope` | `string` | `"both"` | Generates root packs, split packs, or both. Valid values: `root`, `split`, `both`. |
+| `includeCopilotPrompts` | `bool` | `true` | Writes `copilot-prompts.md` with artifact-aware prompt templates for Copilot-assisted planning and review. |
+
+The generated planning pack includes:
+- `migration-plan.md`
+- `migration-questionnaire.md`
+- `migration-decisions.md`
+- `decision-trees.md`
+- `wave-plan.md`
+- `stakeholder-pack.md`
+- `technical-gaps.md`
+- optional `copilot-prompts.md`
+- `migration-plan.json`
 
 ---
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Set
+from typing import Any, Dict, List, Set
 
 from .arg import query, query_by_ids
 from .config import Config
@@ -13,6 +13,7 @@ from .util import extract_arm_ids, load_json_file, normalize_id
 log = logging.getLogger(__name__)
 
 _MAX_ITERATIONS = 50
+_POLICY_BATCH_SIZE = 100
 
 
 def _kusto_quote(value: str) -> str:
@@ -25,6 +26,12 @@ def _rg_filter(rgs: List[str]) -> str:
 
 
 def _seed_query(cfg: Config) -> str:
+    if cfg.seedEntireSubscriptions:
+        return (
+            "resources "
+            "| project id, name, type, location, subscriptionId, resourceGroup, tags, sku, kind, systemData, properties"
+        )
+
     clauses: List[str] = []
     if cfg.seedResourceGroups:
         quoted = ", ".join(f"'{_kusto_quote(rg.lower())}'" for rg in cfg.seedResourceGroups)
@@ -363,3 +370,110 @@ def run_rbac(cfg: Config) -> None:
     cfg.ensure_output_dir()
     cfg.out("rbac.json").write_text(json.dumps(relevant, indent=2, sort_keys=True))
     log.info("Wrote %d RBAC assignments to rbac.json", len(relevant))
+
+
+def _policy_query_for_ids(resource_ids: List[str]) -> str:
+    quoted_ids = ", ".join(f"'{_kusto_quote(resource_id)}'" for resource_id in resource_ids)
+    return (
+        "policyresources "
+        "| where type =~ 'microsoft.policyinsights/policystates' "
+        f"| where tostring(properties.resourceId) in~ ({quoted_ids}) "
+        "| project id, name, type, subscriptionId, resourceGroup, properties"
+    )
+
+
+def _simplify_policy_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    properties = row.get("properties") or {}
+    return {
+        "id": row.get("id"),
+        "name": row.get("name"),
+        "type": row.get("type"),
+        "subscriptionId": row.get("subscriptionId"),
+        "resourceGroup": row.get("resourceGroup"),
+        "resourceId": properties.get("resourceId"),
+        "resourceLocation": properties.get("resourceLocation"),
+        "resourceType": properties.get("resourceType"),
+        "complianceState": properties.get("complianceState"),
+        "policyAssignmentId": properties.get("policyAssignmentId"),
+        "policyAssignmentName": properties.get("policyAssignmentName"),
+        "policyAssignmentScope": properties.get("policyAssignmentScope"),
+        "policyDefinitionId": properties.get("policyDefinitionId"),
+        "policyDefinitionName": properties.get("policyDefinitionName"),
+        "policyDefinitionReferenceId": properties.get("policyDefinitionReferenceId"),
+        "policySetDefinitionId": properties.get("policySetDefinitionId"),
+        "policySetDefinitionName": properties.get("policySetDefinitionName"),
+        "timestamp": properties.get("timestamp"),
+        "properties": properties,
+    }
+
+
+def _policy_identity_key(row: Dict[str, Any]) -> tuple[str, str, str, str]:
+    return (
+        normalize_id(row.get("resourceId") or ""),
+        normalize_id(row.get("policyAssignmentId") or ""),
+        (row.get("policyDefinitionReferenceId") or "").strip().lower(),
+        normalize_id(row.get("policyDefinitionId") or ""),
+    )
+
+
+def _policy_timestamp_key(row: Dict[str, Any]) -> str:
+    return (row.get("timestamp") or "").strip()
+
+
+def _latest_policy_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    latest: Dict[tuple[str, str, str, str], Dict[str, Any]] = {}
+    for row in rows:
+        identity = _policy_identity_key(row)
+        current = latest.get(identity)
+        if current is None or _policy_timestamp_key(row) >= _policy_timestamp_key(current):
+            latest[identity] = row
+    return list(latest.values())
+
+
+def run_policy(cfg: Config) -> None:
+    if not cfg.includePolicy:
+        log.info("Azure Policy collection disabled in config.")
+        return
+
+    inv_path = cfg.out("inventory.json")
+    if not inv_path.exists():
+        raise FileNotFoundError("inventory.json not found. Run 'expand' first.")
+    inventory: List[Dict] = load_json_file(
+        inv_path,
+        context="Expand stage artifact",
+        expected_type=list,
+        advice="Fix inventory.json or rerun the expand stage.",
+    )
+
+    resource_ids = sorted({normalize_id(resource["id"]) for resource in inventory if resource.get("id")})
+    if not resource_ids:
+        cfg.ensure_output_dir()
+        cfg.out("policy.json").write_text("[]\n")
+        log.info("No inventory resources found. Wrote empty policy.json")
+        return
+
+    policy_rows: List[Dict[str, Any]] = []
+    for start in range(0, len(resource_ids), _POLICY_BATCH_SIZE):
+        batch = resource_ids[start:start + _POLICY_BATCH_SIZE]
+        policy_rows.extend(query(_policy_query_for_ids(batch), cfg.subscriptions))
+
+    relevant: List[Dict[str, Any]] = []
+    resource_id_set = set(resource_ids)
+    for row in policy_rows:
+        normalized_resource_id = normalize_id(((row.get("properties") or {}).get("resourceId") or ""))
+        if normalized_resource_id in resource_id_set:
+            relevant.append(_simplify_policy_row(row))
+
+    relevant = _latest_policy_rows(relevant)
+    relevant.sort(
+        key=lambda row: (
+            normalize_id(row.get("resourceId") or ""),
+            (row.get("policyAssignmentName") or "").lower(),
+            (row.get("policyDefinitionName") or "").lower(),
+            (row.get("complianceState") or "").lower(),
+        )
+    )
+
+    cfg.ensure_output_dir()
+    cfg.out("policy.json").write_text(json.dumps(relevant, indent=2, sort_keys=True))
+    log.info("Wrote %d Azure Policy state records to policy.json", len(relevant))

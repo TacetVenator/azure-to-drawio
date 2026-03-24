@@ -4,6 +4,7 @@
   "seedResourceGroups": ["rg-app-dev", "rg-app-prod"],
   "outputDir": "app/myapp/out",
   "includeRbac": true,
+  "includePolicy": true,
   "enableTelemetry": false,
   "telemetryLookbackDays": 7,
   "layout": "SUB>REGION>RG>NET",
@@ -15,5 +16,18 @@
   "edgeLabels": false,
   "subnetColors": false,
   "groupByTag": ["Application"],
-  "layoutMagic": false
+  "layoutMagic": false,
+  "applicationSplit": {
+    "enabled": true,
+    "tagKeys": ["Application", "App", "Workload", "Service"],
+    "values": ["*"],
+    "includeSharedDependencies": true,
+    "outputLayout": "subdirs"
+  },
+  "migrationPlan": {
+    "enabled": true,
+    "audience": "mixed",
+    "applicationScope": "both",
+    "includeCopilotPrompts": true
+  }
 }
