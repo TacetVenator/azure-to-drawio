@@ -99,6 +99,12 @@ def _build_pack_summary(
 ) -> Dict[str, Any]:
     nodes = graph.get("nodes", [])
     edges = graph.get("edges", [])
+    public_indicators = _public_indicators(nodes)
+    private_endpoint_count = _private_endpoint_count(nodes)
+    policy_summary = dict(_policy_summary(policy_rows))
+    shared_targets = _shared_targets(nodes, edges)
+    telemetry_edges = len(graph.get("telemetryEdges") or [])
+    non_compliant_policies = policy_summary.get("NonCompliant", 0)
     return {
         "pack": pack_name,
         "resources": len(inventory) or len(nodes),
@@ -107,15 +113,22 @@ def _build_pack_summary(
         "subscriptions": sorted({node.get("subscriptionId") for node in nodes if node.get("subscriptionId")}),
         "resourceGroups": sorted({node.get("resourceGroup") for node in nodes if node.get("resourceGroup")}),
         "unresolved": len(unresolved),
-        "publicIndicators": _public_indicators(nodes),
-        "privateEndpointCount": _private_endpoint_count(nodes),
-        "policySummary": dict(_policy_summary(policy_rows)),
+        "publicIndicators": public_indicators,
+        "privateEndpointCount": private_endpoint_count,
+        "policySummary": policy_summary,
         "rbacAssignments": len(rbac_rows),
         "topTypes": _top_resource_types(inventory),
-        "sharedTargets": _shared_targets(nodes, edges),
-        "hasTelemetry": bool(graph.get("telemetryEdges")),
-        "telemetryEdges": len(graph.get("telemetryEdges") or []),
+        "sharedTargets": shared_targets,
+        "hasTelemetry": bool(telemetry_edges),
+        "telemetryEdges": telemetry_edges,
         "externalNodes": sum(1 for node in nodes if node.get("isExternal")),
+        "hasPublicExposure": bool(public_indicators),
+        "hasPrivateEndpoints": private_endpoint_count > 0,
+        "hasPolicyEvidence": bool(policy_rows),
+        "hasNonCompliantPolicies": non_compliant_policies > 0,
+        "nonCompliantPolicies": non_compliant_policies,
+        "hasSharedDependencies": bool(shared_targets),
+        "hasUnresolvedReferences": bool(unresolved),
     }
 
 
@@ -188,55 +201,262 @@ def _render_migration_plan(cfg: Config, summary: Dict[str, Any], is_root: bool) 
 
 
 def _render_questionnaire(summary: Dict[str, Any]) -> List[str]:
-    return [
+    lines = [
         f"# Migration Questionnaire — {summary['pack']}",
         "",
-        "## Business And Ownership",
-        "- What business capability does this pack support?",
-        "- Who approves downtime, rollback, and target-state design?",
-        "- What are the RTO/RPO expectations?",
+        "Use this pack as an interview guide. Capture answers inline or copy the questions into your working session notes.",
         "",
-        "## Application And Runtime",
-        "- Which components are stateful vs stateless?",
-        "- What hidden dependencies are not represented in Azure resources?",
-        "- Which cutover pattern is acceptable: big bang, blue/green, phased, or coexistence?",
+        "## Interview Plan",
         "",
-        "## Identity, Network, And Data",
-        "- Which identities, certificates, and secrets must be recreated or reconnected?",
-        "- Which private endpoints, DNS zones, routes, and firewalls are required in the target landing zone?",
-        "- Which data stores require replication, seeding, or sync?",
+        "1. Meet the application owner and business sponsor to confirm scope, criticality, and change constraints.",
+        "2. Meet the platform, security, and network teams to validate landing-zone readiness and shared services.",
+        "3. Meet the operations and support teams to confirm monitoring, backup, DR, and cutover readiness.",
+        "4. Close open decisions in `migration-decisions.md` before execution planning starts.",
         "",
-        "## Operations And Compliance",
-        "- Which monitoring, alerting, backup, and DR controls are mandatory before go-live?",
-        "- Which policy violations can be remediated before migration and which require exceptions?",
+        "## Business Sponsor / Application Owner",
+        "- What business capability does this workload support, and what is the impact if it is unavailable?",
+        "- Which environments are in scope: production, DR, test, shared services, batch, integration?",
+        "- What are the approved maintenance windows, blackout periods, and escalation contacts?",
+        "- What are the RTO and RPO expectations, and are they contractual or informal?",
+        "- Which parts of the solution can tolerate coexistence during migration, and which require a single cutover event?",
+        "- Which downstream business processes, partners, or users must be informed before cutover?",
+        "",
+        "## Application Engineering",
+        "- Which components are stateful vs stateless, and which ones can be rebuilt from code?",
+        "- Which runtime dependencies are not visible in Azure resource relationships: hard-coded URLs, certificates, third-party APIs, scheduled jobs, agents, file shares?",
+        "- Which configuration items change per environment: DNS names, connection strings, secrets, firewall rules, identity endpoints?",
+        "- What is the current deployment model: manual, pipeline-based, image-based, or script-based?",
+        "- Which cutover patterns are technically possible: rehost, blue/green, phased, active/passive, dual-write, or big bang?",
+        "- Which validation steps prove the application is healthy after migration?",
+        "",
+        "## Identity And Access",
+        "- Which managed identities, service principals, certificates, and Key Vault references must be recreated or reauthorized?",
+        "- Which people or groups currently have privileged access, and which of those access paths should be removed in the target state?",
+        "- Are any application-to-application trust relationships dependent on IP allowlists, shared secrets, or Entra app registrations?",
+        "- Which RBAC assignments are required for runtime, deployment, operations, and break-glass support?",
+        "- What approvals are required for access changes during cutover and rollback?",
+        "",
+        "## Network, Connectivity, And DNS",
+        "- Which private endpoints, private DNS zones, routes, firewalls, proxies, or on-prem paths are mandatory in the target landing zone?",
+        "- Does the workload require fixed outbound IPs, inbound public endpoints, partner connectivity, or hybrid network reachability?",
+        "- Which name resolution paths must change during migration, and how will DNS TTL and propagation be handled?",
+        "- Are there shared hub, inspection, or egress services that must migrate first or remain stable during cutover?",
+        "",
+        "## Data, State, And Resilience",
+        "- Which data stores require replication, seeding, export/import, or ongoing synchronization?",
+        "- What is the largest data set involved, and how long can data synchronization run before cutover?",
+        "- What are the backup, restore, and DR recovery procedures today, and are they tested?",
+        "- Which components cannot lose in-flight transactions or queued work during migration?",
+        "",
+        "## Security, Compliance, And Operations",
+        "- Which policy violations must be remediated before go-live, and which require formal exceptions or waivers?",
+        "- Which Defender, logging, monitoring, alerting, and audit requirements are mandatory before production cutover?",
+        "- Which operational runbooks, dashboards, alerts, and support handoffs must be updated for the target environment?",
+        "- Which smoke tests, rollback tests, and hypercare checkpoints are required after migration?",
+        "",
+        "## Cutover And Rollback",
+        "- What is the exact business decision point for go / no-go?",
+        "- What events force rollback, and who has authority to trigger it?",
+        "- What must remain unchanged until rollback is no longer possible: DNS, data sync, old environment, network paths, access?",
+        "- What evidence must be captured during cutover for audit and post-migration review?",
     ]
+    if summary["hasPrivateEndpoints"]:
+        lines += [
+            "",
+            "## Private Connectivity And DNS",
+            f"- Discovery signal: {summary['privateEndpointCount']} private endpoint resource(s) detected.",
+            "- Which private DNS zones, zone links, conditional forwarders, or custom DNS resolvers must exist before cutover?",
+            "- Which consumers depend on private name resolution across peered VNets, hubs, or on-prem networks?",
+            "- Which endpoints require static IP expectations, subnet placement, or firewall approvals in the target state?",
+            "- What validation proves private connectivity works end-to-end before public or legacy paths are disabled?",
+        ]
+    if summary["hasPublicExposure"]:
+        lines += [
+            "",
+            "## Public Exposure Review",
+            f"- Discovery signal: {len(summary['publicIndicators'])} public exposure indicator(s) detected.",
+            "- Which public endpoints are intentionally customer-facing vs temporary or legacy exposures?",
+            "- Which controls must front those endpoints in the target state: WAF, reverse proxy, DDoS controls, IP restrictions, or CDN?",
+            "- Which certificates, custom domains, redirects, and external allowlists must move with the exposure?",
+            "- Which validation checks confirm the new public path is healthy before traffic is shifted?",
+        ]
+    if summary["hasNonCompliantPolicies"]:
+        lines += [
+            "",
+            "## Compliance Remediation Interview",
+            f"- Discovery signal: {summary['nonCompliantPolicies']} non-compliant policy record(s) detected.",
+            "- Which non-compliant controls are deployment blockers vs advisory findings for this workload?",
+            "- Which findings can be remediated in the migration wave, and which require a formal exception or time-bound waiver?",
+            "- Who owns each remediation item, and what evidence is required to close it?",
+            "- Which controls must be revalidated immediately after cutover?",
+        ]
+    if summary["hasSharedDependencies"]:
+        lines += [
+            "",
+            "## Shared Services And Coordination",
+            f"- Discovery signal: {len(summary['sharedTargets'])} shared dependency candidate(s) detected.",
+            "- Which shared services are truly multi-application or platform-owned, and who approves changes to them?",
+            "- Must the shared service migrate first, stay in place, or be consumed cross-environment during coexistence?",
+            "- Which other application teams, platform teams, or CAB processes must be coordinated for cutover and rollback?",
+            "- Which sequencing constraints prevent this workload from moving independently?",
+        ]
+    if summary["hasUnresolvedReferences"] or not summary["hasTelemetry"]:
+        lines += ["", "## Evidence Follow-Up"]
+        if summary["hasUnresolvedReferences"]:
+            lines.append("- Which unresolved references represent real dependencies vs deleted or out-of-scope resources?")
+        if not summary["hasTelemetry"]:
+            lines.append("- Which runtime calls or operational dependencies may be missing because no telemetry-derived edges were captured?")
+        lines.append("- What extra evidence should be gathered before final wave planning: telemetry, code/config review, CMDB data, or SME interviews?")
+    lines += [
+        "",
+        "## Known Signals From Discovery",
+        f"- Shared dependency candidates detected: {len(summary['sharedTargets'])}",
+        f"- Public exposure indicators detected: {len(summary['publicIndicators'])}",
+        f"- Private endpoints detected: {summary['privateEndpointCount']}",
+        f"- Non-compliant policy records detected: {summary['nonCompliantPolicies']}",
+        f"- Unresolved references detected: {summary['unresolved']}",
+        f"- Policy records captured: {sum(summary['policySummary'].values())}",
+        f"- Telemetry-derived relationships captured: {summary['telemetryEdges']}",
+    ]
+    return lines
 
 
 def _render_decisions(summary: Dict[str, Any]) -> List[str]:
     return [
         f"# Migration Decisions — {summary['pack']}",
         "",
+        "Use this register to capture the decisions made while completing the questionnaire and decision trees.",
+        "",
         "| decision | status | owner | due date | evidence | notes |",
         "|----------|--------|-------|----------|----------|-------|",
         "| Target landing-zone placement confirmed | Open | TBD | TBD | graph, policy, shared dependencies | |",
+        "| Migration pattern selected (rehost / replatform / refactor) | Open | TBD | TBD | questionnaire, runtime constraints | |",
         "| Identity model confirmed | Open | TBD | TBD | RBAC and application runtime inputs | |",
         "| Networking and DNS pattern confirmed | Open | TBD | TBD | topology, private endpoints, shared services | |",
+        "| Data migration and synchronization method confirmed | Open | TBD | TBD | data store inventory, RPO/RTO input | |",
         "| Cutover and rollback strategy approved | Open | TBD | TBD | wave plan and business input | |",
+        "| Compliance remediation / exception path approved | Open | TBD | TBD | policy summary and security review | |",
     ]
 
 
 def _render_decision_trees(summary: Dict[str, Any]) -> List[str]:
-    return [
+    shared_hint = "Yes" if summary["hasSharedDependencies"] else "No"
+    public_hint = "Yes" if summary["hasPublicExposure"] else "No"
+    private_hint = "Yes" if summary["hasPrivateEndpoints"] else "No"
+    policy_hint = "Yes" if summary["hasPolicyEvidence"] else "No"
+    non_compliant_hint = "Yes" if summary["hasNonCompliantPolicies"] else "No"
+    lines = [
         f"# Decision Trees — {summary['pack']}",
         "",
-        "## Migration Pattern",
-        "- Is the workload tightly coupled to shared services? If yes, plan shared-service prerequisites before app migration.",
-        "- Is data synchronization required? If yes, favor phased or blue/green cutover over big bang.",
+        "These trees are intended to be used during workshops. Follow the branches and record the result in `migration-decisions.md`.",
         "",
-        "## Landing-Zone Readiness",
-        "- Are mandatory network, identity, and observability controls available in the target? If no, stop and complete foundation work first.",
-        "- Are compliance violations unresolved? If yes, document remediation or exception path before wave execution.",
+        "## Decision Tree 1: Choose The Migration Pattern",
+        "",
+        "1. Can the workload be rebuilt from code and configuration with limited infrastructure coupling?",
+        "   If yes: evaluate replatform or refactor before rehost.",
+        "   If no: start from a rehost baseline and reduce risk first.",
+        "2. Does the workload depend on shared services or cross-subscription services?",
+        f"   Discovery hint: {shared_hint}.",
+        "   If yes: create prerequisite work for shared services before scheduling the application wave.",
+        "   If no: the application is a better candidate for an earlier pilot wave.",
+        "3. Does the workload require tight data consistency during cutover?",
+        "   If yes: prefer phased migration, replication, blue/green, or parallel-run patterns.",
+        "   If no: a simpler cutover may be acceptable if rollback is rehearsed.",
+        "",
+        "## Decision Tree 2: Network And Exposure",
+        "",
+        "1. Does the workload expose public endpoints or rely on public network access?",
+        f"   Discovery hint: {public_hint}.",
+        "   If yes: decide whether the target should preserve public exposure, move behind reverse proxy/WAF, or move to private-only access.",
+        "2. Does the workload require private endpoints, hybrid connectivity, or hub inspection services?",
+        f"   Discovery hint: {private_hint}.",
+        "   If yes: validate DNS, firewall, route, and peering prerequisites before any application wave starts.",
+        "3. Will DNS or endpoint ownership change at cutover?",
+        "   If yes: plan TTL reduction, ownership approvals, rollback DNS steps, and validation commands.",
+        "",
+        "## Decision Tree 3: Identity And Access",
+        "",
+        "1. Are managed identities or service principals part of the runtime path?",
+        "   If yes: document which identities must be recreated, reassigned, or reconsented in the target environment.",
+        "2. Are privileged RBAC assignments broader than the target operating model allows?",
+        "   If yes: treat access redesign as part of migration readiness, not a post-cutover cleanup task.",
+        "3. Are any secrets, certificates, or trust chains tied to the current environment?",
+        "   If yes: decide whether to rotate, migrate, or dual-run those credentials during cutover.",
+        "",
+        "## Decision Tree 4: Compliance And Landing-Zone Readiness",
+        "",
+        "1. Are policy results available for the discovered resources?",
+        f"   Discovery hint: {policy_hint}.",
+        "   If no: generate policy evidence before finalizing the migration plan.",
+        "2. Are there non-compliant controls that block production deployment into the target landing zone?",
+        f"   Discovery hint: {non_compliant_hint}.",
+        "   If yes: either remediate before cutover or secure a documented exception path with owners and expiry dates.",
+        "3. Are logging, backup, DR, and monitoring controls present in the target environment?",
+        "   If no: stop and complete foundation work first.",
+        "",
+        "## Decision Tree 5: Cutover And Rollback",
+        "",
+        "1. Can the old and new environments run in parallel for a period of time?",
+        "   If yes: use that overlap to validate traffic, identity, and data movement before final cutover.",
+        "   If no: tighten rollback criteria, increase rehearsal depth, and shorten the dependency chain in the cutover window.",
+        "2. Is rollback technically possible after data changes begin in the target?",
+        "   If yes: define the rollback trigger, latest safe decision point, and exact restoration steps.",
+        "   If no: require stronger executive sign-off and production validation before switching traffic.",
     ]
+    if summary["hasPrivateEndpoints"]:
+        lines += [
+            "",
+            "## Priority Tree: Private Connectivity And DNS",
+            "",
+            "1. Are private endpoints part of the required runtime path?",
+            f"   Discovery hint: {private_hint}.",
+            "   If yes: treat private DNS, route propagation, and resolver dependencies as hard prerequisites.",
+            "2. Can private DNS and endpoint approval be completed before application deployment starts?",
+            "   If no: move this workload behind the networking foundation wave.",
+        ]
+    if summary["hasPublicExposure"]:
+        lines += [
+            "",
+            "## Priority Tree: Public Exposure Review",
+            "",
+            "1. Is each discovered public endpoint still required in the target state?",
+            f"   Discovery hint: {public_hint}.",
+            "   If no: remove or privatize the endpoint as part of migration readiness.",
+            "2. If public exposure remains, can traffic be shifted behind equivalent controls without changing the user contract?",
+            "   If no: escalate the design decision before approving the cutover path.",
+        ]
+    if summary["hasNonCompliantPolicies"]:
+        lines += [
+            "",
+            "## Priority Tree: Compliance Remediation",
+            "",
+            "1. Do any discovered non-compliant controls block deployment or production operation?",
+            f"   Discovery hint: {non_compliant_hint}.",
+            "   If yes: remediation or exception approval must complete before the workload enters a cutover wave.",
+            "2. Is there a documented owner and due date for each non-compliant finding?",
+            "   If no: keep the workload out of the committed migration schedule.",
+        ]
+    if summary["hasSharedDependencies"]:
+        lines += [
+            "",
+            "## Priority Tree: Shared Services And Coordination",
+            "",
+            "1. Are shared services or shared targets on the critical path?",
+            f"   Discovery hint: {shared_hint}.",
+            "   If yes: sequence this workload after the shared-service decision and owner sign-off are complete.",
+            "2. Can this workload roll back independently if the shared dependency is reused by other applications?",
+            "   If no: require a coordinated rollback and communications plan.",
+        ]
+    if summary["hasUnresolvedReferences"]:
+        lines += [
+            "",
+            "## Priority Tree: Unresolved Dependency Review",
+            "",
+            "1. Do unresolved references point to still-active resources or services?",
+            "   If yes: bring them into scope or document why they remain external dependencies.",
+            "2. If no: remove the stale dependency evidence before final sign-off.",
+        ]
+    return lines
 
 
 def _render_wave_plan(summary: Dict[str, Any], is_root: bool) -> List[str]:
@@ -259,6 +479,12 @@ def _render_wave_plan(summary: Dict[str, Any], is_root: bool) -> List[str]:
         "- Connectivity and identity paths tested.",
         "- Backup and rollback paths rehearsed.",
         "- Stakeholder approvals recorded.",
+        "",
+        "## Exit Criteria Per Wave",
+        "- All open decisions for that wave are closed or explicitly waived.",
+        "- Application and platform owners sign off on functional validation.",
+        "- Security and operations teams confirm monitoring, logging, and access expectations are met.",
+        "- Rollback steps remain viable until the agreed point of no return.",
     ]
     return lines
 

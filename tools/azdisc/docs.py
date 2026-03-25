@@ -1,4 +1,4 @@
-"""Documentation generators: catalog.md, edges.md, routing.md, migration.md."""
+"""Documentation generators: catalog.md, edges.md, routing.md, migration.md, policy_summary.md, rbac_summary.md."""
 from __future__ import annotations
 
 import json
@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
 from .config import Config
+from .governance import normalize_compliance_state, simplify_rbac_rows, summarize_policy_rows, summarize_resource_access
 from .util import load_json_file, normalize_id
 
 log = logging.getLogger(__name__)
@@ -52,14 +53,35 @@ def generate_docs(cfg: Config) -> None:
             advice="Fix inventory.json or rerun the expand stage.",
         )
 
-    rbac_present = cfg.out("rbac.json").exists()
+    rbac_rows: List[Dict] = []
+    rbac_path = cfg.out("rbac.json")
+    if rbac_path.exists():
+        rbac_rows = load_json_file(
+            rbac_path,
+            context="Docs stage RBAC artifact",
+            expected_type=list,
+            advice="Fix rbac.json or rerun the RBAC stage.",
+        )
+    policy_rows: List[Dict] = []
+    policy_path = cfg.out("policy.json")
+    if policy_path.exists():
+        policy_rows = load_json_file(
+            policy_path,
+            context="Docs stage policy artifact",
+            expected_type=list,
+            advice="Fix policy.json or rerun the policy stage.",
+        )
+
+    rbac_present = rbac_path.exists()
 
     cfg.ensure_output_dir()
     _write_catalog(cfg, nodes)
     _write_edges(cfg, nodes, edges, unresolved)
     _write_routing(cfg, nodes, edges)
     _write_migration(cfg, nodes, edges, unresolved, inventory, rbac_present)
-    log.info("Wrote catalog.md, edges.md, routing.md, migration.md")
+    _write_policy_summary(cfg, nodes, policy_rows, policy_path.exists())
+    _write_rbac_summary(cfg, nodes, rbac_rows, rbac_path.exists())
+    log.info("Wrote catalog.md, edges.md, routing.md, migration.md, policy_summary.md, rbac_summary.md")
 
 
 def _write_catalog(cfg: Config, nodes: List[Dict]) -> None:
@@ -887,3 +909,133 @@ def _edge_evidence_summary(nodes: List[Dict], edges: List[Dict]) -> Dict[str, An
         "telemetry_kinds": telemetry_kinds,
         "external_kinds": external_kinds,
     }
+
+
+def _resource_label(node: Dict[str, Any], resource_id: str) -> str:
+    name = node.get("name") or resource_id
+    rtype = node.get("type") or "unknown"
+    return f"{name} ({rtype})"
+
+
+def _write_policy_summary(cfg: Config, nodes: List[Dict], policy_rows: List[Dict], artifact_present: bool) -> None:
+    node_by_id = {normalize_id(node.get("id") or ""): node for node in nodes if node.get("id")}
+    lines = [f"# Policy Compliance Summary — {cfg.app}", ""]
+
+    if not artifact_present:
+        lines.append("_No policy.json artifact was found. Run the policy stage or enable `includePolicy` to generate this report._")
+        cfg.out("policy_summary.md").write_text("\n".join(lines) + "\n")
+        return
+
+    counts = summarize_policy_rows(policy_rows)
+    noncompliant_rows = [row for row in policy_rows if normalize_compliance_state(row.get("complianceState")) == "NonCompliant"]
+    noncompliant_by_resource: Dict[str, List[Dict]] = defaultdict(list)
+    for row in noncompliant_rows:
+        resource_id = normalize_id(row.get("resourceId") or "")
+        noncompliant_by_resource[resource_id].append(row)
+
+    other_states = sum(counts.values()) - counts.get("Compliant", 0) - counts.get("NonCompliant", 0) - counts.get("Exempt", 0)
+    lines += [
+        "## Executive Summary",
+        "",
+        f"- Policy state records: {len(policy_rows)}",
+        f"- Compliant: {counts.get('Compliant', 0)}",
+        f"- Non-compliant: {counts.get('NonCompliant', 0)}",
+        f"- Exempt: {counts.get('Exempt', 0)}",
+        f"- Other states: {other_states}",
+        f"- Resources with at least one non-compliant policy: {len(noncompliant_by_resource)}",
+        "",
+    ]
+
+    if not noncompliant_by_resource:
+        lines += [
+            "## Non-Compliant Resources",
+            "",
+            "_No non-compliant policy records were found in the current artifact._",
+        ]
+        cfg.out("policy_summary.md").write_text("\n".join(lines) + "\n")
+        return
+
+    lines += [
+        "## Non-Compliant Resources",
+        "",
+        "| resource | resource group | non-compliant policies | examples |",
+        "|----------|----------------|------------------------|----------|",
+    ]
+    summary_rows = []
+    for resource_id, rows in noncompliant_by_resource.items():
+        node = node_by_id.get(resource_id, {})
+        label = _resource_label(node, resource_id)
+        rg = node.get("resourceGroup") or rows[0].get("resourceGroup") or ""
+        examples = ", ".join(sorted({row.get("policyAssignmentName") or row.get("policyDefinitionName") or "Unnamed policy" for row in rows})[:3])
+        summary_rows.append((label.lower(), label, rg, len(rows), examples, resource_id, rows))
+    for _, label, rg, count, examples, _resource_id, _rows in sorted(summary_rows):
+        lines.append(f"| {label} | {rg} | {count} | {examples} |")
+
+    lines += ["", "## Detail By Resource", ""]
+    for _, label, _rg, _count, _examples, resource_id, rows in sorted(summary_rows):
+        lines.append(f"### {label}")
+        lines.append(f"- Resource ID: `{resource_id}`")
+        for row in sorted(rows, key=lambda item: ((item.get("policyAssignmentName") or "").lower(), (item.get("policyDefinitionName") or "").lower())):
+            assignment = row.get("policyAssignmentName") or "Unnamed assignment"
+            definition = row.get("policyDefinitionName") or "Unnamed definition"
+            timestamp = row.get("timestamp") or "unknown time"
+            lines.append(f"- {assignment}: {definition} ({normalize_compliance_state(row.get('complianceState'))}, {timestamp})")
+        lines.append("")
+
+    cfg.out("policy_summary.md").write_text("\n".join(lines) + "\n")
+
+
+def _write_rbac_summary(cfg: Config, nodes: List[Dict], rbac_rows: List[Dict], artifact_present: bool) -> None:
+    lines = [f"# RBAC Access Review Summary — {cfg.app}", ""]
+
+    if not artifact_present:
+        lines.append("_No rbac.json artifact was found. Run the RBAC stage or enable `includeRbac` to generate this report._")
+        cfg.out("rbac_summary.md").write_text("\n".join(lines) + "\n")
+        return
+
+    simplified = simplify_rbac_rows(rbac_rows)
+    access_rows = summarize_resource_access(nodes, rbac_rows)
+    lines += [
+        "## Executive Summary",
+        "",
+        f"- Role assignments captured: {len(rbac_rows)}",
+        f"- Unique principals: {len({row['principalName'] for row in simplified})}",
+        f"- Unique roles: {len({row['roleName'] for row in simplified})}",
+        f"- Resources with effective access captured: {len(access_rows)}",
+        "- Effective access counts include direct assignments and inherited assignments from parent scopes such as resource group or subscription.",
+        "",
+    ]
+
+    if not access_rows:
+        lines += [
+            "## Access Review View",
+            "",
+            "_No effective RBAC assignments were matched to discovered resources._",
+        ]
+        cfg.out("rbac_summary.md").write_text("\n".join(lines) + "\n")
+        return
+
+    lines += [
+        "## Access Review View",
+        "",
+        "| resource | resource group | effective assignments | distinct roles | distinct principals | inherited assignments |",
+        "|----------|----------------|-----------------------|----------------|---------------------|-----------------------|",
+    ]
+    for row in access_rows[:25]:
+        lines.append(
+            f"| {row['resourceName']} ({row['resourceType']}) | {row['resourceGroup']} | {row['effectiveAssignments']} | {row['distinctRoles']} | {row['distinctPrincipals']} | {row['inheritedAssignments']} |"
+        )
+
+    lines += ["", "## Detail By Resource", ""]
+    for row in access_rows[:25]:
+        lines.append(f"### {row['resourceName']} ({row['resourceType']})")
+        lines.append(f"- Resource ID: `{row['resourceId']}`")
+        lines.append(f"- Effective assignments: {row['effectiveAssignments']}")
+        lines.append(f"- Direct assignments: {row['directAssignments']}")
+        lines.append(f"- Inherited assignments: {row['inheritedAssignments']}")
+        for assignment in sorted(row['assignments'], key=lambda item: (item['roleName'].lower(), item['principalName'].lower(), item['scope'])):
+            scope_note = "direct" if assignment['scope'] == row['resourceId'] else f"inherited from {assignment['scope']}"
+            lines.append(f"- {assignment['roleName']} -> {assignment['principalName']} ({assignment['principalType']}; {scope_note})")
+        lines.append("")
+
+    cfg.out("rbac_summary.md").write_text("\n".join(lines) + "\n")

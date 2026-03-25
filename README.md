@@ -12,6 +12,8 @@ Azure Resource Graph  ──►  Seed  ──►  Expand  ──►  RBAC  ─�
                                    unresolved.json                                      diagram.svg     edges.md
                                                                                          diagram.png     routing.md
                                                                                                           migration.md
+                                                                                                          policy_summary.md
+                                                                                                          rbac_summary.md
                                                                                          icons_used.json
 ```
 
@@ -23,7 +25,7 @@ The tool runs a seven-stage pipeline. Each stage reads the previous stage's outp
 4. **Policy** *(optional, `includePolicy: true`)* — Reads `inventory.json`, queries Azure Policy state for the discovered resource IDs, and writes `policy.json`.
 5. **Graph** — Reads `inventory.json`, `unresolved.json`, and optionally `rbac.json`. Builds a normalized graph model: separates parent and child resources, merges children (VM extensions, SQL firewall rules, etc.) into parent node attributes, extracts typed edges from resource properties, and adds placeholder nodes for unresolved external references. Writes `graph.json`.
 6. **Draw.io** — Reads `graph.json` and the icon map from `assets/azure_icon_map.json`. Computes the supported deterministic layout (`SUB>REGION>RG>NET`), generates draw.io XML with positioned nodes, styled icons, edges, UDR callout boxes, and attribute info boxes. Writes `diagram.drawio` and `icons_used.json`. If the `drawio` CLI is on `PATH`, also exports `diagram.svg` and `diagram.png`.
-7. **Docs** — Reads `graph.json`, `unresolved.json`, and any available `inventory.json` / `rbac.json` artifacts. Generates four Markdown reports: `catalog.md`, `edges.md`, `routing.md`, and `migration.md`.
+7. **Docs** — Reads `graph.json`, `unresolved.json`, and any available `inventory.json`, `policy.json`, and `rbac.json` artifacts. Generates Markdown reports for inventory, relationships, routing, migration readiness, policy compliance, and RBAC access review: `catalog.md`, `edges.md`, `routing.md`, `migration.md`, `policy_summary.md`, and `rbac_summary.md`.
 
 ---
 
@@ -96,6 +98,19 @@ Only policy state records whose `resourceId` matches the discovered inventory ar
 
 **Requires:** `inventory.json` in the output directory, Azure CLI authenticated.
 **Produces:** `policy.json`
+
+#### `telemetry` — Enrich the graph with runtime evidence
+
+Reads the current discovery artifacts and queries supported telemetry sources such as Application Insights dependencies, Activity Log access patterns, and Flow Log network evidence. The command updates `graph.json` with `telemetryEdges` and lets later docs and migration outputs distinguish configuration-derived vs runtime-derived relationships.
+
+```bash
+python3 -m tools.azdisc telemetry app/myapp/config.json
+```
+
+Use this when you want better runtime dependency evidence without re-running seed or expand.
+
+**Requires:** `graph.json` in the output directory, Azure CLI authenticated, and `enableTelemetry: true` or a config suitable for telemetry queries.
+**Produces:** updated `graph.json`
 
 #### `seed` — Seed resources from the configured discovery scope
 
@@ -270,7 +285,7 @@ Reads the existing discovery artifacts and writes a migration planning pack unde
 python3 -m tools.azdisc migration-plan app/myapp/config.json
 ```
 
-Use this when you need deterministic migration templates, stakeholder questions, decision logs, wave planning, and Copilot prompts without re-running Azure discovery.
+Use this when you need deterministic migration templates, stakeholder questions, decision logs, wave planning, and Copilot prompts without re-running Azure discovery. The generated questionnaire and decision trees now expand adaptively when discovery finds signals such as private endpoints, public exposure, policy non-compliance, shared-service coupling, unresolved references, or missing telemetry evidence.
 
 **Requires:** `graph.json` in the output directory. Root and split packs also consume `inventory.json`, `unresolved.json`, `policy.json`, and `rbac.json` when present.
 **Produces:** `migration-plan/migration-plan.md`, `migration-plan/migration-questionnaire.md`, `migration-plan/migration-decisions.md`, `migration-plan/decision-trees.md`, `migration-plan/wave-plan.md`, `migration-plan/stakeholder-pack.md`, `migration-plan/technical-gaps.md`, optional `migration-plan/copilot-prompts.md`, and `migration-plan.json`
@@ -300,14 +315,47 @@ python3 -m tools.azdisc test-all [output_dir]
 
 #### `docs` — Generate documentation
 
-Reads `graph.json` and produces four Markdown reports.
+Reads `graph.json` plus any available supporting artifacts and produces the Markdown reporting set used by architecture, migration, and governance review.
 
 ```bash
 python3 -m tools.azdisc docs app/myapp/config.json
 ```
 
 **Requires:** `graph.json` in the output directory.
-**Produces:** `catalog.md`, `edges.md`, `routing.md`, `migration.md`
+**Produces:** `catalog.md`, `edges.md`, `routing.md`, `migration.md`, and when `policy.json` / `rbac.json` exist, `policy_summary.md` and `rbac_summary.md`
+
+#### `inventory-csv` — Export tabular inventory
+
+Reads `inventory.json` and writes a flat CSV export for spreadsheet-style review.
+
+```bash
+python3 -m tools.azdisc inventory-csv app/myapp/config.json
+```
+
+**Requires:** `inventory.json` in the output directory.
+**Produces:** `inventory.csv`
+
+#### `inventory-yaml` — Export grouped inventory
+
+Reads `inventory.json` and writes a grouped YAML export controlled by `inventoryGroupBy`.
+
+```bash
+python3 -m tools.azdisc inventory-yaml app/myapp/config.json
+```
+
+**Requires:** `inventory.json` in the output directory.
+**Produces:** `inventory.yaml`
+
+#### `master-report` — Generate a consolidated architecture report
+
+Reads the current output folder and writes a single `master_report.md` that links inventory, topology, routing, migration, governance, and migration-planning artifacts. When policy and RBAC artifacts are present, it also includes snapshot counts and a per-resource access summary table.
+
+```bash
+python3 -m tools.azdisc master-report app/myapp/config.json
+```
+
+**Requires:** the relevant artifacts you want linked or summarized, typically `graph.json` and any optional `policy.json`, `rbac.json`, and `migration-plan/` outputs.
+**Produces:** `master_report.md`
 
 ### Typical Workflows
 
@@ -373,7 +421,14 @@ python3 -m tools.azdisc run app/myapp/config.json
 python3 -m tools.azdisc migration-plan app/myapp/config.json
 ```
 
-If `migrationPlan.enabled` is `true`, `run` writes the same planning pack automatically after root and split artifacts are ready.
+If `migrationPlan.enabled` is `true`, `run` writes the same planning pack automatically after root and split artifacts are ready. The questionnaire and decision-tree outputs expand based on discovered signals such as public exposure, private connectivity, shared dependencies, and policy non-compliance.
+
+**Generate the consolidated master report after docs and planning artifacts exist:**
+
+```bash
+python3 -m tools.azdisc run app/myapp/config.json
+python3 -m tools.azdisc master-report app/myapp/config.json
+```
 
 **Generate a Markdown report of all 12 diagram variants (layout × mode × spacing):**
 
@@ -551,6 +606,8 @@ The generated planning pack includes:
 - `technical-gaps.md`
 - optional `copilot-prompts.md`
 - `migration-plan.json`
+
+`migration-plan.json` contains the pack summary used to drive the adaptive content, including counts and booleans for signals such as public exposure, private endpoints, policy evidence, non-compliant policy findings, shared dependencies, telemetry evidence, and unresolved references.
 
 ---
 

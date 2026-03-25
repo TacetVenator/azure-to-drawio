@@ -61,6 +61,8 @@ def _seed_scope_summary(cfg: Config) -> str:
         parts.append(f"tags={tag_parts}")
     if cfg.seedTagKeys:
         parts.append(f"tagKeys={cfg.seedTagKeys}")
+    if cfg.seedEntireSubscriptions:
+        parts.append("scope=all-listed-subscriptions")
     return ", ".join(parts)
 
 

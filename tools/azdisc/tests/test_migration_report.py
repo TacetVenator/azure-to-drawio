@@ -387,3 +387,94 @@ def test_migration_md_expands_public_and_private_exposure_tables(tmp_path):
     assert "fd1.azurefd.net" in content
     assert "tm1.trafficmanager.net" in content
     assert "| pe-storage | snet-private | sa1 (microsoft.storage/storageaccounts) | blob |" in content
+
+
+
+def test_generate_docs_writes_policy_and_rbac_governance_summaries(tmp_path):
+    graph = {
+        "nodes": [
+            {
+                "id": "/subscriptions/sub1/resourceGroups/rg-app/providers/Microsoft.Web/sites/app1",
+                "name": "app1",
+                "type": "microsoft.web/sites",
+                "subscriptionId": "sub1",
+                "resourceGroup": "rg-app",
+            },
+            {
+                "id": "/subscriptions/sub1/resourceGroups/rg-data/providers/Microsoft.Sql/servers/sql1",
+                "name": "sql1",
+                "type": "microsoft.sql/servers",
+                "subscriptionId": "sub1",
+                "resourceGroup": "rg-data",
+            },
+        ],
+        "edges": [],
+    }
+    policy = [
+        {
+            "resourceId": "/subscriptions/sub1/resourceGroups/rg-app/providers/Microsoft.Web/sites/app1",
+            "resourceGroup": "rg-app",
+            "complianceState": "NonCompliant",
+            "policyAssignmentName": "deny-public",
+            "policyDefinitionName": "App Service should disable public network access",
+            "timestamp": "2026-03-24T10:00:00Z",
+        },
+        {
+            "resourceId": "/subscriptions/sub1/resourceGroups/rg-data/providers/Microsoft.Sql/servers/sql1",
+            "resourceGroup": "rg-data",
+            "complianceState": "Compliant",
+            "policyAssignmentName": "sql-baseline",
+            "policyDefinitionName": "SQL should use TDE",
+            "timestamp": "2026-03-24T10:05:00Z",
+        },
+    ]
+    rbac = [
+        {
+            "properties": {
+                "scope": "/subscriptions/sub1/resourceGroups/rg-app/providers/Microsoft.Web/sites/app1",
+                "roleDefinitionName": "Contributor",
+                "principalName": "App Ops",
+                "principalType": "Group",
+            }
+        },
+        {
+            "properties": {
+                "scope": "/subscriptions/sub1/resourceGroups/rg-app",
+                "roleDefinitionName": "Reader",
+                "principalName": "Audit Team",
+                "principalType": "Group",
+            }
+        },
+    ]
+
+    (tmp_path / "graph.json").write_text(json.dumps(graph))
+    (tmp_path / "inventory.json").write_text(json.dumps([]))
+    (tmp_path / "policy.json").write_text(json.dumps(policy))
+    (tmp_path / "rbac.json").write_text(json.dumps(rbac))
+
+    cfg = Config(
+        app="governance-app",
+        subscriptions=["sub1"],
+        seedResourceGroups=["rg-app"],
+        outputDir=str(tmp_path),
+    )
+    generate_docs(cfg)
+
+    policy_summary = (tmp_path / "policy_summary.md").read_text()
+    assert "## Executive Summary" in policy_summary
+    assert "- Policy state records: 2" in policy_summary
+    assert "- Non-compliant: 1" in policy_summary
+    assert "- Resources with at least one non-compliant policy: 1" in policy_summary
+    assert "| app1 (microsoft.web/sites) | rg-app | 1 | deny-public |" in policy_summary
+    assert "### app1 (microsoft.web/sites)" in policy_summary
+    assert "deny-public: App Service should disable public network access (NonCompliant, 2026-03-24T10:00:00Z)" in policy_summary
+
+    rbac_summary = (tmp_path / "rbac_summary.md").read_text()
+    assert "## Executive Summary" in rbac_summary
+    assert "- Role assignments captured: 2" in rbac_summary
+    assert "- Unique principals: 2" in rbac_summary
+    assert "- Resources with effective access captured: 1" in rbac_summary
+    assert "| app1 (microsoft.web/sites) | rg-app | 2 | 2 | 2 | 1 |" in rbac_summary
+    assert "### app1 (microsoft.web/sites)" in rbac_summary
+    assert "- Contributor -> App Ops (Group; direct)" in rbac_summary
+    assert "- Reader -> Audit Team (Group; inherited from /subscriptions/sub1/resourcegroups/rg-app)" in rbac_summary
