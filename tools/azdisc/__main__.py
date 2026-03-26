@@ -6,7 +6,7 @@ import logging
 import sys
 
 from .config import load_config
-from .discover import run_expand, run_policy, run_rbac, run_seed
+from .discover import prepare_related_extended_inventory, run_expand, run_policy, run_rbac, run_related_candidates, run_seed
 from .docs import generate_docs
 from .drawio import generate_drawio
 from .graph import build_graph
@@ -45,6 +45,26 @@ def cmd_seed(args) -> None:
 def cmd_expand(args) -> None:
     cfg = load_config(args.config)
     run_expand(cfg)
+
+
+def cmd_related_candidates(args) -> None:
+    cfg = load_config(args.config)
+    run_related_candidates(cfg)
+
+
+def cmd_related_extend(args) -> None:
+    cfg = load_config(args.config)
+    extended_cfg = prepare_related_extended_inventory(cfg)
+    if extended_cfg.includeRbac:
+        run_rbac(extended_cfg)
+    if extended_cfg.includePolicy:
+        run_policy(extended_cfg)
+    build_graph(extended_cfg)
+    if extended_cfg.enableTelemetry:
+        run_telemetry_enrichment(extended_cfg)
+    generate_drawio(extended_cfg)
+    generate_docs(extended_cfg)
+    log.info("Extended related-resource pack complete for app=%s at %s", extended_cfg.app, extended_cfg.outputDir)
 
 
 def cmd_rbac(args) -> None:
@@ -141,6 +161,8 @@ def main() -> None:
         ("telemetry", cmd_telemetry, "Enrich graph with App Insights, Activity Log, and Flow Log telemetry"),
         ("seed", cmd_seed, "Seed resources from RGs"),
         ("expand", cmd_expand, "Expand resources transitively"),
+        ("related-candidates", cmd_related_candidates, "Find possible related resources by configured name substrings"),
+        ("related-extend", cmd_related_extend, "Generate an extended pack from curated related resources in a dedicated directory"),
         ("rbac", cmd_rbac, "Collect RBAC assignments for discovered resources"),
         ("policy", cmd_policy, "Collect Azure Policy state for discovered resources"),
         ("graph", cmd_graph, "Build graph model"),

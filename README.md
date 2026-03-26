@@ -207,6 +207,28 @@ IDs that match non-resource patterns (marketplace image references, location met
 **Requires:** `seed.json` in the output directory, Azure CLI authenticated.
 **Produces:** `inventory.json`, `unresolved.json`
 
+#### `related-candidates` — Find possible related resources by name
+
+Runs the first step of the deep-discovery workflow and writes candidate artifacts under the configured deep-discovery directory.
+
+```bash
+python3 -m tools.azdisc related-candidates app/myapp/config.json
+```
+
+**Requires:** base `inventory.json`, `deepDiscovery.enabled: true`, Azure CLI authenticated.
+**Produces:** the configured candidate and promoted related-resource files.
+
+#### `related-extend` — Generate an extended pack from curated matches
+
+Runs the second step of the deep-discovery workflow by merging the curated promoted resources into a separate extended output directory and reusing the normal report and diagram pipeline there.
+
+```bash
+python3 -m tools.azdisc related-extend app/myapp/config.json
+```
+
+**Requires:** base `inventory.json`, curated promoted related-resource file.
+**Produces:** the configured extended inventory plus the derived graph, diagram, and report artifacts.
+
 #### `graph` — Build graph model
 
 Reads `inventory.json` and builds a normalized graph of nodes and edges.
@@ -472,6 +494,14 @@ The tool reads a JSON configuration file. An example is provided at `app/myapp/c
   "subnetColors": false,
   "groupByTag": ["Application"],
   "layoutMagic": false,
+  "deepDiscovery": {
+    "enabled": true,
+    "searchStrings": ["SAP", "bpc"],
+    "candidateFile": "related_candidates.json",
+    "promotedFile": "related_promoted.json",
+    "outputDirName": "deep-discovery",
+    "extendedOutputDirName": "extended"
+  },
   "applicationSplit": {
     "enabled": true,
     "tagKeys": ["Application", "App", "Workload", "Service"],
@@ -513,6 +543,7 @@ The tool reads a JSON configuration file. An example is provided at `app/myapp/c
 | `subnetColors` | `bool` | No | `false` | `true`, `false` | Reserved for subnet/VNet-style layouts. The current supported render surface does not use this flag. |
 | `groupByTag` | `string[]` | No | `[]` | list of non-empty strings | Splits the Resources section into additional tag-based subsections. `["any"]` checks common app/workload tag names and groups untagged resources under `Untagged`. |
 | `layoutMagic` | `bool` | No | `false` | `true`, `false` | Enables degree-aware ordering and adaptive column counts to produce a different, often denser layout. |
+| `deepDiscovery` | `object` | No | disabled | see below | Optional two-step deep-discovery workflow for finding name-matched resources outside the base application inventory and generating an extended pack in a dedicated directory. |
 | `applicationSplit` | `object` | No | disabled | see below | Optional post-discovery slicing of inventory, graph, diagram, and reports into per-application outputs based on tags. |
 | `migrationPlan` | `object` | No | disabled | see below | Optional migration planning pack generation from existing discovery artifacts. |
 
@@ -528,6 +559,91 @@ Use these rules of thumb:
 - Choose `seedEntireSubscriptions` when you are building a broad baseline of a shared platform, landing zone, or poorly tagged estate.
 
 You can combine `seedResourceGroups`, `seedTags`, and `seedTagKeys`. The seed stage treats them as additive scope criteria. `seedEntireSubscriptions` is the broadest mode and is typically used on its own.
+
+## Deep Discovery
+
+Use deep discovery when the normal seeded discovery is complete but you still need to do due diligence for possible related resources that may sit in a different resource group or subscription and may not be reachable through ARM-ID expansion. The intended use case is catching name-based clues such as `SAP` or `bpc` in resources like Logic Apps or Data Collection Rules.
+
+This workflow is intentionally separate from the default `run` pipeline:
+- Base discovery stays deterministic and scope-driven.
+- Deep discovery is opt-in and heuristic.
+- Extended outputs are written to a dedicated directory so the base pack is left unchanged.
+
+### How It Works
+
+Deep discovery has two commands:
+
+1. `related-candidates`
+   Searches Azure Resource Graph across the configured `subscriptions` for resources whose `name` contains one or more configured `deepDiscovery.searchStrings`.
+
+2. `related-extend`
+   Reads a curated promoted list, merges those resources into an extended application inventory, and generates diagrams and reports in a separate extended directory.
+
+### Config
+
+```json
+{
+  "deepDiscovery": {
+    "enabled": true,
+    "searchStrings": ["SAP", "bpc"],
+    "candidateFile": "related_candidates.json",
+    "promotedFile": "related_promoted.json",
+    "outputDirName": "deep-discovery",
+    "extendedOutputDirName": "extended"
+  }
+}
+```
+
+Field meanings:
+- `enabled`: turns the feature on for the related-resource commands.
+- `searchStrings`: case-insensitive substrings matched against Azure resource `name`.
+- `candidateFile`: raw candidate output written by `related-candidates`.
+- `promotedFile`: editable file used to curate which candidates should enter the extended pack.
+- `outputDirName`: subdirectory under the base `outputDir` used for deep-discovery artifacts.
+- `extendedOutputDirName`: subdirectory under the deep-discovery directory where the extended pack is generated.
+
+### Workflow
+
+1. Run the normal base discovery pipeline.
+
+```bash
+python3 -m tools.azdisc run app/myapp/config.json
+```
+
+2. Find possible related resources by name.
+
+```bash
+python3 -m tools.azdisc related-candidates app/myapp/config.json
+```
+
+This writes two files under `outputDir/deep-discovery/` by default:
+- `related_candidates.json`: the raw candidate set discovered by name matching.
+- `related_promoted.json`: initialized with the same content so the user can remove noise.
+
+3. Curate the promoted file.
+
+Remove entries from `related_promoted.json` that are not actually part of the application scope you want to extend.
+
+4. Generate the extended pack.
+
+```bash
+python3 -m tools.azdisc related-extend app/myapp/config.json
+```
+
+This writes a separate pack under `outputDir/deep-discovery/extended/` by default, including:
+- merged `inventory.json`
+- `graph.json`
+- `diagram.drawio`
+- Markdown reports
+- optional RBAC, policy, and telemetry artifacts when enabled
+
+### Behavior Notes
+
+- Matching is currently case-insensitive substring matching on `resources.name` only.
+- Candidates already present in the base `inventory.json` are excluded.
+- `related-candidates` initializes the promoted file from the raw candidate set each time it runs.
+- `related-extend` uses only the curated promoted file, not the full candidate file.
+- The base output directory is not modified by the extended generation step.
 
 ### `applicationSplit`
 

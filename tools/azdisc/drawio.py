@@ -293,6 +293,134 @@ def _node_tags(node: Dict) -> Dict[str, str]:
     return {str(k).strip().lower(): str(v).strip() for k, v in tags.items() if str(v).strip()}
 
 
+def _display_tag_items(node: Dict) -> List[Tuple[str, str]]:
+    tags = node.get("tags") or {}
+    items: List[Tuple[str, str]] = []
+    if not isinstance(tags, dict):
+        return items
+    for key, value in tags.items():
+        tag_key = str(key).strip()
+        tag_value = "" if value is None else str(value).strip()
+        if tag_key and tag_value:
+            items.append((tag_key, tag_value))
+    items.sort(key=lambda item: (item[0].lower(), item[1].lower()))
+    return items
+
+
+def _resource_metadata_lines(node: Dict) -> List[str]:
+    lines = list(node.get("attributes", []) or [])
+    for key, value in _display_tag_items(node):
+        lines.append(f"Tag: {key}={value}")
+    return lines
+
+
+def _diagram_inventory_lines(nodes: List[Dict], visible_node_ids: set[str]) -> List[str]:
+    grouped: Dict[str, List[str]] = defaultdict(list)
+    rendered_count = 0
+    for node in nodes:
+        node_id = node.get("id")
+        if not node_id or node_id not in visible_node_ids:
+            continue
+        node_type = (node.get("type") or "").lower()
+        if node_type.startswith("__boundary__"):
+            continue
+        grouped[node_type or "unknown"].append(node.get("displayName") or node.get("name") or node_id)
+        rendered_count += 1
+    if not grouped:
+        return []
+    lines = ["Diagram Inventory", "──────────────────────", f"Resources shown: {rendered_count}"]
+    for node_type in sorted(grouped.keys()):
+        lines.append("")
+        lines.append(node_type)
+        for name in sorted(dict.fromkeys(grouped[node_type]), key=lambda value: value.lower()):
+            lines.append(f"  {name}")
+    return lines
+
+
+def _emit_text_panel(
+    root: ET.Element,
+    panel_id: str,
+    lines: List[str],
+    *,
+    x: int,
+    y: int,
+    width: int,
+    style: str,
+) -> int:
+    label = "\n".join(lines)
+    height = max(60, 16 * len(lines) + 24)
+    cell = ET.SubElement(root, "mxCell")
+    cell.set("id", panel_id)
+    cell.set("value", label)
+    cell.set("style", style)
+    cell.set("vertex", "1")
+    cell.set("parent", LAYER_LABELS)
+    geo = ET.SubElement(cell, "mxGeometry")
+    geo.set("x", str(x))
+    geo.set("y", str(y))
+    geo.set("width", str(width))
+    geo.set("height", str(height))
+    geo.set("as", "geometry")
+    return height
+
+
+def _emit_resource_metadata_boxes(
+    root: ET.Element,
+    nodes: List[Dict],
+    node_id_map: Dict[str, str],
+    positions: Dict[str, Tuple[int, int, int, int]],
+    node_parents: Dict[str, str],
+    container_positions: Dict[str, Tuple[int, int]],
+) -> None:
+    attr_edge_style = (
+        "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;"
+        "strokeColor=#9673a6;dashed=1;strokeWidth=2;"
+    )
+    for node in nodes:
+        nid = node.get("id")
+        if not nid or nid not in positions:
+            continue
+        lines = _resource_metadata_lines(node)
+        if not lines:
+            continue
+        sid = node_id_map.get(nid)
+        if not sid:
+            continue
+        x, y, _w, _h = positions[nid]
+        parent_id = node_parents.get(nid, LAYER_RESOURCES)
+        abs_x, abs_y = _absolute_child_position(x, y, parent_id, container_positions)
+        box_w = 220
+        box_h = max(40, 12 + 16 * len(lines))
+        box_x = abs_x - box_w - 10
+        box_y = abs_y
+
+        attr_id = "attr_" + stable_id(nid)
+        ab = ET.SubElement(root, "mxCell")
+        ab.set("id", attr_id)
+        ab.set("value", "\n".join(lines))
+        ab.set("style", ATTR_BOX_STYLE)
+        ab.set("vertex", "1")
+        ab.set("parent", LAYER_LABELS)
+        abg = ET.SubElement(ab, "mxGeometry")
+        abg.set("x", str(box_x))
+        abg.set("y", str(box_y))
+        abg.set("width", str(box_w))
+        abg.set("height", str(box_h))
+        abg.set("as", "geometry")
+
+        ae = ET.SubElement(root, "mxCell")
+        ae.set("id", "attr_edge_" + stable_id(nid))
+        ae.set("value", "")
+        ae.set("style", attr_edge_style)
+        ae.set("edge", "1")
+        ae.set("source", attr_id)
+        ae.set("target", sid)
+        ae.set("parent", LAYER_ASSOC_EDGES)
+        aeg = ET.SubElement(ae, "mxGeometry")
+        aeg.set("relative", "1")
+        aeg.set("as", "geometry")
+
+
 def _tag_group_label(node: Dict, group_by_tag: List[str]) -> str:
     if not group_by_tag:
         return ""
@@ -2665,29 +2793,38 @@ def _render_l2r_mode(
             icons_used["mapped"][t] = icons_used["mapped"].get(t, 0) + 1
         _emit_resource_cell(root, render_node, sid, style, abs_x, abs_y, w, h, parent_id=LAYER_RESOURCES)
 
+    _emit_resource_metadata_boxes(root, nodes, node_id_map, positions, node_parents, container_positions)
+
     legend_anchor_x = max((c["x"] + c["w"] for c in containers if c.get("parent") == "1"), default=100) + 60
     legend_anchor_y = 60
+    inventory_lines = _diagram_inventory_lines(nodes, visible_node_ids)
+    if inventory_lines:
+        inventory_h = _emit_text_panel(
+            root,
+            "l2r_inventory_box",
+            inventory_lines,
+            x=legend_anchor_x,
+            y=legend_anchor_y,
+            width=320,
+            style=L2R_CONTEXT_BOX_STYLE,
+        )
+        legend_anchor_y += inventory_h + 20
     context_lines = _nic_ip_context_lines(nodes)
     if indirect_info:
         if context_lines:
             context_lines.append("")
         context_lines.extend(indirect_info)
     if context_lines:
-        ctx_label = "\n".join(["Network Context", "──────────────────────"] + context_lines)
-        ctx_h = max(80, 16 * (ctx_label.count("\n") + 1) + 24)
-        cb = ET.SubElement(root, "mxCell")
-        cb.set("id", "l2r_netctx_box")
-        cb.set("value", ctx_label)
-        cb.set("style", L2R_CONTEXT_BOX_STYLE)
-        cb.set("vertex", "1")
-        cb.set("parent", LAYER_LABELS)
-        cbg = ET.SubElement(cb, "mxGeometry")
-        cbg.set("x", str(legend_anchor_x))
-        cbg.set("y", str(legend_anchor_y))
-        cbg.set("width", str(320))
-        cbg.set("height", str(ctx_h))
-        cbg.set("as", "geometry")
-        legend_anchor_y += ctx_h + 20
+        context_h = _emit_text_panel(
+            root,
+            "l2r_netctx_box",
+            ["Network Context", "──────────────────────"] + context_lines,
+            x=legend_anchor_x,
+            y=legend_anchor_y,
+            width=320,
+            style=L2R_CONTEXT_BOX_STYLE,
+        )
+        legend_anchor_y += context_h + 20
 
     _emit_legend_box(root, "l2r_network_legend", legend_anchor_x, legend_anchor_y)
 
@@ -3763,6 +3900,7 @@ def _render_msft_mode(
         tg.set("as", "geometry")
 
     node_id_map: Dict[str, str] = {}
+    visible_node_ids = set(positions.keys())
     for node in nodes:
         nid = node["id"]
         sid = stable_id(nid)
@@ -3787,6 +3925,8 @@ def _render_msft_mode(
         elif style != EXTERNAL_STYLE:
             icons_used["mapped"][t] = icons_used["mapped"].get(t, 0) + 1
         _emit_resource_cell(root, render_node, sid, style, abs_x, abs_y, w, h, parent_id=LAYER_RESOURCES)
+
+    _emit_resource_metadata_boxes(root, nodes, node_id_map, positions, node_parents, container_positions)
 
     subnet_udr, _ = extract_route_summaries(nodes, edges)
     panel_base_x = max((c["x"] + c["w"] for c in containers if c["parent"] == "1"), default=0) + 40
@@ -3860,8 +4000,20 @@ def _render_msft_mode(
             neg.set("as", "geometry")
         nsg_cursor_y += panel_h + 15
 
-    legend_y = max(panel_cursor_y, nsg_cursor_y) + 10
-    _emit_legend_box(root, "msft_network_legend", panel_base_x, legend_y)
+    panel_stack_y = max(panel_cursor_y, nsg_cursor_y) + 10
+    inventory_lines = _diagram_inventory_lines(nodes, visible_node_ids)
+    if inventory_lines:
+        inventory_h = _emit_text_panel(
+            root,
+            "msft_inventory_box",
+            inventory_lines,
+            x=panel_base_x,
+            y=panel_stack_y,
+            width=320,
+            style=L2R_CONTEXT_BOX_STYLE,
+        )
+        panel_stack_y += inventory_h + 10
+    _emit_legend_box(root, "msft_network_legend", panel_base_x, panel_stack_y)
 
     for e in edges:
         src = node_id_map.get(e["source"])

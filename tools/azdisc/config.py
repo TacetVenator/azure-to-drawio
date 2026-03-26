@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Dict, List
 
@@ -21,6 +21,16 @@ VALID_APPLICATION_SPLIT_OUTPUT_LAYOUTS = {"subdirs"}
 VALID_MIGRATION_PLAN_AUDIENCES = {"mixed", "technical", "executive"}
 VALID_MIGRATION_PLAN_APPLICATION_SCOPES = {"root", "split", "both"}
 APPLICATION_SPLIT_DEFAULT_TAG_KEYS = ["Application", "App", "Workload", "Service"]
+
+
+@dataclass
+class DeepDiscoveryConfig:
+    enabled: bool = False
+    searchStrings: List[str] = field(default_factory=list)
+    candidateFile: str = "related_candidates.json"
+    promotedFile: str = "related_promoted.json"
+    outputDirName: str = "deep-discovery"
+    extendedOutputDirName: str = "extended"
 
 
 @dataclass
@@ -65,6 +75,7 @@ class Config:
     subnetColors: bool = False
     groupByTag: List[str] = field(default_factory=list)
     layoutMagic: bool = False
+    deepDiscovery: DeepDiscoveryConfig = field(default_factory=DeepDiscoveryConfig)
     applicationSplit: ApplicationSplitConfig = field(default_factory=ApplicationSplitConfig)
     migrationPlan: MigrationPlanConfig = field(default_factory=MigrationPlanConfig)
 
@@ -73,6 +84,20 @@ class Config:
 
     def ensure_output_dir(self) -> None:
         Path(self.outputDir).mkdir(parents=True, exist_ok=True)
+
+    def deep_out(self, filename: str) -> Path:
+        return Path(self.outputDir) / self.deepDiscovery.outputDirName / filename
+
+    def ensure_deep_output_dir(self) -> Path:
+        path = Path(self.outputDir) / self.deepDiscovery.outputDirName
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def extended_output_dir(self) -> Path:
+        return Path(self.outputDir) / self.deepDiscovery.outputDirName / self.deepDiscovery.extendedOutputDirName
+
+    def with_output_dir(self, output_dir: str) -> "Config":
+        return replace(self, outputDir=output_dir)
 
 
 def _validate_string_list(name: str, value: object) -> List[str]:
@@ -88,6 +113,36 @@ def _validate_seed_tags(seed_tags: object) -> Dict[str, str]:
     ):
         raise ValueError(f"seedTags must be an object mapping non-empty strings to non-empty strings, got {seed_tags!r}")
     return {k.strip(): v.strip() for k, v in seed_tags.items()}
+
+
+def _validate_nonempty_string(name: str, value: object) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be a non-empty string, got {value!r}")
+    return value.strip()
+
+
+def _load_deep_discovery(data: object) -> DeepDiscoveryConfig:
+    if data is None:
+        return DeepDiscoveryConfig()
+    if not isinstance(data, dict):
+        raise ValueError(f"deepDiscovery must be an object, got {data!r}")
+
+    enabled = data.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ValueError(f"deepDiscovery.enabled must be a boolean, got {enabled!r}")
+
+    search_strings = _validate_string_list("deepDiscovery.searchStrings", data.get("searchStrings", []))
+    if enabled and not search_strings:
+        raise ValueError("deepDiscovery.searchStrings must include at least one value when deepDiscovery.enabled is true")
+
+    return DeepDiscoveryConfig(
+        enabled=enabled,
+        searchStrings=search_strings,
+        candidateFile=_validate_nonempty_string("deepDiscovery.candidateFile", data.get("candidateFile", "related_candidates.json")),
+        promotedFile=_validate_nonempty_string("deepDiscovery.promotedFile", data.get("promotedFile", "related_promoted.json")),
+        outputDirName=_validate_nonempty_string("deepDiscovery.outputDirName", data.get("outputDirName", "deep-discovery")),
+        extendedOutputDirName=_validate_nonempty_string("deepDiscovery.extendedOutputDirName", data.get("extendedOutputDirName", "extended")),
+    )
 
 
 def _load_application_split(data: object) -> ApplicationSplitConfig:
@@ -254,6 +309,7 @@ def load_config(path: str) -> Config:
     if not isinstance(lookback_days, int) or lookback_days < 1:
         raise ValueError(f"telemetryLookbackDays must be a positive integer, got {lookback_days!r}")
 
+    deep_discovery = _load_deep_discovery(data.get("deepDiscovery"))
     application_split = _load_application_split(data.get("applicationSplit"))
     migration_plan = _load_migration_plan(data.get("migrationPlan"))
 
@@ -279,11 +335,12 @@ def load_config(path: str) -> Config:
         subnetColors=data.get("subnetColors", False),
         groupByTag=group_by_tag,
         layoutMagic=layout_magic,
+        deepDiscovery=deep_discovery,
         applicationSplit=application_split,
         migrationPlan=migration_plan,
     )
     log.info(
-        "Loaded config for app=%s, subs=%d, seedRGs=%d, seedTags=%d, seedTagKeys=%d, seedAllSubs=%s, includeRbac=%s, includePolicy=%s, appSplit=%s, migrationPlan=%s",
+        "Loaded config for app=%s, subs=%d, seedRGs=%d, seedTags=%d, seedTagKeys=%d, seedAllSubs=%s, includeRbac=%s, includePolicy=%s, deepDiscovery=%s, appSplit=%s, migrationPlan=%s",
         cfg.app,
         len(cfg.subscriptions),
         len(cfg.seedResourceGroups),
@@ -292,6 +349,7 @@ def load_config(path: str) -> Config:
         cfg.seedEntireSubscriptions,
         cfg.includeRbac,
         cfg.includePolicy,
+        cfg.deepDiscovery.enabled,
         cfg.applicationSplit.enabled,
         cfg.migrationPlan.enabled,
     )

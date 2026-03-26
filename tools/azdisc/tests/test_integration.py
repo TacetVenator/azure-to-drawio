@@ -55,6 +55,43 @@ def _seed_output_files(tmp_path: Path) -> None:
     (tmp_path / "unresolved.json").write_text("[]")
 
 
+def _seed_tagged_inventory(tmp_path: Path) -> None:
+    inventory = [
+        {
+            "id": "/subscriptions/sub1/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachines/vm-test",
+            "name": "vm-test",
+            "type": "Microsoft.Compute/virtualMachines",
+            "location": "eastus",
+            "subscriptionId": "sub1",
+            "resourceGroup": "rg-app",
+            "tags": {"Environment": "prod", "Application": "Checkout"},
+            "properties": {
+                "hardwareProfile": {"vmSize": "Standard_DS2_v2"},
+                "storageProfile": {
+                    "imageReference": {
+                        "publisher": "Canonical",
+                        "offer": "UbuntuServer",
+                        "sku": "22_04-lts",
+                    },
+                    "osDisk": {"osType": "Linux"},
+                },
+            },
+        },
+        {
+            "id": "/subscriptions/sub1/resourceGroups/rg-app/providers/Microsoft.Storage/storageAccounts/sttest",
+            "name": "sttest",
+            "type": "Microsoft.Storage/storageAccounts",
+            "location": "eastus",
+            "subscriptionId": "sub1",
+            "resourceGroup": "rg-app",
+            "tags": {"Tier": "data", "Owner": "platform"},
+            "properties": {},
+        },
+    ]
+    (tmp_path / "inventory.json").write_text(json.dumps(inventory))
+    (tmp_path / "unresolved.json").write_text("[]")
+
+
 # ── Graph build ──────────────────────────────────────────────────────────
 
 
@@ -315,3 +352,37 @@ class TestPngExport:
         _try_export(cfg, drawio_path, "png")
         # No exception is success; PNG should not exist
         assert not (tmp_path / "diagram.png").exists()
+
+
+@pytest.mark.parametrize("diagram_mode", ["MSFT", "L2R"])
+def test_drawio_includes_inventory_panel_and_tag_metadata_boxes(tmp_path, diagram_mode):
+    _seed_tagged_inventory(tmp_path)
+    cfg = Config(
+        app=f"tagged-{diagram_mode.lower()}",
+        subscriptions=["sub1"],
+        seedResourceGroups=["rg-app"],
+        outputDir=str(tmp_path),
+        diagramMode=diagram_mode,
+    )
+
+    build_graph(cfg)
+    generate_drawio(cfg)
+
+    tree = ET.parse(str(tmp_path / "diagram.drawio"))
+    values = [cell.get("value") for cell in tree.findall(".//mxCell[@vertex='1']") if cell.get("value")]
+    all_values = "\n\n".join(values)
+
+    assert "Diagram Inventory" in all_values
+    assert "Resources shown: 2" in all_values
+    assert "microsoft.compute/virtualmachines" in all_values
+    assert "microsoft.storage/storageaccounts" in all_values
+    assert "  vm-test" in all_values
+    assert "  sttest" in all_values
+
+    assert "SKU: Standard_DS2_v2" in all_values
+    assert "Image: Canonical/UbuntuServer/22_04-lts" in all_values
+    assert "OS: Linux" in all_values
+    assert "Tag: Application=Checkout" in all_values
+    assert "Tag: Environment=prod" in all_values
+    assert "Tag: Owner=platform" in all_values
+    assert "Tag: Tier=data" in all_values

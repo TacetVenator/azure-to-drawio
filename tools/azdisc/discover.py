@@ -14,6 +14,8 @@ log = logging.getLogger(__name__)
 
 _MAX_ITERATIONS = 50
 _POLICY_BATCH_SIZE = 100
+_RESOURCE_PROJECT = "project id, name, type, location, subscriptionId, resourceGroup, tags, sku, kind, systemData, properties"
+_DEEP_MATCH_FIELD = "matchedSearchStrings"
 
 
 def _kusto_quote(value: str) -> str:
@@ -22,14 +24,14 @@ def _kusto_quote(value: str) -> str:
 
 def _rg_filter(rgs: List[str]) -> str:
     quoted = ", ".join(f"'{rg.lower()}'" for rg in rgs)
-    return f"resources | where resourceGroup in~ ({quoted}) | project id, name, type, location, subscriptionId, resourceGroup, tags, sku, kind, systemData, properties"
+    return f"resources | where resourceGroup in~ ({quoted}) | {_RESOURCE_PROJECT}"
 
 
 def _seed_query(cfg: Config) -> str:
     if cfg.seedEntireSubscriptions:
         return (
             "resources "
-            "| project id, name, type, location, subscriptionId, resourceGroup, tags, sku, kind, systemData, properties"
+            f"| {_RESOURCE_PROJECT}"
         )
 
     clauses: List[str] = []
@@ -48,7 +50,7 @@ def _seed_query(cfg: Config) -> str:
     return (
         "resources | where "
         f"{where_clause} "
-        "| project id, name, type, location, subscriptionId, resourceGroup, tags, sku, kind, systemData, properties"
+        f"| {_RESOURCE_PROJECT}"
     )
 
 
@@ -276,6 +278,102 @@ def run_seed(cfg: Config) -> List[Dict]:
     out.write_text(json.dumps(rows, indent=2, sort_keys=True))
     log.info("Wrote %d seed resources to %s", len(rows), out)
     return rows
+
+
+def _deep_discovery_query(cfg: Config) -> str:
+    if not cfg.deepDiscovery.searchStrings:
+        raise ValueError("deepDiscovery.searchStrings must include at least one value")
+    clauses = [f"name contains '{_kusto_quote(term)}'" for term in cfg.deepDiscovery.searchStrings]
+    where_clause = " or ".join(f"({clause})" for clause in clauses)
+    return f"resources | where {where_clause} | {_RESOURCE_PROJECT}"
+
+
+def _matching_search_strings(name: str, search_strings: List[str]) -> List[str]:
+    lowered = (name or "").lower()
+    return [term for term in search_strings if term.lower() in lowered]
+
+
+def _load_inventory_artifact(path: Path, context: str) -> List[Dict[str, Any]]:
+    return load_json_file(
+        path,
+        context=context,
+        expected_type=list,
+        advice=f"Fix {path.name} or rerun the producing stage.",
+    )
+
+
+def run_related_candidates(cfg: Config) -> List[Dict]:
+    if not cfg.deepDiscovery.enabled:
+        raise ValueError("deepDiscovery.enabled must be true to run related candidate discovery")
+
+    inv_path = cfg.out("inventory.json")
+    if not inv_path.exists():
+        raise FileNotFoundError("inventory.json not found. Run 'expand' or 'run' first.")
+    inventory = _load_inventory_artifact(inv_path, "Deep discovery base inventory")
+    existing_ids = {normalize_id(r.get("id", "")) for r in inventory if r.get("id")}
+
+    rows = query(_deep_discovery_query(cfg), cfg.subscriptions)
+    deduped: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        rid = normalize_id(row.get("id", ""))
+        if not rid or rid in existing_ids:
+            continue
+        matches = _matching_search_strings(row.get("name", ""), cfg.deepDiscovery.searchStrings)
+        if not matches:
+            continue
+        entry = dict(row)
+        prior = deduped.get(rid)
+        merged_matches = sorted(set((prior or {}).get(_DEEP_MATCH_FIELD, [])) | set(matches), key=str.lower)
+        entry[_DEEP_MATCH_FIELD] = merged_matches
+        deduped[rid] = entry
+
+    candidates = sorted(deduped.values(), key=lambda r: (r.get("subscriptionId", ""), r.get("resourceGroup", ""), r.get("name", ""), r.get("id", "")))
+    cfg.ensure_deep_output_dir()
+    candidate_path = cfg.deep_out(cfg.deepDiscovery.candidateFile)
+    promoted_path = cfg.deep_out(cfg.deepDiscovery.promotedFile)
+    payload = json.dumps(candidates, indent=2, sort_keys=True)
+    candidate_path.write_text(payload)
+    promoted_path.write_text(payload)
+    log.info("Wrote %d related candidates to %s and initialized promoted list at %s", len(candidates), candidate_path, promoted_path)
+    return candidates
+
+
+def prepare_related_extended_inventory(cfg: Config) -> Config:
+    if not cfg.deepDiscovery.enabled:
+        raise ValueError("deepDiscovery.enabled must be true to build an extended related-resource pack")
+
+    inv_path = cfg.out("inventory.json")
+    if not inv_path.exists():
+        raise FileNotFoundError("inventory.json not found. Run 'expand' or 'run' first.")
+    promoted_path = cfg.deep_out(cfg.deepDiscovery.promotedFile)
+    if not promoted_path.exists():
+        raise FileNotFoundError(f"Promoted related resource file not found at {promoted_path}. Run 'related-candidates' first and curate the promoted file.")
+
+    base_inventory = _load_inventory_artifact(inv_path, "Extended pack base inventory")
+    promoted_inventory = _load_inventory_artifact(promoted_path, "Extended pack promoted related resources")
+
+    merged: Dict[str, Dict[str, Any]] = {normalize_id(r["id"]): dict(r) for r in base_inventory if r.get("id")}
+    for resource in promoted_inventory:
+        rid = normalize_id(resource.get("id", ""))
+        if not rid:
+            continue
+        merged[rid] = dict(resource)
+
+    unresolved_path = cfg.out("unresolved.json")
+    unresolved: List[str] = load_json_file(
+        unresolved_path,
+        context="Extended pack unresolved references",
+        expected_type=list,
+        advice="Fix unresolved.json or rerun the expand stage.",
+    ) if unresolved_path.exists() else []
+
+    extended_cfg = cfg.with_output_dir(str(cfg.extended_output_dir()))
+    extended_cfg.ensure_output_dir()
+    extended_inventory = sorted(merged.values(), key=lambda r: normalize_id(r.get("id", "")))
+    extended_cfg.out("inventory.json").write_text(json.dumps(extended_inventory, indent=2, sort_keys=True))
+    extended_cfg.out("unresolved.json").write_text(json.dumps(sorted(unresolved), indent=2))
+    log.info("Prepared extended inventory with %d resources at %s", len(extended_inventory), extended_cfg.outputDir)
+    return extended_cfg
 
 
 def run_expand(cfg: Config) -> None:

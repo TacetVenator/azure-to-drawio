@@ -446,6 +446,8 @@ class TestSubRgNetDrawioGeneration:
             if not v.get("id", "").startswith("msft_th_")
             and not v.get("id", "").startswith("msft_udr_")
             and not v.get("id", "").startswith("msft_nsg_")
+            and not v.get("id", "").startswith("attr_")
+            and not v.get("id", "").endswith("inventory_box")
             and not v.get("id", "").endswith("network_legend")
         ]
         assert resource_vertices
