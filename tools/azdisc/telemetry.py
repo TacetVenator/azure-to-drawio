@@ -158,6 +158,16 @@ def _resolve_la_workspace_identifier(workspace_ref: str) -> str:
     return workspace_ref
 
 
+def _is_missing_la_table_error(stderr: str) -> bool:
+    """Return True when LA query stderr indicates the referenced table is absent."""
+    if not stderr:
+        return False
+    stderr_lower = stderr.lower()
+    return (
+        "semanticerror" in stderr_lower
+        and "failed to resolve table or column expression named" in stderr_lower
+    )
+
 
 def _run_la_query(workspace_id: str, kql: str, subscriptions: List[str]) -> List[Dict]:
     """Run a Log Analytics query via az CLI. Returns list of row dicts or [] on failure."""
@@ -172,11 +182,20 @@ def _run_la_query(workspace_id: str, kql: str, subscriptions: List[str]) -> List
     try:
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
+            stderr = result.stderr.strip() or "<empty>"
+            if _is_missing_la_table_error(result.stderr):
+                log.info(
+                    "Log Analytics workspace %s (query target %s) does not contain the requested table; skipping query. stderr: %s",
+                    workspace_id,
+                    query_workspace,
+                    stderr,
+                )
+                return []
             log.warning(
                 "Log Analytics query failed for workspace %s (query target %s). stderr: %s. Troubleshooting: verify the workspace exists, resolve its customerId, and check Azure CLI access with `az monitor log-analytics workspace show --ids <workspace-arm-id>`.",
                 workspace_id,
                 query_workspace,
-                result.stderr.strip() or "<empty>",
+                stderr,
             )
             return []
         raw = parse_json_text(

@@ -1,4 +1,4 @@
-"""Generate inventory exports (CSV and YAML) from inventory.json."""
+"""Generate inventory and policy exports from inventory.json and policy.json."""
 from __future__ import annotations
 
 import csv
@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .config import Config
-from .util import load_json_file
+from .governance import normalize_compliance_state
+from .util import load_json_file, normalize_id
 
 log = logging.getLogger(__name__)
 
@@ -48,6 +49,20 @@ def _load_inventory(cfg: Config) -> List[Dict]:
     )
 
 
+def _load_policy(cfg: Config) -> List[Dict]:
+    policy_path = cfg.out("policy.json")
+    if not policy_path.exists():
+        raise FileNotFoundError(
+            f"policy.json not found at {policy_path}. Run 'policy' (or 'run') first."
+        )
+    return load_json_file(
+        policy_path,
+        context="Policy export input",
+        expected_type=list,
+        advice="Fix policy.json or rerun the policy stage.",
+    )
+
+
 # ---------------------------------------------------------------------------
 # CSV export
 # ---------------------------------------------------------------------------
@@ -81,6 +96,145 @@ def generate_csv(cfg: Config) -> Path:
             })
 
     log.info("Wrote inventory CSV (%d rows) to %s", len(inventory), out_path)
+    return out_path
+
+
+# ---------------------------------------------------------------------------
+# Policy CSV/YAML exports
+# ---------------------------------------------------------------------------
+
+_POLICY_CSV_FIELDS = [
+    "ResourceName", "ResourceId", "ResourceType", "ResourceGroup", "SubscriptionId",
+    "ComplianceState", "PolicyAssignmentName", "PolicyDefinitionName", "PolicyDefinitionReferenceId",
+    "PolicyAssignmentId", "PolicyDefinitionId", "PolicySetDefinitionName", "PolicySetDefinitionId",
+    "PolicyAssignmentScope", "ResourceLocation", "Timestamp",
+]
+
+
+def _policy_resource_name(row: Dict) -> str:
+    resource_id = normalize_id(row.get("resourceId") or "")
+    if not resource_id:
+        return "unknown"
+    return resource_id.rstrip("/").split("/")[-1]
+
+
+def _policy_sort_key(row: Dict) -> tuple[str, str, str, str]:
+    return (
+        normalize_id(row.get("resourceId") or ""),
+        (row.get("policyAssignmentName") or "").lower(),
+        (row.get("policyDefinitionName") or "").lower(),
+        normalize_compliance_state(row.get("complianceState")),
+    )
+
+
+def _build_policy_entry(row: Dict) -> Dict[str, Any]:
+    entry: Dict[str, Any] = {
+        "resourceName": _policy_resource_name(row),
+        "resourceId": row.get("resourceId") or "",
+        "resourceType": row.get("resourceType") or "",
+        "resourceGroup": row.get("resourceGroup") or "",
+        "subscriptionId": row.get("subscriptionId") or "",
+        "complianceState": normalize_compliance_state(row.get("complianceState")),
+        "policyAssignmentName": row.get("policyAssignmentName") or "",
+        "policyDefinitionName": row.get("policyDefinitionName") or "",
+        "timestamp": row.get("timestamp") or "",
+    }
+    for field in (
+        "policyDefinitionReferenceId",
+        "policyAssignmentId",
+        "policyDefinitionId",
+        "policySetDefinitionName",
+        "policySetDefinitionId",
+        "policyAssignmentScope",
+        "resourceLocation",
+    ):
+        value = row.get(field)
+        if value not in (None, ""):
+            entry[field] = value
+    return entry
+
+
+def generate_policy_csv(cfg: Config) -> Path:
+    policy_rows = sorted(_load_policy(cfg), key=_policy_sort_key)
+    out_path = cfg.out("policy.csv")
+
+    with out_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=_POLICY_CSV_FIELDS)
+        writer.writeheader()
+        for row in policy_rows:
+            writer.writerow({
+                "ResourceName": _policy_resource_name(row),
+                "ResourceId": row.get("resourceId", ""),
+                "ResourceType": row.get("resourceType", ""),
+                "ResourceGroup": row.get("resourceGroup", ""),
+                "SubscriptionId": row.get("subscriptionId", ""),
+                "ComplianceState": normalize_compliance_state(row.get("complianceState")),
+                "PolicyAssignmentName": row.get("policyAssignmentName", ""),
+                "PolicyDefinitionName": row.get("policyDefinitionName", ""),
+                "PolicyDefinitionReferenceId": row.get("policyDefinitionReferenceId", ""),
+                "PolicyAssignmentId": row.get("policyAssignmentId", ""),
+                "PolicyDefinitionId": row.get("policyDefinitionId", ""),
+                "PolicySetDefinitionName": row.get("policySetDefinitionName", ""),
+                "PolicySetDefinitionId": row.get("policySetDefinitionId", ""),
+                "PolicyAssignmentScope": row.get("policyAssignmentScope", ""),
+                "ResourceLocation": row.get("resourceLocation", ""),
+                "Timestamp": row.get("timestamp", ""),
+            })
+
+    log.info("Wrote policy CSV (%d rows) to %s", len(policy_rows), out_path)
+    return out_path
+
+
+def generate_policy_yaml(cfg: Config) -> Path:
+    policy_rows = sorted(_load_policy(cfg), key=_policy_sort_key)
+
+    by_resource: Dict[str, Dict[str, Any]] = {}
+    by_policy: Dict[str, Dict[str, Any]] = {}
+    for row in policy_rows:
+        resource_name = _policy_resource_name(row)
+        resource_key = f"{resource_name} ({normalize_id(row.get('resourceId') or '')})"
+        policy_label = row.get("policyAssignmentName") or row.get("policyDefinitionName") or "Unnamed policy"
+        by_resource.setdefault(resource_key, {
+            "resourceId": row.get("resourceId") or "",
+            "resourceType": row.get("resourceType") or "",
+            "resourceGroup": row.get("resourceGroup") or "",
+            "subscriptionId": row.get("subscriptionId") or "",
+            "policies": {},
+        })["policies"][policy_label] = _build_policy_entry(row)
+
+        policy_key = policy_label
+        if row.get("policyDefinitionName") and row.get("policyDefinitionName") != policy_label:
+            policy_key = f"{policy_label} -> {row.get('policyDefinitionName')}"
+        by_policy.setdefault(policy_key, {
+            "policyAssignmentId": row.get("policyAssignmentId") or "",
+            "policyDefinitionId": row.get("policyDefinitionId") or "",
+            "policyDefinitionReferenceId": row.get("policyDefinitionReferenceId") or "",
+            "resources": {},
+        })["resources"][resource_key] = _build_policy_entry(row)
+
+    sorted_by_resource = {key: by_resource[key] for key in sorted(by_resource)}
+    sorted_by_policy = {key: by_policy[key] for key in sorted(by_policy)}
+
+    data = {
+        "byResource": sorted_by_resource,
+        "byPolicy": sorted_by_policy,
+    }
+
+    today = datetime.date.today().isoformat()
+    header_lines = [
+        "# Azure Policy Compliance Export",
+        f"# App: {cfg.app}",
+        f"# Generated: {today}",
+        "# Groupings: byResource, byPolicy",
+        "",
+    ]
+
+    buf: list = []
+    _yaml_node(data, 0, buf)
+
+    out_path = cfg.out("policy.yaml")
+    out_path.write_text("\n".join(header_lines) + "\n".join(buf) + "\n", encoding="utf-8")
+    log.info("Wrote policy YAML (%d rows) to %s", len(policy_rows), out_path)
     return out_path
 
 

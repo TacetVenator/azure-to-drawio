@@ -8,6 +8,7 @@ import pytest
 from tools.azdisc.config import Config, load_config
 from tools.azdisc.discover import (
     _DEEP_MATCH_FIELD,
+    _DEEP_REASON_FIELD,
     _deep_discovery_query,
     prepare_related_extended_inventory,
     run_related_candidates,
@@ -142,12 +143,17 @@ def test_run_related_candidates_writes_candidate_and_promoted_files(tmp_path, mo
     assert len(candidates) == 2
     assert candidates[0]["subscriptionId"] == "sub2"
     assert candidates[0][_DEEP_MATCH_FIELD] == ["bpc", "SAP"]
+    assert candidates[0][_DEEP_REASON_FIELD][0]["matchField"] == "name"
+    assert "matched search strings" in candidates[0][_DEEP_REASON_FIELD][0]["explanation"]
     assert candidates[1][_DEEP_MATCH_FIELD] == ["bpc", "SAP"]
 
     candidate_path = cfg.deep_out(cfg.deepDiscovery.candidateFile)
     promoted_path = cfg.deep_out(cfg.deepDiscovery.promotedFile)
+    report_path = cfg.deep_out("related_review.md")
     assert json.loads(candidate_path.read_text()) == candidates
     assert json.loads(promoted_path.read_text()) == candidates
+    assert report_path.exists()
+    assert "Potential in-scope context" in report_path.read_text()
 
 
 def test_prepare_related_extended_inventory_merges_promoted_resources(tmp_path):

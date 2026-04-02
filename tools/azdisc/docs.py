@@ -80,8 +80,10 @@ def generate_docs(cfg: Config) -> None:
     _write_routing(cfg, nodes, edges)
     _write_migration(cfg, nodes, edges, unresolved, inventory, rbac_present)
     _write_policy_summary(cfg, nodes, policy_rows, policy_path.exists())
+    _write_policy_by_resource(cfg, nodes, policy_rows, policy_path.exists())
+    _write_policy_by_policy(cfg, nodes, policy_rows, policy_path.exists())
     _write_rbac_summary(cfg, nodes, rbac_rows, rbac_path.exists())
-    log.info("Wrote catalog.md, edges.md, routing.md, migration.md, policy_summary.md, rbac_summary.md")
+    log.info("Wrote catalog.md, edges.md, routing.md, migration.md, policy_summary.md, policy_by_resource.md, policy_by_policy.md, rbac_summary.md")
 
 
 def _write_catalog(cfg: Config, nodes: List[Dict]) -> None:
@@ -943,6 +945,7 @@ def _write_policy_summary(cfg: Config, nodes: List[Dict], policy_rows: List[Dict
         f"- Exempt: {counts.get('Exempt', 0)}",
         f"- Other states: {other_states}",
         f"- Resources with at least one non-compliant policy: {len(noncompliant_by_resource)}",
+        "- Detailed views: see `policy_by_resource.md` and `policy_by_policy.md`.",
         "",
     ]
 
@@ -983,6 +986,148 @@ def _write_policy_summary(cfg: Config, nodes: List[Dict], policy_rows: List[Dict
         lines.append("")
 
     cfg.out("policy_summary.md").write_text("\n".join(lines) + "\n")
+
+
+def _policy_group_key(row: Dict[str, Any]) -> Tuple[str, str, str, str, str]:
+    return (
+        normalize_id(row.get("policyAssignmentId") or ""),
+        normalize_id(row.get("policyDefinitionId") or ""),
+        (row.get("policyDefinitionReferenceId") or "").strip().lower(),
+        (row.get("policyAssignmentName") or "").strip().lower(),
+        (row.get("policyDefinitionName") or "").strip().lower(),
+    )
+
+
+def _policy_display_name(row: Dict[str, Any]) -> str:
+    assignment = row.get("policyAssignmentName") or "Unnamed assignment"
+    definition = row.get("policyDefinitionName") or "Unnamed definition"
+    reference = row.get("policyDefinitionReferenceId") or ""
+    if reference:
+        return f"{assignment} -> {definition} [{reference}]"
+    return f"{assignment} -> {definition}"
+
+
+def _write_policy_by_resource(cfg: Config, nodes: List[Dict], policy_rows: List[Dict], artifact_present: bool) -> None:
+    node_by_id = {normalize_id(node.get("id") or ""): node for node in nodes if node.get("id")}
+    lines = [f"# Policy Compliance By Resource — {cfg.app}", ""]
+
+    if not artifact_present:
+        lines.append("_No policy.json artifact was found. Run the policy stage or enable `includePolicy` to generate this report._")
+        cfg.out("policy_by_resource.md").write_text("\n".join(lines) + "\n")
+        return
+
+    rows_by_resource: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for row in policy_rows:
+        rows_by_resource[normalize_id(row.get("resourceId") or "")].append(row)
+
+    if not rows_by_resource:
+        lines.append("_No policy state rows were found in the current artifact._")
+        cfg.out("policy_by_resource.md").write_text("\n".join(lines) + "\n")
+        return
+
+    lines += [
+        "## Resource Index",
+        "",
+        "| resource | resource group | compliant | non-compliant | exempt | other |",
+        "|----------|----------------|-----------|---------------|--------|-------|",
+    ]
+
+    resource_sections = []
+    for resource_id, rows in rows_by_resource.items():
+        node = node_by_id.get(resource_id, {})
+        label = _resource_label(node, resource_id)
+        rg = node.get("resourceGroup") or rows[0].get("resourceGroup") or ""
+        counts = summarize_policy_rows(rows)
+        other = sum(counts.values()) - counts.get("Compliant", 0) - counts.get("NonCompliant", 0) - counts.get("Exempt", 0)
+        resource_sections.append((label.lower(), label, rg, counts, other, resource_id, rows))
+
+    for _, label, rg, counts, other, _resource_id, _rows in sorted(resource_sections):
+        lines.append(
+            f"| {label} | {rg} | {counts.get('Compliant', 0)} | {counts.get('NonCompliant', 0)} | {counts.get('Exempt', 0)} | {other} |"
+        )
+
+    lines += ["", "## Detail", ""]
+    for _, label, _rg, counts, other, resource_id, rows in sorted(resource_sections):
+        lines.append(f"### {label}")
+        lines.append(f"- Resource ID: `{resource_id}`")
+        lines.append(
+            f"- States: compliant={counts.get('Compliant', 0)}, non-compliant={counts.get('NonCompliant', 0)}, exempt={counts.get('Exempt', 0)}, other={other}"
+        )
+        lines.append("")
+        lines.append("| state | assignment | definition | timestamp |")
+        lines.append("|-------|------------|------------|-----------|")
+        for row in sorted(rows, key=lambda item: (normalize_compliance_state(item.get("complianceState")), (item.get("policyAssignmentName") or "").lower(), (item.get("policyDefinitionName") or "").lower())):
+            lines.append(
+                f"| {normalize_compliance_state(row.get('complianceState'))} | {row.get('policyAssignmentName') or 'Unnamed assignment'} | {row.get('policyDefinitionName') or 'Unnamed definition'} | {row.get('timestamp') or ''} |"
+            )
+        lines.append("")
+
+    cfg.out("policy_by_resource.md").write_text("\n".join(lines) + "\n")
+
+
+def _write_policy_by_policy(cfg: Config, nodes: List[Dict], policy_rows: List[Dict], artifact_present: bool) -> None:
+    node_by_id = {normalize_id(node.get("id") or ""): node for node in nodes if node.get("id")}
+    lines = [f"# Policy Compliance By Policy — {cfg.app}", ""]
+
+    if not artifact_present:
+        lines.append("_No policy.json artifact was found. Run the policy stage or enable `includePolicy` to generate this report._")
+        cfg.out("policy_by_policy.md").write_text("\n".join(lines) + "\n")
+        return
+
+    rows_by_policy: Dict[Tuple[str, str, str, str, str], List[Dict[str, Any]]] = defaultdict(list)
+    for row in policy_rows:
+        rows_by_policy[_policy_group_key(row)].append(row)
+
+    if not rows_by_policy:
+        lines.append("_No policy state rows were found in the current artifact._")
+        cfg.out("policy_by_policy.md").write_text("\n".join(lines) + "\n")
+        return
+
+    lines += [
+        "## Policy Index",
+        "",
+        "| policy | compliant resources | non-compliant resources | exempt resources | other resources |",
+        "|--------|---------------------|-------------------------|------------------|-----------------|",
+    ]
+
+    policy_sections = []
+    for key, rows in rows_by_policy.items():
+        sample = rows[0]
+        counts = Counter()
+        for row in rows:
+            counts[normalize_compliance_state(row.get("complianceState"))] += 1
+        other = sum(counts.values()) - counts.get("Compliant", 0) - counts.get("NonCompliant", 0) - counts.get("Exempt", 0)
+        label = _policy_display_name(sample)
+        policy_sections.append((label.lower(), label, counts, other, rows))
+
+    for _, label, counts, other, _rows in sorted(policy_sections):
+        lines.append(
+            f"| {label} | {counts.get('Compliant', 0)} | {counts.get('NonCompliant', 0)} | {counts.get('Exempt', 0)} | {other} |"
+        )
+
+    lines += ["", "## Detail", ""]
+    for _, label, counts, other, rows in sorted(policy_sections):
+        sample = rows[0]
+        lines.append(f"### {label}")
+        if sample.get("policyAssignmentId"):
+            lines.append(f"- Assignment ID: `{sample.get('policyAssignmentId')}`")
+        if sample.get("policyDefinitionId"):
+            lines.append(f"- Definition ID: `{sample.get('policyDefinitionId')}`")
+        lines.append(
+            f"- Resources: compliant={counts.get('Compliant', 0)}, non-compliant={counts.get('NonCompliant', 0)}, exempt={counts.get('Exempt', 0)}, other={other}"
+        )
+        lines.append("")
+        lines.append("| state | resource | resource group | timestamp |")
+        lines.append("|-------|----------|----------------|-----------|")
+        for row in sorted(rows, key=lambda item: (normalize_compliance_state(item.get("complianceState")), normalize_id(item.get("resourceId") or ""))):
+            resource_id = normalize_id(row.get("resourceId") or "")
+            node = node_by_id.get(resource_id, {})
+            lines.append(
+                f"| {normalize_compliance_state(row.get('complianceState'))} | {_resource_label(node, resource_id)} | {node.get('resourceGroup') or row.get('resourceGroup') or ''} | {row.get('timestamp') or ''} |"
+            )
+        lines.append("")
+
+    cfg.out("policy_by_policy.md").write_text("\n".join(lines) + "\n")
 
 
 def _write_rbac_summary(cfg: Config, nodes: List[Dict], rbac_rows: List[Dict], artifact_present: bool) -> None:

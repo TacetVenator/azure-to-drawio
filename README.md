@@ -9,10 +9,14 @@ Azure Resource Graph  ──►  Seed  ──►  Expand  ──►  RBAC  ─�
     (az graph query)       │           │            │          │             │            │              │
                            ▼           ▼            ▼          ▼             ▼            ▼              ▼
                        seed.json   inventory.json  rbac.json  policy.json  graph.json  diagram.drawio  catalog.md
+                                   inventory.csv              policy.csv
+                                   inventory.yaml             policy.yaml
                                    unresolved.json                                      diagram.svg     edges.md
                                                                                          diagram.png     routing.md
                                                                                                           migration.md
                                                                                                           policy_summary.md
+                                                                                                          policy_by_resource.md
+                                                                                                          policy_by_policy.md
                                                                                                           rbac_summary.md
                                                                                          icons_used.json
 ```
@@ -25,7 +29,7 @@ The tool runs a seven-stage pipeline. Each stage reads the previous stage's outp
 4. **Policy** *(optional, `includePolicy: true`)* — Reads `inventory.json`, queries Azure Policy state for the discovered resource IDs, and writes `policy.json`.
 5. **Graph** — Reads `inventory.json`, `unresolved.json`, and optionally `rbac.json`. Builds a normalized graph model: separates parent and child resources, merges children (VM extensions, SQL firewall rules, etc.) into parent node attributes, extracts typed edges from resource properties, and adds placeholder nodes for unresolved external references. Writes `graph.json`.
 6. **Draw.io** — Reads `graph.json` and the icon map from `assets/azure_icon_map.json`. Computes the supported deterministic layout (`SUB>REGION>RG>NET`), generates draw.io XML with positioned nodes, styled icons, edges, UDR callout boxes, and attribute info boxes. Writes `diagram.drawio` and `icons_used.json`. If the `drawio` CLI is on `PATH`, also exports `diagram.svg` and `diagram.png`.
-7. **Docs** — Reads `graph.json`, `unresolved.json`, and any available `inventory.json`, `policy.json`, and `rbac.json` artifacts. Generates Markdown reports for inventory, relationships, routing, migration readiness, policy compliance, and RBAC access review: `catalog.md`, `edges.md`, `routing.md`, `migration.md`, `policy_summary.md`, and `rbac_summary.md`.
+7. **Docs** — Reads `graph.json`, `unresolved.json`, and any available `inventory.json`, `policy.json`, and `rbac.json` artifacts. Generates Markdown reports for inventory, relationships, routing, migration readiness, policy compliance, and RBAC access review: `catalog.md`, `edges.md`, `routing.md`, `migration.md`, `policy_summary.md`, `policy_by_resource.md`, `policy_by_policy.md`, and `rbac_summary.md`.
 
 ---
 
@@ -88,16 +92,46 @@ python3 -m tools.azdisc rbac app/myapp/config.json
 
 #### `policy` — Collect Azure Policy state for discovered resources
 
-Reads `inventory.json`, queries Azure Policy state for the discovered resource IDs, and writes `policy.json`. This is useful when you want per-resource compliance context without re-running discovery.
+Reads `inventory.json`, queries Azure Policy state for the discovered resource IDs, and writes `policy.json`. This is the canonical latest-state policy artifact for the discovered scope.
 
 ```bash
 python3 -m tools.azdisc policy app/myapp/config.json
 ```
 
-Only policy state records whose `resourceId` matches the discovered inventory are kept in the artifact.
+Only policy state records whose `resourceId` matches the discovered inventory are kept in the artifact. The saved rows are reduced to the latest state per resource/policy identity.
+
+Policy output formats now available from that artifact:
+- `policy.json`: raw latest-state rows for machine processing
+- `policy_summary.md`: executive summary focused on non-compliance
+- `policy_by_resource.md`: human-readable latest policy states grouped by resource
+- `policy_by_policy.md`: human-readable latest policy states grouped by policy
+- `policy.csv`: flat tabular export for spreadsheet filtering
+- `policy.yaml`: structured export grouped as `byResource` and `byPolicy`
 
 **Requires:** `inventory.json` in the output directory, Azure CLI authenticated.
 **Produces:** `policy.json`
+
+#### `policy-csv` — Export flat policy compliance data
+
+Reads `policy.json` and writes `policy.csv` so policy compliance can be filtered in spreadsheet tools or imported into other tabular workflows.
+
+```bash
+python3 -m tools.azdisc policy-csv app/myapp/config.json
+```
+
+**Requires:** `policy.json` in the output directory.
+**Produces:** `policy.csv`
+
+#### `policy-yaml` — Export grouped policy compliance data
+
+Reads `policy.json` and writes `policy.yaml`, grouped in both directions: `byResource` and `byPolicy`. This is intended for structured review in editors without requiring custom scripts.
+
+```bash
+python3 -m tools.azdisc policy-yaml app/myapp/config.json
+```
+
+**Requires:** `policy.json` in the output directory.
+**Produces:** `policy.yaml`
 
 #### `telemetry` — Enrich the graph with runtime evidence
 
@@ -205,7 +239,7 @@ This stage is what makes the tool discover resources across resource group bound
 IDs that match non-resource patterns (marketplace image references, location metadata, role/policy definitions) are automatically filtered out.
 
 **Requires:** `seed.json` in the output directory, Azure CLI authenticated.
-**Produces:** `inventory.json`, `unresolved.json`
+**Produces:** `inventory.json`, `unresolved.json`, `expand_reasons.json`, `expand_reasons.md`
 
 #### `related-candidates` — Find possible related resources by name
 
@@ -217,6 +251,17 @@ python3 -m tools.azdisc related-candidates app/myapp/config.json
 
 **Requires:** base `inventory.json`, `deepDiscovery.enabled: true`, Azure CLI authenticated.
 **Produces:** the configured candidate and promoted related-resource files.
+
+#### `review-related` — Interactively curate related candidates
+
+Loads the raw candidate and promoted deep-discovery artifacts in a plain terminal workflow so you can filter, inspect nested JSON on demand, and keep or drop items before generating the extended pack.
+
+```bash
+python3 -m tools.azdisc review-related app/myapp/config.json
+```
+
+**Requires:** base `inventory.json`, deep-discovery candidate and promoted files.
+**Produces:** updated promoted file plus `related_review.md`
 
 #### `related-extend` — Generate an extended pack from curated matches
 
@@ -344,7 +389,14 @@ python3 -m tools.azdisc docs app/myapp/config.json
 ```
 
 **Requires:** `graph.json` in the output directory.
-**Produces:** `catalog.md`, `edges.md`, `routing.md`, `migration.md`, and when `policy.json` / `rbac.json` exist, `policy_summary.md` and `rbac_summary.md`
+**Produces:** `catalog.md`, `edges.md`, `routing.md`, `migration.md`, and when `policy.json` / `rbac.json` exist, `policy_summary.md`, `policy_by_resource.md`, `policy_by_policy.md`, and `rbac_summary.md`. Separate export commands can also generate `policy.csv` and `policy.yaml`.
+
+Policy reporting guidance:
+- Use `policy_summary.md` for a quick governance snapshot.
+- Use `policy_by_resource.md` when a human wants to review each resource and see which policies are compliant or non-compliant.
+- Use `policy_by_policy.md` when a human wants to review each policy and see which resources are compliant or non-compliant.
+- Use `policy.csv` when filtering in spreadsheet tools is easiest.
+- Use `policy.yaml` when you want a structured file grouped in both directions without writing scripts.
 
 #### `inventory-csv` — Export tabular inventory
 
@@ -576,8 +628,11 @@ Deep discovery has two commands:
 1. `related-candidates`
    Searches Azure Resource Graph across the configured `subscriptions` for resources whose `name` contains one or more configured `deepDiscovery.searchStrings`.
 
-2. `related-extend`
-   Reads a curated promoted list, merges those resources into an extended application inventory, and generates diagrams and reports in a separate extended directory.
+2. `review-related`
+   Opens the candidate set in a terminal review loop so you can inspect nested JSON, filter noise, and update the promoted file without manually editing raw JSON.
+
+3. `related-extend`
+   Reads the curated promoted list, merges those resources into an extended application inventory, and generates diagrams and reports in a separate extended directory.
 
 ### Config
 
@@ -617,12 +672,13 @@ python3 -m tools.azdisc related-candidates app/myapp/config.json
 ```
 
 This writes two files under `outputDir/deep-discovery/` by default:
-- `related_candidates.json`: the raw candidate set discovered by name matching.
+- `related_candidates.json`: the raw candidate set discovered by name matching, now including additive explainability metadata.
 - `related_promoted.json`: initialized with the same content so the user can remove noise.
+- `related_review.md`: a Markdown review/report artifact describing why each candidate was surfaced and whether it is currently kept or dropped.
 
-3. Curate the promoted file.
+3. Review and curate the promoted file.
 
-Remove entries from `related_promoted.json` that are not actually part of the application scope you want to extend.
+Use `review-related` to keep or drop candidates interactively, or edit `related_promoted.json` directly if you prefer. The review flow also refreshes `related_review.md` with the current kept/dropped state and candidate explanations.
 
 4. Generate the extended pack.
 

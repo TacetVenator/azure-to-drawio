@@ -6,7 +6,7 @@ types, while expandScope=all follows every ARM reference in properties.
 import pytest
 
 from tools.azdisc.config import Config, VALID_EXPAND_SCOPES, load_config
-from tools.azdisc.discover import _extract_related_ids
+from tools.azdisc.discover import _extract_related_ids, run_expand
 from tools.azdisc.util import extract_arm_ids, normalize_id
 
 
@@ -280,3 +280,60 @@ class TestExtractRelatedIds:
         ids = _extract_related_ids(resource)
         assert any("src-asg" in i for i in ids)
         assert any("dst-asg" in i for i in ids)
+
+
+def test_run_expand_writes_provenance_artifacts(tmp_path, monkeypatch):
+    seed = [
+        {
+            "id": "/subscriptions/sub1/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachines/vm1",
+            "name": "vm1",
+            "type": "Microsoft.Compute/virtualMachines",
+            "resourceGroup": "rg-app",
+            "subscriptionId": "sub1",
+            "location": "eastus",
+            "properties": {
+                "networkProfile": {
+                    "networkInterfaces": [
+                        {"id": "/subscriptions/sub1/resourceGroups/rg-net/providers/Microsoft.Network/networkInterfaces/nic1"}
+                    ]
+                }
+            },
+        }
+    ]
+    (tmp_path / "seed.json").write_text(__import__("json").dumps(seed))
+
+    cfg = Config(
+        app="test",
+        subscriptions=["sub1"],
+        seedResourceGroups=["rg-app"],
+        outputDir=str(tmp_path),
+    )
+
+    def fake_query_by_ids(ids, _subscriptions):
+        if ids == ["/subscriptions/sub1/resourcegroups/rg-net/providers/microsoft.network/networkinterfaces/nic1"]:
+            return [{
+                "id": "/subscriptions/sub1/resourceGroups/rg-net/providers/Microsoft.Network/networkInterfaces/nic1",
+                "name": "nic1",
+                "type": "Microsoft.Network/networkInterfaces",
+                "resourceGroup": "rg-net",
+                "subscriptionId": "sub1",
+                "location": "eastus",
+                "properties": {
+                    "ipConfigurations": [
+                        {"properties": {"subnet": {"id": "/subscriptions/sub1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet1/subnets/snet1"}}}
+                    ]
+                },
+            }]
+        return []
+
+    monkeypatch.setattr("tools.azdisc.discover.query_by_ids", fake_query_by_ids)
+
+    run_expand(cfg)
+
+    reasons = __import__("json").loads((tmp_path / "expand_reasons.json").read_text())
+    assert reasons["addedResources"][0]["resourceName"] == "nic1"
+    assert reasons["addedResources"][0]["reasons"][0]["relationship"] == "vm-nic"
+    unresolved_ids = {item["resourceId"] for item in reasons["unresolvedReferences"]}
+    assert any(resource_id.endswith("/subnets/snet1") for resource_id in unresolved_ids)
+    assert any(resource_id.endswith("/virtualnetworks/vnet1") for resource_id in unresolved_ids)
+    assert (tmp_path / "expand_reasons.md").exists()

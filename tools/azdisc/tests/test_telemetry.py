@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from tools.azdisc.config import Config, load_config
 from tools.azdisc.telemetry import (
     _LA_WORKSPACE_CACHE,
     _collect_nic_ips,
+    _is_missing_la_table_error,
     _looks_like_uuid,
     _resolve_hostname,
     _resolve_la_workspace_identifier,
@@ -275,6 +277,58 @@ def test_run_la_query_uses_resolved_customer_id_and_logs_troubleshooting(monkeyp
     assert "customer-guid-1234" in calls[1]
     assert "Troubleshooting:" in caplog.text
     assert "query target customer-guid-1234" in caplog.text
+
+
+def test_is_missing_la_table_error_detects_semantic_table_resolution_failure():
+    stderr = """ERROR: (BadArgumentError) The request had some invalid properties
+Code: BadArgumentError
+Message: The request had some invalid properties
+Inner error:
+\"code\": \"SemanticError\"
+\"message\": \"A semantic error occurred.\"
+\"code\": \"SEN0100\"
+\"message\": \"'where' operator: Failed to resolve table or column expression named 'AzureNetworkAnalytics_CL'\"
+"""
+
+    assert _is_missing_la_table_error(stderr) is True
+    assert _is_missing_la_table_error("ERROR: (PathNotFoundError) The requested path does not exist") is False
+
+
+def test_run_la_query_skips_missing_table_error_without_troubleshooting_warning(monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="tools.azdisc.telemetry")
+    _LA_WORKSPACE_CACHE.clear()
+    workspace_arm_id = "/subscriptions/sub1/resourceGroups/rg-log/providers/Microsoft.OperationalInsights/workspaces/ws1"
+
+    class Result:
+        def __init__(self, returncode, stdout="", stderr=""):
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_run(cmd, capture_output, text):
+        if cmd[:5] == ["az", "monitor", "log-analytics", "workspace", "show"]:
+            return Result(0, json.dumps({"customerId": "customer-guid-1234"}))
+        return Result(
+            1,
+            "",
+            """ERROR: (BadArgumentError) The request had some invalid properties
+Code: BadArgumentError
+Message: The request had some invalid properties
+Inner error:
+\"code\": \"SemanticError\"
+\"message\": \"A semantic error occurred.\"
+\"code\": \"SEN0100\"
+\"message\": \"'where' operator: Failed to resolve table or column expression named 'AzureNetworkAnalytics_CL'\"
+""",
+        )
+
+    monkeypatch.setattr("tools.azdisc.telemetry.subprocess.run", fake_run)
+
+    rows = _run_la_query(workspace_arm_id, "AzureNetworkAnalytics_CL | take 1", ["sub1"])
+
+    assert rows == []
+    assert "does not contain the requested table; skipping query" in caplog.text
+    assert "Troubleshooting:" not in caplog.text
 
 
 # ---------------------------------------------------------------------------

@@ -465,9 +465,25 @@ def test_generate_docs_writes_policy_and_rbac_governance_summaries(tmp_path):
     assert "- Policy state records: 2" in policy_summary
     assert "- Non-compliant: 1" in policy_summary
     assert "- Resources with at least one non-compliant policy: 1" in policy_summary
+    assert "policy_by_resource.md" in policy_summary
+    assert "policy_by_policy.md" in policy_summary
     assert "| app1 (microsoft.web/sites) | rg-app | 1 | deny-public |" in policy_summary
     assert "### app1 (microsoft.web/sites)" in policy_summary
     assert "deny-public: App Service should disable public network access (NonCompliant, 2026-03-24T10:00:00Z)" in policy_summary
+
+    policy_by_resource = (tmp_path / "policy_by_resource.md").read_text()
+    assert "## Resource Index" in policy_by_resource
+    assert "| app1 (microsoft.web/sites) | rg-app | 0 | 1 | 0 | 0 |" in policy_by_resource
+    assert "| sql1 (microsoft.sql/servers) | rg-data | 1 | 0 | 0 | 0 |" in policy_by_resource
+    assert "| NonCompliant | deny-public | App Service should disable public network access | 2026-03-24T10:00:00Z |" in policy_by_resource
+    assert "| Compliant | sql-baseline | SQL should use TDE | 2026-03-24T10:05:00Z |" in policy_by_resource
+
+    policy_by_policy = (tmp_path / "policy_by_policy.md").read_text()
+    assert "## Policy Index" in policy_by_policy
+    assert "| deny-public -> App Service should disable public network access | 0 | 1 | 0 | 0 |" in policy_by_policy
+    assert "| sql-baseline -> SQL should use TDE | 1 | 0 | 0 | 0 |" in policy_by_policy
+    assert "| NonCompliant | app1 (microsoft.web/sites) | rg-app | 2026-03-24T10:00:00Z |" in policy_by_policy
+    assert "| Compliant | sql1 (microsoft.sql/servers) | rg-data | 2026-03-24T10:05:00Z |" in policy_by_policy
 
     rbac_summary = (tmp_path / "rbac_summary.md").read_text()
     assert "## Executive Summary" in rbac_summary

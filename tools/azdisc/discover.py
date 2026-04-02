@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 from .arg import query, query_by_ids
 from .config import Config
@@ -16,6 +16,10 @@ _MAX_ITERATIONS = 50
 _POLICY_BATCH_SIZE = 100
 _RESOURCE_PROJECT = "project id, name, type, location, subscriptionId, resourceGroup, tags, sku, kind, systemData, properties"
 _DEEP_MATCH_FIELD = "matchedSearchStrings"
+_DEEP_REASON_FIELD = "discoveryEvidence"
+_RELATED_REVIEW_REPORT = "related_review.md"
+_EXPAND_REASONS_FILE = "expand_reasons.json"
+_EXPAND_REASONS_REPORT = "expand_reasons.md"
 
 
 def _kusto_quote(value: str) -> str:
@@ -82,61 +86,59 @@ def _safe_get(obj, *keys):
     return obj
 
 
-def _extract_related_ids(resource: Dict) -> Set[str]:
-    """Extract only directly-related ARM IDs from a resource.
+def _append_reference(
+    refs: List[Dict[str, str]],
+    seen: Set[str],
+    raw: Optional[str],
+    *,
+    path: str,
+    relationship: str,
+    note: str,
+) -> None:
+    if not raw or not isinstance(raw, str) or "/providers/" not in raw.lower():
+        return
+    target_id = normalize_id(raw)
+    if target_id in seen:
+        return
+    seen.add(target_id)
+    refs.append({
+        "targetId": target_id,
+        "path": path,
+        "relationship": relationship,
+        "note": note,
+    })
 
-    Instead of walking every property and following every ARM ID (which causes
-    unbounded tenant-wide expansion), this function only follows known
-    relationship types that produce useful diagram context:
 
-      - VM -> NICs, managed disks
-      - NIC -> subnet, NSG, ASGs
-      - Subnet -> parent VNET, NSG, route table
-      - VNET -> peered VNETs (one hop only)
-      - Private endpoint -> subnet, target service
-      - Load balancer -> backend NICs
-      - Public IP -> attached resource
-      - Web app -> app service plan, VNET integration subnet
-      - Firewall / Bastion -> subnet, public IP
-      - Container app -> managed environment
-      - Managed environment -> subnet
-      - App insights -> workspace
-      - App gateway -> subnet
-      - NSG -> ASGs referenced in rules
-    """
-    ids: Set[str] = set()
+def _extract_related_references(resource: Dict) -> List[Dict[str, str]]:
+    """Extract directly-related ARM IDs with provenance details."""
+    refs: List[Dict[str, str]] = []
+    seen: Set[str] = set()
     t = (resource.get("type") or "").lower()
     p = resource.get("properties") or {}
 
-    def _add(raw):
-        if raw and isinstance(raw, str) and "/providers/" in raw.lower():
-            ids.add(normalize_id(raw))
-
     if t == "microsoft.compute/virtualmachines":
-        for ni in _safe_get(p, "networkProfile", "networkInterfaces") or []:
-            _add(_safe_get(ni, "id"))
-        _add(_safe_get(p, "storageProfile", "osDisk", "managedDisk", "id"))
-        for dd in _safe_get(p, "storageProfile", "dataDisks") or []:
-            _add(_safe_get(dd, "managedDisk", "id"))
+        for idx, ni in enumerate(_safe_get(p, "networkProfile", "networkInterfaces") or []):
+            _append_reference(refs, seen, _safe_get(ni, "id"), path=f"properties.networkProfile.networkInterfaces[{idx}].id", relationship="vm-nic", note="VM network interface")
+        _append_reference(refs, seen, _safe_get(p, "storageProfile", "osDisk", "managedDisk", "id"), path="properties.storageProfile.osDisk.managedDisk.id", relationship="vm-os-disk", note="VM OS managed disk")
+        for idx, dd in enumerate(_safe_get(p, "storageProfile", "dataDisks") or []):
+            _append_reference(refs, seen, _safe_get(dd, "managedDisk", "id"), path=f"properties.storageProfile.dataDisks[{idx}].managedDisk.id", relationship="vm-data-disk", note="VM data managed disk")
 
     elif t == "microsoft.network/networkinterfaces":
-        _add(_safe_get(p, "networkSecurityGroup", "id"))
-        for ipc in _safe_get(p, "ipConfigurations") or []:
-            _add(_safe_get(ipc, "properties", "subnet", "id"))
-            for asg in _safe_get(ipc, "properties", "applicationSecurityGroups") or []:
-                _add(_safe_get(asg, "id"))
+        _append_reference(refs, seen, _safe_get(p, "networkSecurityGroup", "id"), path="properties.networkSecurityGroup.id", relationship="nic-nsg", note="NIC network security group")
+        for idx, ipc in enumerate(_safe_get(p, "ipConfigurations") or []):
+            _append_reference(refs, seen, _safe_get(ipc, "properties", "subnet", "id"), path=f"properties.ipConfigurations[{idx}].properties.subnet.id", relationship="nic-subnet", note="NIC subnet")
+            for asg_idx, asg in enumerate(_safe_get(ipc, "properties", "applicationSecurityGroups") or []):
+                _append_reference(refs, seen, _safe_get(asg, "id"), path=f"properties.ipConfigurations[{idx}].properties.applicationSecurityGroups[{asg_idx}].id", relationship="nic-asg", note="NIC application security group")
 
     elif t == "microsoft.network/virtualnetworks":
-        for peer in _safe_get(p, "virtualNetworkPeerings") or []:
-            _add(_safe_get(peer, "properties", "remoteVirtualNetwork", "id"))
+        for idx, peer in enumerate(_safe_get(p, "virtualNetworkPeerings") or []):
+            _append_reference(refs, seen, _safe_get(peer, "properties", "remoteVirtualNetwork", "id"), path=f"properties.virtualNetworkPeerings[{idx}].properties.remoteVirtualNetwork.id", relationship="vnet-peering", note="VNet peering target")
 
     elif t == "microsoft.network/virtualnetworks/subnets" or "/subnets/" in (resource.get("id") or "").lower():
-        _add(_safe_get(p, "networkSecurityGroup", "id"))
+        _append_reference(refs, seen, _safe_get(p, "networkSecurityGroup", "id"), path="properties.networkSecurityGroup.id", relationship="subnet-nsg", note="Subnet network security group")
         rt_id = _safe_get(p, "routeTable", "id")
+        _append_reference(refs, seen, rt_id, path="properties.routeTable.id", relationship="subnet-route-table", note="Subnet route table")
         if rt_id:
-            ids.add(normalize_id(rt_id))
-            # Always try to resolve UDR even if in different RG/sub
-            # Add parent RG and subscription for cross-sub scenarios
             parts = rt_id.split("/")
             if "subscriptions" in parts and "resourceGroups" in parts:
                 try:
@@ -144,70 +146,121 @@ def _extract_related_ids(resource: Dict) -> Set[str]:
                     rg_idx = parts.index("resourceGroups") + 1
                     sub_id = parts[sub_idx]
                     rg_name = parts[rg_idx]
-                    ids.add(f"/subscriptions/{sub_id}/resourceGroups/{rg_name}")
+                    _append_reference(refs, seen, f"/subscriptions/{sub_id}/resourceGroups/{rg_name}", path="properties.routeTable.id", relationship="subnet-route-table-resource-group", note="Route table resource group context")
                 except Exception:
                     pass
 
     elif t == "microsoft.network/networksecuritygroups":
-        for rule in _safe_get(p, "securityRules") or []:
+        for rule_idx, rule in enumerate(_safe_get(p, "securityRules") or []):
             rp = _safe_get(rule, "properties") or {}
-            for asg in rp.get("sourceApplicationSecurityGroups") or []:
-                _add(_safe_get(asg, "id"))
-            for asg in rp.get("destinationApplicationSecurityGroups") or []:
-                _add(_safe_get(asg, "id"))
+            for asg_idx, asg in enumerate(rp.get("sourceApplicationSecurityGroups") or []):
+                _append_reference(refs, seen, _safe_get(asg, "id"), path=f"properties.securityRules[{rule_idx}].properties.sourceApplicationSecurityGroups[{asg_idx}].id", relationship="nsg-source-asg", note="NSG source application security group")
+            for asg_idx, asg in enumerate(rp.get("destinationApplicationSecurityGroups") or []):
+                _append_reference(refs, seen, _safe_get(asg, "id"), path=f"properties.securityRules[{rule_idx}].properties.destinationApplicationSecurityGroups[{asg_idx}].id", relationship="nsg-destination-asg", note="NSG destination application security group")
 
     elif t == "microsoft.network/privateendpoints":
-        _add(_safe_get(p, "subnet", "id"))
-        for conn in _safe_get(p, "privateLinkServiceConnections") or []:
-            _add(_safe_get(conn, "properties", "privateLinkServiceId"))
+        _append_reference(refs, seen, _safe_get(p, "subnet", "id"), path="properties.subnet.id", relationship="private-endpoint-subnet", note="Private endpoint subnet")
+        for idx, conn in enumerate(_safe_get(p, "privateLinkServiceConnections") or []):
+            _append_reference(refs, seen, _safe_get(conn, "properties", "privateLinkServiceId"), path=f"properties.privateLinkServiceConnections[{idx}].properties.privateLinkServiceId", relationship="private-endpoint-target", note="Private endpoint target service")
 
     elif t == "microsoft.network/loadbalancers":
-        for pool in _safe_get(p, "backendAddressPools") or []:
-            for ipc in _safe_get(pool, "properties", "backendIPConfigurations") or []:
+        for pool_idx, pool in enumerate(_safe_get(p, "backendAddressPools") or []):
+            for ipc_idx, ipc in enumerate(_safe_get(pool, "properties", "backendIPConfigurations") or []):
                 ipc_id = _safe_get(ipc, "id")
                 if ipc_id:
                     nic_id = normalize_id(ipc_id).split("/ipconfigurations/")[0]
-                    ids.add(nic_id)
+                    _append_reference(refs, seen, nic_id, path=f"properties.backendAddressPools[{pool_idx}].properties.backendIPConfigurations[{ipc_idx}].id", relationship="load-balancer-backend-nic", note="Load balancer backend NIC")
 
     elif t == "microsoft.network/publicipaddresses":
         raw = _safe_get(p, "ipConfiguration", "id")
         if raw:
             nic_id = normalize_id(raw).split("/ipconfigurations/")[0]
-            ids.add(nic_id)
+            _append_reference(refs, seen, nic_id, path="properties.ipConfiguration.id", relationship="public-ip-nic", note="Public IP attached NIC")
 
     elif t == "microsoft.web/sites":
-        _add(_safe_get(p, "serverFarmId"))
-        _add(_safe_get(p, "virtualNetworkSubnetId"))
+        _append_reference(refs, seen, _safe_get(p, "serverFarmId"), path="properties.serverFarmId", relationship="webapp-plan", note="App Service plan")
+        _append_reference(refs, seen, _safe_get(p, "virtualNetworkSubnetId"), path="properties.virtualNetworkSubnetId", relationship="webapp-subnet", note="Web app VNet integration subnet")
 
     elif t == "microsoft.network/azurefirewalls":
-        for ipc in _safe_get(p, "ipConfigurations") or []:
-            _add(_safe_get(ipc, "properties", "subnet", "id"))
-            _add(_safe_get(ipc, "properties", "publicIPAddress", "id"))
+        for idx, ipc in enumerate(_safe_get(p, "ipConfigurations") or []):
+            _append_reference(refs, seen, _safe_get(ipc, "properties", "subnet", "id"), path=f"properties.ipConfigurations[{idx}].properties.subnet.id", relationship="firewall-subnet", note="Azure Firewall subnet")
+            _append_reference(refs, seen, _safe_get(ipc, "properties", "publicIPAddress", "id"), path=f"properties.ipConfigurations[{idx}].properties.publicIPAddress.id", relationship="firewall-public-ip", note="Azure Firewall public IP")
 
     elif t == "microsoft.network/bastionhosts":
-        for ipc in _safe_get(p, "ipConfigurations") or []:
-            _add(_safe_get(ipc, "properties", "subnet", "id"))
-            _add(_safe_get(ipc, "properties", "publicIPAddress", "id"))
+        for idx, ipc in enumerate(_safe_get(p, "ipConfigurations") or []):
+            _append_reference(refs, seen, _safe_get(ipc, "properties", "subnet", "id"), path=f"properties.ipConfigurations[{idx}].properties.subnet.id", relationship="bastion-subnet", note="Bastion subnet")
+            _append_reference(refs, seen, _safe_get(ipc, "properties", "publicIPAddress", "id"), path=f"properties.ipConfigurations[{idx}].properties.publicIPAddress.id", relationship="bastion-public-ip", note="Bastion public IP")
 
     elif t == "microsoft.app/containerapps":
-        _add(_safe_get(p, "managedEnvironmentId"))
+        _append_reference(refs, seen, _safe_get(p, "managedEnvironmentId"), path="properties.managedEnvironmentId", relationship="containerapp-environment", note="Container App managed environment")
 
     elif t == "microsoft.app/managedenvironments":
-        _add(_safe_get(p, "vnetConfiguration", "infrastructureSubnetId"))
+        _append_reference(refs, seen, _safe_get(p, "vnetConfiguration", "infrastructureSubnetId"), path="properties.vnetConfiguration.infrastructureSubnetId", relationship="managed-environment-subnet", note="Managed environment infrastructure subnet")
 
     elif t == "microsoft.insights/components":
-        _add(_safe_get(p, "WorkspaceResourceId"))
+        _append_reference(refs, seen, _safe_get(p, "WorkspaceResourceId"), path="properties.WorkspaceResourceId", relationship="appinsights-workspace", note="App Insights linked workspace")
 
     elif t == "microsoft.network/applicationgateways":
-        for ipc in _safe_get(p, "gatewayIPConfigurations") or []:
-            _add(_safe_get(ipc, "properties", "subnet", "id"))
+        for idx, ipc in enumerate(_safe_get(p, "gatewayIPConfigurations") or []):
+            _append_reference(refs, seen, _safe_get(ipc, "properties", "subnet", "id"), path=f"properties.gatewayIPConfigurations[{idx}].properties.subnet.id", relationship="app-gateway-subnet", note="Application Gateway subnet")
 
-    elif t == "microsoft.network/routetables":
-        # Route tables are leaf resources — don't chase next-hop references
-        # which can point to appliances across the tenant.
-        pass
+    return refs
 
-    return ids
+
+def _extract_related_ids(resource: Dict) -> Set[str]:
+    return {ref["targetId"] for ref in _extract_related_references(resource)}
+
+
+def _extract_all_references(resource: Dict) -> List[Dict[str, str]]:
+    refs: List[Dict[str, str]] = []
+    seen: Set[tuple[str, str]] = set()
+
+    def _walk(obj: Any, path: str) -> None:
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                next_path = f"{path}.{key}" if path else key
+                _walk(value, next_path)
+            return
+        if isinstance(obj, list):
+            for idx, value in enumerate(obj):
+                _walk(value, f"{path}[{idx}]")
+            return
+        if isinstance(obj, str):
+            for target_id in extract_arm_ids(obj):
+                key = (target_id, path)
+                if key in seen:
+                    continue
+                seen.add(key)
+                refs.append({
+                    "targetId": target_id,
+                    "path": path,
+                    "relationship": "arm-reference",
+                    "note": f"ARM ID extracted from {path}",
+                })
+
+    _walk(resource.get("properties") or {}, "properties")
+    return refs
+
+
+def _derive_parent_references(referenced: Iterable[str]) -> List[Dict[str, str]]:
+    parents: List[Dict[str, str]] = []
+    seen: Set[str] = set()
+    for rid in referenced:
+        nid = normalize_id(rid)
+        if "/subnets/" not in nid:
+            continue
+        vnet_id = nid.split("/subnets/")[0]
+        if vnet_id in seen:
+            continue
+        seen.add(vnet_id)
+        parents.append({
+            "targetId": vnet_id,
+            "sourceId": nid,
+            "path": "derived-parent",
+            "relationship": "subnet-parent-vnet",
+            "note": "Derived parent VNet from subnet resource ID",
+        })
+    return parents
 
 
 def _derive_parent_ids(referenced: Set[str]) -> Set[str]:
@@ -233,7 +286,7 @@ def _derive_parent_ids(referenced: Set[str]) -> Set[str]:
 
 def _synthesize_subnets_from_vnets(
     collected: Dict[str, Dict], unresolved: Set[str],
-) -> None:
+) -> Set[str]:
     """For unresolved subnet IDs, synthesize entries from parent VNET properties.
 
     Azure Resource Graph sometimes does not return subnets as standalone
@@ -268,6 +321,92 @@ def _synthesize_subnets_from_vnets(
                 log.info("Synthesized subnet %s from parent VNET", subnet_name)
                 break
     unresolved -= resolved_from_vnet
+    return resolved_from_vnet
+
+
+def _matching_inventory_context(resource: Dict[str, Any], inventory: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    matched_terms = [term for term in resource.get(_DEEP_MATCH_FIELD, []) if isinstance(term, str) and term]
+    if not matched_terms:
+        return []
+    hits: List[Dict[str, str]] = []
+    for candidate in inventory:
+        name = candidate.get("name") or ""
+        haystack = f"{name}\n{json.dumps(candidate.get('tags') or {}, sort_keys=True)}\n{json.dumps(candidate.get('properties') or {}, sort_keys=True)}".lower()
+        matched = [term for term in matched_terms if term.lower() in haystack]
+        if matched:
+            hits.append({
+                "id": candidate.get("id", ""),
+                "name": name,
+                "type": candidate.get("type", ""),
+                "matchedTerms": ", ".join(matched),
+            })
+    hits.sort(key=lambda item: (item["name"].lower(), item["id"]))
+    return hits[:5]
+
+
+def _candidate_evidence(resource: Dict[str, Any], matches: List[str], inventory: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not matches:
+        return []
+    name = resource.get("name") or "<unnamed>"
+    evidence: List[Dict[str, Any]] = [{
+        "source": "deep-discovery",
+        "matchField": "name",
+        "matchedTerms": matches,
+        "explanation": f"Candidate surfaced because resource name '{name}' matched search strings: {', '.join(matches)}.",
+    }]
+    related = _matching_inventory_context(resource, inventory)
+    if related:
+        evidence.append({
+            "source": "base-inventory",
+            "matchField": "name-or-properties",
+            "matchedTerms": matches,
+            "explanation": "Potential in-scope context found in the base inventory sharing one or more matched terms.",
+            "relatedResources": related,
+        })
+    return evidence
+
+
+def write_related_review_report(
+    cfg: Config,
+    inventory: List[Dict[str, Any]],
+    candidates: List[Dict[str, Any]],
+    promoted_ids: Optional[Set[str]] = None,
+) -> Path:
+    promoted = promoted_ids if promoted_ids is not None else {normalize_id(item.get("id", "")) for item in candidates if item.get("id")}
+    report_path = cfg.deep_out(_RELATED_REVIEW_REPORT)
+    lines = [
+        f"# Related Resource Review for {cfg.app}",
+        "",
+        f"- Base inventory resources: {len(inventory)}",
+        f"- Candidate resources: {len(candidates)}",
+        f"- Currently promoted: {sum(1 for item in candidates if normalize_id(item.get('id', '')) in promoted)}",
+        "",
+    ]
+    if not candidates:
+        lines.append("_No related candidates found._")
+        report_path.write_text("\n".join(lines) + "\n")
+        return report_path
+
+    for idx, item in enumerate(candidates, start=1):
+        rid = normalize_id(item.get("id", ""))
+        status = "kept" if rid in promoted else "dropped"
+        lines.extend([
+            f"## {idx}. {item.get('name', '<unnamed>')} [{status}]",
+            "",
+            f"- Type: `{item.get('type', '')}`",
+            f"- Resource group: `{item.get('resourceGroup', '')}`",
+            f"- Subscription: `{item.get('subscriptionId', '')}`",
+            f"- ID: `{item.get('id', '')}`",
+        ])
+        for evidence in item.get(_DEEP_REASON_FIELD, []):
+            lines.append(f"- Why: {evidence.get('explanation', '')}")
+            related = evidence.get("relatedResources") or []
+            if related:
+                related_text = "; ".join(f"{entry.get('name', '<unnamed>')} ({entry.get('matchedTerms', '')})" for entry in related)
+                lines.append(f"- Base context: {related_text}")
+        lines.append("")
+    report_path.write_text("\n".join(lines) + "\n")
+    return report_path
 
 
 def run_seed(cfg: Config) -> List[Dict]:
@@ -325,6 +464,7 @@ def run_related_candidates(cfg: Config) -> List[Dict]:
         prior = deduped.get(rid)
         merged_matches = sorted(set((prior or {}).get(_DEEP_MATCH_FIELD, [])) | set(matches), key=str.lower)
         entry[_DEEP_MATCH_FIELD] = merged_matches
+        entry[_DEEP_REASON_FIELD] = _candidate_evidence(entry, merged_matches, inventory)
         deduped[rid] = entry
 
     candidates = sorted(deduped.values(), key=lambda r: (r.get("subscriptionId", ""), r.get("resourceGroup", ""), r.get("name", ""), r.get("id", "")))
@@ -334,8 +474,111 @@ def run_related_candidates(cfg: Config) -> List[Dict]:
     payload = json.dumps(candidates, indent=2, sort_keys=True)
     candidate_path.write_text(payload)
     promoted_path.write_text(payload)
+    write_related_review_report(cfg, inventory, candidates)
     log.info("Wrote %d related candidates to %s and initialized promoted list at %s", len(candidates), candidate_path, promoted_path)
     return candidates
+
+
+def _reason_entry(source: Dict[str, Any], ref: Dict[str, str], iteration: int, extraction_mode: str) -> Dict[str, Any]:
+    return {
+        "sourceId": normalize_id(source.get("id", "")),
+        "sourceName": source.get("name", ""),
+        "sourceType": source.get("type", ""),
+        "iteration": iteration,
+        "extractionMode": extraction_mode,
+        "path": ref.get("path", ""),
+        "relationship": ref.get("relationship", ""),
+        "note": ref.get("note", ""),
+    }
+
+
+def _append_discovery_reason(reason_map: Dict[str, List[Dict[str, Any]]], target_id: str, reason: Dict[str, Any]) -> None:
+    bucket = reason_map.setdefault(target_id, [])
+    key = (reason.get("sourceId"), reason.get("path"), reason.get("relationship"), reason.get("extractionMode"))
+    for existing in bucket:
+        existing_key = (existing.get("sourceId"), existing.get("path"), existing.get("relationship"), existing.get("extractionMode"))
+        if existing_key == key:
+            return
+    bucket.append(reason)
+
+
+def _write_expand_reason_artifacts(
+    cfg: Config,
+    seed_ids: Set[str],
+    collected: Dict[str, Dict[str, Any]],
+    unresolved: Set[str],
+    reason_map: Dict[str, List[Dict[str, Any]]],
+    synthesized_ids: Set[str],
+) -> None:
+    added_resources: List[Dict[str, Any]] = []
+    for rid in sorted(set(reason_map) - seed_ids):
+        if rid not in collected:
+            continue
+        resource = collected[rid]
+        status = "synthesized" if rid in synthesized_ids else "fetched"
+        added_resources.append({
+            "resourceId": rid,
+            "resourceName": resource.get("name", ""),
+            "resourceType": resource.get("type", ""),
+            "resourceGroup": resource.get("resourceGroup", ""),
+            "subscriptionId": resource.get("subscriptionId", ""),
+            "status": status,
+            "reasons": reason_map.get(rid, []),
+        })
+
+    unresolved_entries = [
+        {
+            "resourceId": rid,
+            "status": "unresolved",
+            "reasons": reason_map.get(rid, []),
+        }
+        for rid in sorted(unresolved)
+    ]
+    payload = {
+        "expandScope": cfg.expandScope,
+        "seedCount": len(seed_ids),
+        "addedResources": added_resources,
+        "unresolvedReferences": unresolved_entries,
+    }
+    cfg.ensure_output_dir()
+    cfg.out(_EXPAND_REASONS_FILE).write_text(json.dumps(payload, indent=2, sort_keys=True))
+
+    lines = [
+        f"# Expand Provenance for {cfg.app}",
+        "",
+        f"- Expand scope: `{cfg.expandScope}`",
+        f"- Seed resources: {len(seed_ids)}",
+        f"- Added resources: {len(added_resources)}",
+        f"- Unresolved references: {len(unresolved_entries)}",
+        "",
+    ]
+    if added_resources:
+        lines.append("## Added Resources")
+        lines.append("")
+        for item in added_resources:
+            lines.extend([
+                f"### {item['resourceName'] or item['resourceId']} [{item['status']}]",
+                "",
+                f"- Type: `{item['resourceType']}`",
+                f"- ID: `{item['resourceId']}`",
+            ])
+            for reason in item["reasons"]:
+                lines.append(
+                    f"- Because `{reason.get('sourceName') or reason.get('sourceId')}` referenced `{reason.get('path')}` ({reason.get('note')})."
+                )
+            lines.append("")
+    if unresolved_entries:
+        lines.append("## Unresolved References")
+        lines.append("")
+        for item in unresolved_entries:
+            lines.append(f"### {item['resourceId']}")
+            lines.append("")
+            for reason in item["reasons"]:
+                lines.append(
+                    f"- Referenced by `{reason.get('sourceName') or reason.get('sourceId')}` via `{reason.get('path')}` ({reason.get('note')})."
+                )
+            lines.append("")
+    cfg.out(_EXPAND_REASONS_REPORT).write_text("\n".join(lines) + "\n")
 
 
 def prepare_related_extended_inventory(cfg: Config) -> Config:
@@ -388,9 +631,12 @@ def run_expand(cfg: Config) -> None:
     )
 
     collected: Dict[str, Dict] = {normalize_id(r["id"]): r for r in seed}
+    seed_ids = set(collected.keys())
     unresolved: Set[str] = set()
+    reason_map: Dict[str, List[Dict[str, Any]]] = {}
 
     use_scoped = cfg.expandScope == "related"
+    extraction_mode = "related" if use_scoped else "all"
     if use_scoped:
         log.info("Using scoped expansion (expandScope=related). Set expandScope=all to follow every ARM reference.")
     else:
@@ -398,35 +644,34 @@ def run_expand(cfg: Config) -> None:
 
     for iteration in range(_MAX_ITERATIONS):
         referenced: Set[str] = set()
-        for r in collected.values():
-            if use_scoped:
-                referenced.update(_extract_related_ids(r))
-            else:
-                referenced.update(extract_arm_ids(r.get("properties", {})))
-            referenced.add(normalize_id(r["id"]))
-        referenced = {normalize_id(i) for i in referenced}
+        for resource in collected.values():
+            references = _extract_related_references(resource) if use_scoped else _extract_all_references(resource)
+            for ref in references:
+                target_id = normalize_id(ref["targetId"])
+                referenced.add(target_id)
+                _append_discovery_reason(reason_map, target_id, _reason_entry(resource, ref, iteration + 1, extraction_mode))
+            referenced.add(normalize_id(resource["id"]))
+        referenced = {normalize_id(item) for item in referenced}
 
-        # Derive parent resource IDs for child resources (e.g. VNET from subnet ID).
-        parent_ids = _derive_parent_ids(referenced)
-        referenced.update(parent_ids)
+        parent_refs = _derive_parent_references(referenced)
+        for ref in parent_refs:
+            target_id = normalize_id(ref["targetId"])
+            referenced.add(target_id)
+            source = collected.get(ref["sourceId"], {"id": ref["sourceId"], "name": ref["sourceId"], "type": "derived"})
+            _append_discovery_reason(reason_map, target_id, _reason_entry(source, ref, iteration + 1, extraction_mode))
 
         missing = referenced - set(collected.keys()) - unresolved
         if not missing:
             log.info("Expansion converged after %d iteration(s).", iteration)
             break
         log.info("Iteration %d: fetching %d missing resources", iteration + 1, len(missing))
-        # Support cross-subscription/resource group fetch
-        fetched = []
-        for m in sorted(missing):
-            # If m is a full ARM ID, try to fetch from all subscriptions
-            if m.startswith("/subscriptions/"):
-                fetched.extend(query_by_ids([m], cfg.subscriptions))
-            else:
-                fetched.extend(query_by_ids([m], cfg.subscriptions))
+        fetched: List[Dict[str, Any]] = []
+        for resource_id in sorted(missing):
+            fetched.extend(query_by_ids([resource_id], cfg.subscriptions))
         fetched_ids = set()
-        for r in fetched:
-            nid = normalize_id(r["id"])
-            collected[nid] = r
+        for resource in fetched:
+            nid = normalize_id(resource["id"])
+            collected[nid] = resource
             fetched_ids.add(nid)
         still_missing = missing - fetched_ids
         unresolved.update(still_missing)
@@ -434,14 +679,26 @@ def run_expand(cfg: Config) -> None:
     else:
         log.warning("Expansion hit max iterations (%d).", _MAX_ITERATIONS)
 
-    # Synthesize subnet entries from parent VNET properties for any subnets
-    # that could not be fetched directly from ARG (common for cross-RG refs).
-    _synthesize_subnets_from_vnets(collected, unresolved)
+    synthesized_ids = {normalize_id(item) for item in _synthesize_subnets_from_vnets(collected, unresolved)}
+    for synthesized_id in synthesized_ids:
+        vnet_id = synthesized_id.split("/subnets/")[0]
+        source = collected.get(vnet_id, {"id": vnet_id, "name": vnet_id, "type": "Microsoft.Network/virtualNetworks"})
+        _append_discovery_reason(reason_map, synthesized_id, {
+            "sourceId": normalize_id(source.get("id", "")),
+            "sourceName": source.get("name", ""),
+            "sourceType": source.get("type", ""),
+            "iteration": _MAX_ITERATIONS,
+            "extractionMode": extraction_mode,
+            "path": "properties.subnets[]",
+            "relationship": "synthesized-subnet",
+            "note": "Subnet synthesized from parent VNet properties because ARG did not return it as a standalone resource",
+        })
 
     inventory = sorted(collected.values(), key=lambda r: normalize_id(r["id"]))
     cfg.ensure_output_dir()
     cfg.out("inventory.json").write_text(json.dumps(inventory, indent=2, sort_keys=True))
     cfg.out("unresolved.json").write_text(json.dumps(sorted(unresolved), indent=2))
+    _write_expand_reason_artifacts(cfg, seed_ids, collected, unresolved, reason_map, synthesized_ids)
     log.info("Wrote inventory (%d resources) and unresolved (%d IDs)", len(inventory), len(unresolved))
 
 

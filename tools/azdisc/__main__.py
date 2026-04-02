@@ -10,8 +10,9 @@ from .discover import prepare_related_extended_inventory, run_expand, run_policy
 from .docs import generate_docs
 from .drawio import generate_drawio
 from .graph import build_graph
-from .inventory import generate_csv, generate_yaml
+from .inventory import generate_csv, generate_policy_csv, generate_policy_yaml, generate_yaml
 from .master_report import generate_master_report
+from .review import run_review_related
 from .migration_plan import generate_migration_plan
 from .split import build_split_preview, run_split
 from .telemetry import run_telemetry_enrichment
@@ -50,6 +51,11 @@ def cmd_expand(args) -> None:
 def cmd_related_candidates(args) -> None:
     cfg = load_config(args.config)
     run_related_candidates(cfg)
+
+
+def cmd_review_related(args) -> None:
+    cfg = load_config(args.config)
+    run_review_related(cfg)
 
 
 def cmd_related_extend(args) -> None:
@@ -116,6 +122,16 @@ def cmd_inventory_yaml(args) -> None:
     generate_yaml(cfg)
 
 
+def cmd_policy_csv(args) -> None:
+    cfg = load_config(args.config)
+    generate_policy_csv(cfg)
+
+
+def cmd_policy_yaml(args) -> None:
+    cfg = load_config(args.config)
+    generate_policy_yaml(cfg)
+
+
 def cmd_telemetry(args) -> None:
     cfg = load_config(args.config)
     run_telemetry_enrichment(cfg)
@@ -162,6 +178,7 @@ def main() -> None:
         ("seed", cmd_seed, "Seed resources from RGs"),
         ("expand", cmd_expand, "Expand resources transitively"),
         ("related-candidates", cmd_related_candidates, "Find possible related resources by configured name substrings"),
+        ("review-related", cmd_review_related, "Interactively review and curate related-resource candidates"),
         ("related-extend", cmd_related_extend, "Generate an extended pack from curated related resources in a dedicated directory"),
         ("rbac", cmd_rbac, "Collect RBAC assignments for discovered resources"),
         ("policy", cmd_policy, "Collect Azure Policy state for discovered resources"),
@@ -174,6 +191,8 @@ def main() -> None:
         ("wizard", cmd_wizard, "Interactively create config, instructions, and optionally execute the workflow"),
         ("inventory-csv", cmd_inventory_csv, "Generate inventory.csv from inventory.json"),
         ("inventory-yaml", cmd_inventory_yaml, "Generate inventory.yaml from inventory.json"),
+        ("policy-csv", cmd_policy_csv, "Generate policy.csv from policy.json"),
+        ("policy-yaml", cmd_policy_yaml, "Generate policy.yaml from policy.json"),
         ("render-all", cmd_render_all, "Generate all layout x mode variants from an existing graph"),
         ("report-all", cmd_report_all, "Generate a Markdown report of all layout x mode x spacing variants"),
         ("master-report", cmd_master_report, "Generate a consolidated master architecture report"),
