@@ -668,6 +668,11 @@ def _html_document(data: Dict[str, Any], title: str) -> str:
       padding: 8px 14px;
       cursor: pointer;
     }
+    .toolbar button.active {
+      background: #13202f;
+      color: white;
+      border-color: #13202f;
+    }
     .toolbar .hint { margin-left: auto; font-size: 13px; color: #52606d; }
     .canvas-wrap { height: calc(100vh - 58px); overflow: hidden; }
     svg {
@@ -687,16 +692,18 @@ def _html_document(data: Dict[str, Any], title: str) -> str:
     .edge-hierarchy { stroke: var(--assoc); stroke-width: 2.1; fill: none; opacity: 0.72; }
     .edge-network { stroke: var(--network); stroke-width: 2.1; fill: none; stroke-dasharray: 8 7; opacity: 0.9; marker-end: url(#arrow-network); }
     .edge-reference { stroke: var(--reference); stroke-width: 2.1; fill: none; stroke-dasharray: 6 6; opacity: 0.82; marker-end: url(#arrow-reference); }
-    .edge.hidden { display: none; }
+    .node.hidden, .edge.hidden { display: none; }
   </style>
 </head>
 <body>
-  <div class=\"toolbar\">
+  <div class="toolbar">
     <h1>__TITLE__</h1>
-    <label><input id=\"toggle-network\" type=\"checkbox\"> Network</label>
-    <label><input id=\"toggle-reference\" type=\"checkbox\"> References</label>
-    <button id=\"reset-layout\" type=\"button\">Reset layout</button>
-    <span class=\"hint\">Drag nodes, wheel to zoom, drag background to pan.</span>
+    <label><input id="toggle-network" type="checkbox"> Network</label>
+    <label><input id="toggle-reference" type="checkbox"> References</label>
+    <button id="remove-node" type="button" aria-pressed="false">Remove nodes</button>
+    <button id="export-svg" type="button">Export SVG</button>
+    <button id="reset-layout" type="button">Reset layout</button>
+    <span class="hint">Drag nodes, wheel to zoom, drag background to pan. Enable remove mode to click nodes away.</span>
   </div>
   <div class=\"canvas-wrap\">
     <svg id=\"mindmap\" viewBox=\"0 0 1600 900\" aria-label=\"Azure resource mindmap\">
@@ -722,18 +729,41 @@ def _html_document(data: Dict[str, Any], title: str) -> str:
     const nodeLayer = document.getElementById('node-layer');
     const toggleNetwork = document.getElementById('toggle-network');
     const toggleReference = document.getElementById('toggle-reference');
+    const removeButton = document.getElementById('remove-node');
+    const exportButton = document.getElementById('export-svg');
     const resetButton = document.getElementById('reset-layout');
 
     const positions = JSON.parse(JSON.stringify(DATA.positions));
     const initialPositions = JSON.parse(JSON.stringify(DATA.positions));
     const nodeMap = new Map(DATA.nodes.map((node) => [node.id, node]));
+    const nodeElements = new Map();
+    const removedNodes = new Set();
     const hierarchyEntries = [];
     const overlayEntries = [];
 
+    const MIN_ZOOM = 0.35;
+    const MAX_ZOOM = 8;
     const viewState = { x: 0, y: 0, scale: 1 };
     let dragNode = null;
     let dragOffset = { x: 0, y: 0 };
     let panStart = null;
+    let removeMode = false;
+    const EXPORT_STYLE = `
+      svg {
+        background-image: linear-gradient(to right, var(--grid) 1px, transparent 1px), linear-gradient(to bottom, var(--grid) 1px, transparent 1px);
+        background-size: 28px 28px;
+      }
+      .node rect { rx: 18; ry: 18; stroke: rgba(17, 24, 39, 0.34); stroke-width: 1.2; }
+      .node.subscription rect { stroke-width: 1.8; }
+      .node.resourceGroup rect { stroke-width: 1.5; }
+      .node text { pointer-events: none; user-select: none; font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
+      .node .name { font-size: 13px; font-weight: 700; fill: #13202f; }
+      .node .meta { font-size: 11px; fill: #334e68; }
+      .edge-hierarchy { stroke: #6b7280; stroke-width: 2.1; fill: none; opacity: 0.72; }
+      .edge-network { stroke: #2468d8; stroke-width: 2.1; fill: none; stroke-dasharray: 8 7; opacity: 0.9; marker-end: url(#arrow-network); }
+      .edge-reference { stroke: #7a3cff; stroke-width: 2.1; fill: none; stroke-dasharray: 6 6; opacity: 0.82; marker-end: url(#arrow-reference); }
+      .hidden { display: none; }
+    `;
 
     function screenToWorld(clientX, clientY) {
       const pt = svg.createSVGPoint();
@@ -767,6 +797,20 @@ def _html_document(data: Dict[str, Any], title: str) -> str:
       group.setAttribute('transform', `translate(${pos.x} ${pos.y})`);
     }
 
+    function updateRemoveButton() {
+      removeButton.classList.toggle('active', removeMode);
+      removeButton.setAttribute('aria-pressed', removeMode ? 'true' : 'false');
+    }
+
+    function isVisibleNode(nodeId) {
+      return !removedNodes.has(nodeId);
+    }
+
+    function syncNodeVisibility(nodeId) {
+      const group = nodeElements.get(nodeId);
+      if (group) group.classList.toggle('hidden', !isVisibleNode(nodeId));
+    }
+
     function renderNode(node) {
       const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
       group.classList.add('node', node.kind);
@@ -798,9 +842,14 @@ def _html_document(data: Dict[str, Any], title: str) -> str:
       group.appendChild(meta);
 
       updateNodePosition(group);
+      nodeElements.set(node.id, group);
 
       group.addEventListener('pointerdown', (event) => {
         event.stopPropagation();
+        if (removeMode) {
+          removeNode(node.id);
+          return;
+        }
         const world = screenToWorld(event.clientX, event.clientY);
         dragNode = node.id;
         dragOffset = { x: world.x - positions[node.id].x, y: world.y - positions[node.id].y };
@@ -839,22 +888,68 @@ def _html_document(data: Dict[str, Any], title: str) -> str:
     }
 
     function redrawEdges() {
-      hierarchyEntries.forEach((entry) => entry.path.setAttribute('d', edgePath(entry.edge.source, entry.edge.target)));
-      overlayEntries.forEach((entry) => entry.path.setAttribute('d', edgePath(entry.edge.source, entry.edge.target)));
+      hierarchyEntries.forEach((entry) => {
+        const visible = isVisibleNode(entry.edge.source) && isVisibleNode(entry.edge.target);
+        if (visible) {
+          entry.path.setAttribute('d', edgePath(entry.edge.source, entry.edge.target));
+        }
+        entry.path.classList.toggle('hidden', !visible);
+      });
+      overlayEntries.forEach((entry) => {
+        const visible = isVisibleNode(entry.edge.source) && isVisibleNode(entry.edge.target);
+        if (visible) {
+          entry.path.setAttribute('d', edgePath(entry.edge.source, entry.edge.target));
+        }
+      });
+      syncEdgeVisibility();
     }
 
     function syncEdgeVisibility() {
       overlayEntries.forEach((entry) => {
         const visible =
-          (entry.edge.category === 'network' && toggleNetwork.checked) ||
-          (entry.edge.category === 'reference' && toggleReference.checked);
+          isVisibleNode(entry.edge.source) &&
+          isVisibleNode(entry.edge.target) &&
+          ((entry.edge.category === 'network' && toggleNetwork.checked) ||
+          (entry.edge.category === 'reference' && toggleReference.checked));
         entry.path.classList.toggle('hidden', !visible);
       });
     }
 
+    function removeNode(nodeId) {
+      removedNodes.add(nodeId);
+      syncNodeVisibility(nodeId);
+      redrawEdges();
+    }
+
+    function exportSvg() {
+      const clone = svg.cloneNode(true);
+      clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+      clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+      clone.querySelectorAll('.hidden').forEach((element) => element.remove());
+
+      const style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+      style.textContent = EXPORT_STYLE;
+      clone.insertBefore(style, clone.firstChild);
+
+      const serialized = new XMLSerializer().serializeToString(clone);
+      const blob = new Blob([serialized], { type: 'image/svg+xml;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const slug = document.querySelector('.toolbar h1').textContent.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'mindmap';
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      link.href = url;
+      link.download = `${slug}-${stamp}.svg`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
+
     function resetLayout() {
+      removedNodes.clear();
       Object.keys(initialPositions).forEach((id) => {
         positions[id] = { x: initialPositions[id].x, y: initialPositions[id].y };
+        syncNodeVisibility(id);
       });
       Array.from(nodeLayer.children).forEach(updateNodePosition);
       redrawEdges();
@@ -863,7 +958,7 @@ def _html_document(data: Dict[str, Any], title: str) -> str:
     svg.addEventListener('wheel', (event) => {
       event.preventDefault();
       const scaleFactor = event.deltaY < 0 ? 1.08 : 0.92;
-      viewState.scale = Math.max(0.35, Math.min(2.5, viewState.scale * scaleFactor));
+      viewState.scale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, viewState.scale * scaleFactor));
       applyViewport();
     }, { passive: false });
 
@@ -889,6 +984,11 @@ def _html_document(data: Dict[str, Any], title: str) -> str:
 
     toggleNetwork.addEventListener('change', syncEdgeVisibility);
     toggleReference.addEventListener('change', syncEdgeVisibility);
+    removeButton.addEventListener('click', () => {
+      removeMode = !removeMode;
+      updateRemoveButton();
+    });
+    exportButton.addEventListener('click', exportSvg);
     resetButton.addEventListener('click', resetLayout);
 
     svg.setAttribute('viewBox', `0 0 ${DATA.canvas.width} ${DATA.canvas.height}`);
@@ -896,7 +996,7 @@ def _html_document(data: Dict[str, Any], title: str) -> str:
     DATA.overlayEdges.forEach((edge) => overlayEntries.push(renderEdge(edge, edge.category === 'network' ? 'edge-network' : 'edge-reference')));
     DATA.nodes.forEach(renderNode);
     redrawEdges();
-    syncEdgeVisibility();
+    updateRemoveButton();
     applyViewport();
   </script>
 </body>

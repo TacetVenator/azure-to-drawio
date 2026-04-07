@@ -67,9 +67,14 @@ def test_generate_html_graph_mode_writes_mindmap(tmp_path):
     content = output.read_text()
     assert "toggle-network" in content
     assert "toggle-reference" in content
+    assert "Remove nodes" in content
+    assert "Export SVG" in content
     assert "Reset layout" in content
+    assert "function removeNode(nodeId)" in content
+    assert "function exportSvg()" in content
     assert "#2468d8" in content
     assert "#7a3cff" in content
+    assert "const MAX_ZOOM = 8;" in content
 
 
 def test_generate_html_related_candidate_modes(tmp_path):
