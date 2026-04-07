@@ -10,6 +10,7 @@ from .discover import prepare_related_extended_inventory, run_expand, run_policy
 from .docs import generate_docs
 from .drawio import generate_drawio
 from .graph import build_graph
+from .htmlmap import generate_html
 from .inventory import generate_csv, generate_policy_csv, generate_policy_yaml, generate_yaml
 from .master_report import generate_master_report
 from .review import run_review_related
@@ -91,6 +92,11 @@ def cmd_graph(args) -> None:
 def cmd_drawio(args) -> None:
     cfg = load_config(args.config)
     generate_drawio(cfg)
+
+
+def cmd_html(args) -> None:
+    cfg = load_config(args.config)
+    generate_html(cfg, artifact=args.artifact)
 
 
 def cmd_docs(args) -> None:
@@ -184,6 +190,7 @@ def main() -> None:
         ("policy", cmd_policy, "Collect Azure Policy state for discovered resources"),
         ("graph", cmd_graph, "Build graph model"),
         ("drawio", cmd_drawio, "Generate draw.io diagram"),
+        ("html", cmd_html, "Generate offline HTML mindmap"),
         ("docs", cmd_docs, "Generate documentation"),
         ("split-preview", cmd_split_preview, "Preview application split candidates from seed/inventory artifacts"),
         ("split", cmd_split, "Generate per-application outputs from an existing inventory/graph"),
@@ -199,6 +206,8 @@ def main() -> None:
     ]:
         p = sub.add_parser(name, help=help_text)
         p.add_argument("config", help="Path to config.json")
+        if name == "html":
+            p.add_argument("--artifact", choices=["graph", "related-candidates", "related-promoted", "rbac", "policy"], default="graph", help="Artifact to render as HTML (default: graph)")
         p.set_defaults(func=func)
 
     p_test_all = sub.add_parser("test-all", help="Generate all layout x mode combinations from fixtures")

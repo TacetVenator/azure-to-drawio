@@ -8,7 +8,7 @@ import pytest
 
 from tools.azdisc.arg import _run_az
 from tools.azdisc.config import Config, load_config
-from tools.azdisc.discover import run_policy
+from tools.azdisc.discover import run_policy, run_rbac
 from tools.azdisc.graph import build_graph
 from tools.azdisc.split import build_split_preview, run_split
 
@@ -202,6 +202,110 @@ def test_run_policy_collects_policy_states_for_inventory_resources(monkeypatch, 
     assert rows[0]["resourceId"] == inventory[0]["id"]
     assert rows[0]["complianceState"] == "NonCompliant"
     assert rows[0]["policyAssignmentName"] == "allowed-locations"
+
+
+def test_run_rbac_enriches_role_definition_names_and_principal_display_names(monkeypatch, tmp_path):
+    inventory = _write_split_inventory(tmp_path)
+    cfg = Config(
+        app="corp-apps",
+        subscriptions=["sub1"],
+        seedResourceGroups=["rg-shared"],
+        outputDir=str(tmp_path),
+        includeRbac=True,
+        resolvePrincipalNames=True,
+    )
+
+    role_definition_id = "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/role-reader"
+    principal_id = "00000000-0000-0000-0000-000000000123"
+
+    def fake_query(kusto, subscriptions):
+        assert subscriptions == ["sub1"]
+        lowered = kusto.lower()
+        if "roleassignments" in lowered:
+            return [
+                {
+                    "properties": {
+                        "scope": inventory[0]["id"],
+                        "roleDefinitionId": role_definition_id,
+                        "principalId": principal_id,
+                        "principalType": "ServicePrincipal",
+                    }
+                }
+            ]
+        if "roledefinitions" in lowered:
+            return [
+                {
+                    "id": role_definition_id,
+                    "name": "Reader",
+                    "properties": {"roleName": "Reader"},
+                }
+            ]
+        raise AssertionError(kusto)
+
+    monkeypatch.setattr("tools.azdisc.discover.query", fake_query)
+    monkeypatch.setattr("tools.azdisc.discover._resolve_principal_name", lambda principal_id, principal_type: "payments-api")
+
+    run_rbac(cfg)
+
+    rows = json.loads((tmp_path / "rbac.json").read_text())
+    assert len(rows) == 1
+    props = rows[0]["properties"]
+    assert props["roleDefinitionName"] == "Reader"
+    assert props["principalDisplayName"] == "payments-api"
+    assert props["principalResolutionSource"] == "entra"
+    assert props["principalResolutionStatus"] == "resolved"
+
+
+
+def test_run_rbac_keeps_canonical_principal_id_when_lookup_is_unavailable(monkeypatch, tmp_path):
+    inventory = _write_split_inventory(tmp_path)
+    cfg = Config(
+        app="corp-apps",
+        subscriptions=["sub1"],
+        seedResourceGroups=["rg-shared"],
+        outputDir=str(tmp_path),
+        includeRbac=True,
+        resolvePrincipalNames=True,
+    )
+
+    role_definition_id = "/subscriptions/sub1/providers/Microsoft.Authorization/roleDefinitions/role-contributor"
+    principal_id = "00000000-0000-0000-0000-000000000456"
+
+    def fake_query(kusto, subscriptions):
+        lowered = kusto.lower()
+        if "roleassignments" in lowered:
+            return [
+                {
+                    "properties": {
+                        "scope": inventory[0]["id"],
+                        "roleDefinitionId": role_definition_id,
+                        "principalId": principal_id,
+                        "principalType": "Group",
+                    }
+                }
+            ]
+        if "roledefinitions" in lowered:
+            return [
+                {
+                    "id": role_definition_id,
+                    "name": "Contributor",
+                    "properties": {"roleName": "Contributor"},
+                }
+            ]
+        raise AssertionError(kusto)
+
+    monkeypatch.setattr("tools.azdisc.discover.query", fake_query)
+    monkeypatch.setattr("tools.azdisc.discover._resolve_principal_name", lambda principal_id, principal_type: None)
+
+    run_rbac(cfg)
+
+    rows = json.loads((tmp_path / "rbac.json").read_text())
+    props = rows[0]["properties"]
+    assert props["roleDefinitionName"] == "Contributor"
+    assert props["principalId"] == principal_id
+    assert "principalDisplayName" not in props
+    assert props["principalResolutionSource"] == "entra"
+    assert props["principalResolutionStatus"] == "unresolved"
 
 
 def test_run_split_generates_per_application_outputs_with_shared_context(tmp_path):

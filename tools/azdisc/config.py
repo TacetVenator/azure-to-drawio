@@ -62,6 +62,7 @@ class Config:
     seedTagKeys: List[str] = field(default_factory=list)
     seedEntireSubscriptions: bool = False
     includeRbac: bool = False
+    resolvePrincipalNames: bool = False
     includePolicy: bool = False
     enableTelemetry: bool = False
     telemetryLookbackDays: int = 7
@@ -301,6 +302,10 @@ def load_config(path: str) -> Config:
     if not isinstance(include_rbac, bool):
         raise ValueError(f"includeRbac must be a boolean, got {include_rbac!r}")
 
+    resolve_principal_names = data.get("resolvePrincipalNames", False)
+    if not isinstance(resolve_principal_names, bool):
+        raise ValueError(f"resolvePrincipalNames must be a boolean, got {resolve_principal_names!r}")
+
     include_policy = data.get("includePolicy", False)
     if not isinstance(include_policy, bool):
         raise ValueError(f"includePolicy must be a boolean, got {include_policy!r}")
@@ -322,6 +327,7 @@ def load_config(path: str) -> Config:
         seedTagKeys=seed_tag_keys,
         seedEntireSubscriptions=seed_entire_subscriptions,
         includeRbac=include_rbac,
+        resolvePrincipalNames=resolve_principal_names,
         includePolicy=include_policy,
         enableTelemetry=enable_telemetry,
         telemetryLookbackDays=lookback_days,
@@ -340,7 +346,7 @@ def load_config(path: str) -> Config:
         migrationPlan=migration_plan,
     )
     log.info(
-        "Loaded config for app=%s, subs=%d, seedRGs=%d, seedTags=%d, seedTagKeys=%d, seedAllSubs=%s, includeRbac=%s, includePolicy=%s, deepDiscovery=%s, appSplit=%s, migrationPlan=%s",
+        "Loaded config for app=%s, subs=%d, seedRGs=%d, seedTags=%d, seedTagKeys=%d, seedAllSubs=%s, includeRbac=%s, resolvePrincipalNames=%s, includePolicy=%s, deepDiscovery=%s, appSplit=%s, migrationPlan=%s",
         cfg.app,
         len(cfg.subscriptions),
         len(cfg.seedResourceGroups),
@@ -348,6 +354,7 @@ def load_config(path: str) -> Config:
         len(cfg.seedTagKeys),
         cfg.seedEntireSubscriptions,
         cfg.includeRbac,
+        cfg.resolvePrincipalNames,
         cfg.includePolicy,
         cfg.deepDiscovery.enabled,
         cfg.applicationSplit.enabled,

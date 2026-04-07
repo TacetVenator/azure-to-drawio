@@ -434,6 +434,7 @@ def test_generate_docs_writes_policy_and_rbac_governance_summaries(tmp_path):
                 "scope": "/subscriptions/sub1/resourceGroups/rg-app/providers/Microsoft.Web/sites/app1",
                 "roleDefinitionName": "Contributor",
                 "principalName": "App Ops",
+                "principalId": "00000000-0000-0000-0000-000000000111",
                 "principalType": "Group",
             }
         },
@@ -490,7 +491,8 @@ def test_generate_docs_writes_policy_and_rbac_governance_summaries(tmp_path):
     assert "- Role assignments captured: 2" in rbac_summary
     assert "- Unique principals: 2" in rbac_summary
     assert "- Resources with effective access captured: 1" in rbac_summary
+    assert "- Unresolved principal display names: 0" in rbac_summary
     assert "| app1 (microsoft.web/sites) | rg-app | 2 | 2 | 2 | 1 |" in rbac_summary
     assert "### app1 (microsoft.web/sites)" in rbac_summary
-    assert "- Contributor -> App Ops (Group; direct)" in rbac_summary
+    assert "- Contributor -> App Ops (00000000-0000-0000-0000-000000000111) (Group; direct)" in rbac_summary
     assert "- Reader -> Audit Team (Group; inherited from /subscriptions/sub1/resourcegroups/rg-app)" in rbac_summary

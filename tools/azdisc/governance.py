@@ -44,7 +44,9 @@ def simplify_rbac_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, str]]:
         )
         principal_id = props.get("principalId") or row.get("principalId") or ""
         principal_name = (
-            props.get("principalName")
+            props.get("principalDisplayName")
+            or row.get("principalDisplayName")
+            or props.get("principalName")
             or props.get("displayName")
             or row.get("principalName")
             or row.get("displayName")
@@ -57,6 +59,9 @@ def simplify_rbac_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, str]]:
             "principalName": str(principal_name),
             "principalType": str(props.get("principalType") or row.get("principalType") or "Unknown"),
             "principalId": str(principal_id),
+            "principalResolutionStatus": str(
+                props.get("principalResolutionStatus") or row.get("principalResolutionStatus") or ""
+            ),
         })
     return simplified
 

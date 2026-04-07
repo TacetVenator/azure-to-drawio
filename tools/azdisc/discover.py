@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set
 
 from .arg import query, query_by_ids
 from .config import Config
-from .util import extract_arm_ids, load_json_file, normalize_id
+from .util import extract_arm_ids, load_json_file, normalize_id, parse_json_text
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +31,121 @@ def _rg_filter(rgs: List[str]) -> str:
     quoted = ", ".join(f"'{rg.lower()}'" for rg in rgs)
     return f"resources | where resourceGroup in~ ({quoted}) | {_RESOURCE_PROJECT}"
 
+
+
+
+def _safe_json_output(args: List[str]) -> Dict[str, Any]:
+    result = subprocess.run(["az"] + args, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or f"az {' '.join(args)} failed with rc={result.returncode}")
+    if not result.stdout.strip():
+        raise RuntimeError(f"az {' '.join(args)} returned empty stdout")
+    return parse_json_text(
+        result.stdout,
+        source="az " + " ".join(args),
+        context="Azure CLI JSON output",
+        expected_type=dict,
+        advice="Re-run the command with --debug or verify the signed-in identity has directory read permissions.",
+    )
+
+
+def _role_definition_lookup(subscriptions: List[str]) -> Dict[str, str]:
+    rows = query(
+        "authorizationresources | where type =~ 'microsoft.authorization/roledefinitions' "
+        "| project id, name, type, properties",
+        subscriptions,
+    )
+    lookup: Dict[str, str] = {}
+    for row in rows:
+        role_id = normalize_id(row.get("id") or "")
+        props = row.get("properties") or {}
+        role_name = props.get("roleName") or props.get("roleDefinitionName") or row.get("name")
+        if role_id and role_name:
+            lookup[role_id] = str(role_name)
+    return lookup
+
+
+def _resolve_principal_name(principal_id: str, principal_type: str) -> Optional[str]:
+    principal_id = str(principal_id or "").strip()
+    if not principal_id:
+        return None
+    kind = str(principal_type or "").strip().lower()
+    commands: List[List[str]]
+    if kind == "user":
+        commands = [["ad", "user", "show", "--id", principal_id]]
+    elif kind == "group":
+        commands = [["ad", "group", "show", "--group", principal_id]]
+    elif kind in {"serviceprincipal", "service principal"}:
+        commands = [["ad", "sp", "show", "--id", principal_id]]
+    else:
+        commands = [
+            ["ad", "user", "show", "--id", principal_id],
+            ["ad", "group", "show", "--group", principal_id],
+            ["ad", "sp", "show", "--id", principal_id],
+        ]
+
+    for command in commands:
+        try:
+            data = _safe_json_output(command)
+        except RuntimeError:
+            continue
+        for key in ("displayName", "userPrincipalName", "appDisplayName", "mailNickname"):
+            value = data.get(key)
+            if value:
+                return str(value)
+    return None
+
+
+def _enrich_rbac_rows(rows: List[Dict[str, Any]], cfg: Config) -> List[Dict[str, Any]]:
+    role_lookup = _role_definition_lookup(cfg.subscriptions)
+    principal_cache: Dict[str, Optional[str]] = {}
+    enriched: List[Dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        props = dict(item.get("properties") or {})
+        role_definition_id = normalize_id(props.get("roleDefinitionId") or item.get("roleDefinitionId") or "")
+        if role_definition_id and role_definition_id in role_lookup:
+            role_name = role_lookup[role_definition_id]
+            item["roleDefinitionName"] = role_name
+            props["roleDefinitionName"] = role_name
+
+        principal_id = str(props.get("principalId") or item.get("principalId") or "").strip()
+        existing_name = (
+            props.get("principalDisplayName")
+            or props.get("principalName")
+            or props.get("displayName")
+            or item.get("principalDisplayName")
+            or item.get("principalName")
+            or item.get("displayName")
+        )
+        if existing_name:
+            display_name = str(existing_name)
+            item["principalDisplayName"] = display_name
+            props["principalDisplayName"] = display_name
+            props["principalResolutionSource"] = "assignment"
+            props["principalResolutionStatus"] = "provided"
+        elif cfg.resolvePrincipalNames and principal_id:
+            if principal_id not in principal_cache:
+                principal_cache[principal_id] = _resolve_principal_name(
+                    principal_id,
+                    str(props.get("principalType") or item.get("principalType") or ""),
+                )
+            resolved = principal_cache[principal_id]
+            if resolved:
+                item["principalDisplayName"] = resolved
+                props["principalDisplayName"] = resolved
+                props["principalResolutionSource"] = "entra"
+                props["principalResolutionStatus"] = "resolved"
+            else:
+                props["principalResolutionSource"] = "entra"
+                props["principalResolutionStatus"] = "unresolved"
+        elif principal_id:
+            props["principalResolutionSource"] = "disabled"
+            props["principalResolutionStatus"] = "unresolved"
+
+        item["properties"] = props
+        enriched.append(item)
+    return enriched
 
 def _seed_query(cfg: Config) -> str:
     if cfg.seedEntireSubscriptions:
@@ -724,6 +840,7 @@ def run_rbac(cfg: Config) -> None:
     # Filter to relevant scopes
     relevant = [r for r in rows if normalize_id(r.get("properties", {}).get("scope", "")) in scopes or
                 any(normalize_id(r.get("properties", {}).get("scope", "")).startswith(s) for s in scopes)]
+    relevant = _enrich_rbac_rows(relevant, cfg)
     cfg.ensure_output_dir()
     cfg.out("rbac.json").write_text(json.dumps(relevant, indent=2, sort_keys=True))
     log.info("Wrote %d RBAC assignments to rbac.json", len(relevant))

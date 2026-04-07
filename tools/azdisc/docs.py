@@ -919,6 +919,36 @@ def _resource_label(node: Dict[str, Any], resource_id: str) -> str:
     return f"{name} ({rtype})"
 
 
+def _policy_assignment_label(row: Dict[str, Any]) -> str:
+    return str(
+        row.get("policyAssignmentName")
+        or row.get("policyDefinitionName")
+        or row.get("policySetDefinitionName")
+        or row.get("policyAssignmentId")
+        or row.get("policyDefinitionId")
+        or row.get("policySetDefinitionId")
+        or "Unnamed policy"
+    )
+
+
+def _policy_definition_label(row: Dict[str, Any]) -> str:
+    return str(
+        row.get("policyDefinitionName")
+        or row.get("policySetDefinitionName")
+        or row.get("policyDefinitionId")
+        or row.get("policySetDefinitionId")
+        or "Unnamed definition"
+    )
+
+
+def _principal_label(assignment: Dict[str, Any]) -> str:
+    principal_name = str(assignment.get("principalName") or "Unknown principal")
+    principal_id = str(assignment.get("principalId") or "")
+    if principal_id and principal_name != principal_id:
+        return f"{principal_name} ({principal_id})"
+    return principal_name
+
+
 def _write_policy_summary(cfg: Config, nodes: List[Dict], policy_rows: List[Dict], artifact_present: bool) -> None:
     node_by_id = {normalize_id(node.get("id") or ""): node for node in nodes if node.get("id")}
     lines = [f"# Policy Compliance Summary — {cfg.app}", ""]
@@ -969,7 +999,7 @@ def _write_policy_summary(cfg: Config, nodes: List[Dict], policy_rows: List[Dict
         node = node_by_id.get(resource_id, {})
         label = _resource_label(node, resource_id)
         rg = node.get("resourceGroup") or rows[0].get("resourceGroup") or ""
-        examples = ", ".join(sorted({row.get("policyAssignmentName") or row.get("policyDefinitionName") or "Unnamed policy" for row in rows})[:3])
+        examples = ", ".join(sorted({_policy_assignment_label(row) for row in rows})[:3])
         summary_rows.append((label.lower(), label, rg, len(rows), examples, resource_id, rows))
     for _, label, rg, count, examples, _resource_id, _rows in sorted(summary_rows):
         lines.append(f"| {label} | {rg} | {count} | {examples} |")
@@ -979,10 +1009,16 @@ def _write_policy_summary(cfg: Config, nodes: List[Dict], policy_rows: List[Dict
         lines.append(f"### {label}")
         lines.append(f"- Resource ID: `{resource_id}`")
         for row in sorted(rows, key=lambda item: ((item.get("policyAssignmentName") or "").lower(), (item.get("policyDefinitionName") or "").lower())):
-            assignment = row.get("policyAssignmentName") or "Unnamed assignment"
-            definition = row.get("policyDefinitionName") or "Unnamed definition"
+            assignment = _policy_assignment_label(row)
+            definition = _policy_definition_label(row)
             timestamp = row.get("timestamp") or "unknown time"
             lines.append(f"- {assignment}: {definition} ({normalize_compliance_state(row.get('complianceState'))}, {timestamp})")
+            if row.get("policyAssignmentId"):
+                lines.append(f"  Assignment ID: `{row.get('policyAssignmentId')}`")
+            if row.get("policyDefinitionId"):
+                lines.append(f"  Definition ID: `{row.get('policyDefinitionId')}`")
+            if row.get("policySetDefinitionId"):
+                lines.append(f"  Initiative ID: `{row.get('policySetDefinitionId')}`")
         lines.append("")
 
     cfg.out("policy_summary.md").write_text("\n".join(lines) + "\n")
@@ -999,8 +1035,8 @@ def _policy_group_key(row: Dict[str, Any]) -> Tuple[str, str, str, str, str]:
 
 
 def _policy_display_name(row: Dict[str, Any]) -> str:
-    assignment = row.get("policyAssignmentName") or "Unnamed assignment"
-    definition = row.get("policyDefinitionName") or "Unnamed definition"
+    assignment = _policy_assignment_label(row)
+    definition = _policy_definition_label(row)
     reference = row.get("policyDefinitionReferenceId") or ""
     if reference:
         return f"{assignment} -> {definition} [{reference}]"
@@ -1058,7 +1094,7 @@ def _write_policy_by_resource(cfg: Config, nodes: List[Dict], policy_rows: List[
         lines.append("|-------|------------|------------|-----------|")
         for row in sorted(rows, key=lambda item: (normalize_compliance_state(item.get("complianceState")), (item.get("policyAssignmentName") or "").lower(), (item.get("policyDefinitionName") or "").lower())):
             lines.append(
-                f"| {normalize_compliance_state(row.get('complianceState'))} | {row.get('policyAssignmentName') or 'Unnamed assignment'} | {row.get('policyDefinitionName') or 'Unnamed definition'} | {row.get('timestamp') or ''} |"
+                f"| {normalize_compliance_state(row.get('complianceState'))} | {_policy_assignment_label(row)} | {_policy_definition_label(row)} | {row.get('timestamp') or ''} |"
             )
         lines.append("")
 
@@ -1110,9 +1146,13 @@ def _write_policy_by_policy(cfg: Config, nodes: List[Dict], policy_rows: List[Di
         sample = rows[0]
         lines.append(f"### {label}")
         if sample.get("policyAssignmentId"):
+            lines.append(f"- Assignment: {_policy_assignment_label(sample)}")
             lines.append(f"- Assignment ID: `{sample.get('policyAssignmentId')}`")
         if sample.get("policyDefinitionId"):
+            lines.append(f"- Definition: {_policy_definition_label(sample)}")
             lines.append(f"- Definition ID: `{sample.get('policyDefinitionId')}`")
+        if sample.get("policySetDefinitionId"):
+            lines.append(f"- Initiative ID: `{sample.get('policySetDefinitionId')}`")
         lines.append(
             f"- Resources: compliant={counts.get('Compliant', 0)}, non-compliant={counts.get('NonCompliant', 0)}, exempt={counts.get('Exempt', 0)}, other={other}"
         )
@@ -1148,6 +1188,7 @@ def _write_rbac_summary(cfg: Config, nodes: List[Dict], rbac_rows: List[Dict], a
         f"- Unique roles: {len({row['roleName'] for row in simplified})}",
         f"- Resources with effective access captured: {len(access_rows)}",
         "- Effective access counts include direct assignments and inherited assignments from parent scopes such as resource group or subscription.",
+        f"- Unresolved principal display names: {sum(1 for row in simplified if row.get('principalResolutionStatus') == 'unresolved')}",
         "",
     ]
 
@@ -1180,7 +1221,7 @@ def _write_rbac_summary(cfg: Config, nodes: List[Dict], rbac_rows: List[Dict], a
         lines.append(f"- Inherited assignments: {row['inheritedAssignments']}")
         for assignment in sorted(row['assignments'], key=lambda item: (item['roleName'].lower(), item['principalName'].lower(), item['scope'])):
             scope_note = "direct" if assignment['scope'] == row['resourceId'] else f"inherited from {assignment['scope']}"
-            lines.append(f"- {assignment['roleName']} -> {assignment['principalName']} ({assignment['principalType']}; {scope_note})")
+            lines.append(f"- {assignment['roleName']} -> {_principal_label(assignment)} ({assignment['principalType']}; {scope_note})")
         lines.append("")
 
     cfg.out("rbac_summary.md").write_text("\n".join(lines) + "\n")

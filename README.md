@@ -25,7 +25,7 @@ The tool runs a seven-stage pipeline. Each stage reads the previous stage's outp
 
 1. **Seed** — Queries Azure Resource Graph (ARG) for all resources in the configured seed scope: resource groups, exact tag matches, and/or tag-key presence. Writes `seed.json`.
 2. **Expand** — Reads `seed.json`, recursively extracts ARM ID references from resource properties, and fetches any resources not yet collected. Iterates up to 50 rounds until no new IDs are found. Writes `inventory.json` (the full resource set) and `unresolved.json` (IDs referenced but not found in Azure).
-3. **RBAC** *(optional, `includeRbac: true`)* — Reads `inventory.json`, queries `authorizationresources` for role assignments scoped to discovered resources, and writes `rbac.json`.
+3. **RBAC** *(optional, `includeRbac: true`)* — Reads `inventory.json`, queries `authorizationresources` for role assignments scoped to discovered resources, resolves role definition names, and writes `rbac.json`. When `resolvePrincipalNames: true`, it also performs best-effort Entra display-name lookups for referenced principals without failing the pipeline if directory access is unavailable.
 4. **Policy** *(optional, `includePolicy: true`)* — Reads `inventory.json`, queries Azure Policy state for the discovered resource IDs, and writes `policy.json`.
 5. **Graph** — Reads `inventory.json`, `unresolved.json`, and optionally `rbac.json`. Builds a normalized graph model: separates parent and child resources, merges children (VM extensions, SQL firewall rules, etc.) into parent node attributes, extracts typed edges from resource properties, and adds placeholder nodes for unresolved external references. Writes `graph.json`.
 6. **Draw.io** — Reads `graph.json` and the icon map from `assets/azure_icon_map.json`. Computes the supported deterministic layout (`SUB>REGION>RG>NET`), generates draw.io XML with positioned nodes, styled icons, edges, UDR callout boxes, and attribute info boxes. Writes `diagram.drawio` and `icons_used.json`. If the `drawio` CLI is on `PATH`, also exports `diagram.svg` and `diagram.png`.
@@ -81,13 +81,13 @@ Use this when you want the tool to guide you from initial scope definition throu
 
 #### `rbac` — Collect RBAC assignments for discovered resources
 
-Reads `inventory.json`, queries Azure Resource Graph authorization resources, filters role assignments to the discovered scope, and writes `rbac.json`.
+Reads `inventory.json`, queries Azure Resource Graph authorization resources, filters role assignments to the discovered scope, resolves role definition names, and writes `rbac.json`. If `resolvePrincipalNames` is enabled, the command also attempts best-effort Entra display-name lookups for referenced users, groups, and service principals while preserving canonical IDs.
 
 ```bash
 python3 -m tools.azdisc rbac app/myapp/config.json
 ```
 
-**Requires:** `inventory.json` in the output directory, Azure CLI authenticated.
+**Requires:** `inventory.json` in the output directory, Azure CLI authenticated. When `resolvePrincipalNames: true`, the signed-in identity may also need Entra directory read permissions for `az ad` lookups.
 **Produces:** `rbac.json`
 
 #### `policy` — Collect Azure Policy state for discovered resources
@@ -380,6 +380,27 @@ python3 -m tools.azdisc test-all [output_dir]
 
 **Produces:** `<output_dir>/<fixture>/<layout>_<mode>/` directories with full diagram + docs output.
 
+#### `html` — Generate an offline interactive mindmap
+
+Reads one supported discovery artifact and writes a standalone offline HTML file with drag repositioning, zoom/pan, and toggles for network and reference edges. The default artifact is `graph`, but the command can also render `related-candidates`, `related-promoted`, `rbac`, and `policy`.
+
+```bash
+python3 -m tools.azdisc html app/myapp/config.json
+python3 -m tools.azdisc html app/myapp/config.json --artifact related-candidates
+python3 -m tools.azdisc html app/myapp/config.json --artifact rbac
+```
+
+**Requires:** The selected artifact to already exist in the output directory or deep-discovery output directory.
+**Produces:** `mindmap.html`, `related_candidates.html`, `related_promoted.html`, `rbac.html`, or `policy.html` depending on `--artifact`.
+
+Artifact variants:
+
+- `python3 -m tools.azdisc html <config> --artifact graph` -> `mindmap.html`
+- `python3 -m tools.azdisc html <config> --artifact related-candidates` -> `related_candidates.html`
+- `python3 -m tools.azdisc html <config> --artifact related-promoted` -> `related_promoted.html`
+- `python3 -m tools.azdisc html <config> --artifact rbac` -> `rbac.html`
+- `python3 -m tools.azdisc html <config> --artifact policy` -> `policy.html`
+
 #### `docs` — Generate documentation
 
 Reads `graph.json` plus any available supporting artifacts and produces the Markdown reporting set used by architecture, migration, and governance review.
@@ -389,7 +410,7 @@ python3 -m tools.azdisc docs app/myapp/config.json
 ```
 
 **Requires:** `graph.json` in the output directory.
-**Produces:** `catalog.md`, `edges.md`, `routing.md`, `migration.md`, and when `policy.json` / `rbac.json` exist, `policy_summary.md`, `policy_by_resource.md`, `policy_by_policy.md`, and `rbac_summary.md`. Separate export commands can also generate `policy.csv` and `policy.yaml`.
+**Produces:** `catalog.md`, `edges.md`, `routing.md`, `migration.md`, and when `policy.json` / `rbac.json` exist, `policy_summary.md`, `policy_by_resource.md`, `policy_by_policy.md`, and `rbac_summary.md`. Policy detail reports prefer human-readable assignment, definition, and initiative names when present and still retain canonical IDs in detail sections. RBAC summaries prefer resolved principal display names and show canonical principal IDs alongside them when available. Separate export commands can also generate `policy.csv` and `policy.yaml`.
 
 Policy reporting guidance:
 - Use `policy_summary.md` for a quick governance snapshot.
@@ -533,6 +554,7 @@ The tool reads a JSON configuration file. An example is provided at `app/myapp/c
   "seedResourceGroups": ["rg-app-dev", "rg-app-prod"],
   "outputDir": "app/myapp/out",
   "includeRbac": true,
+  "resolvePrincipalNames": false,
   "includePolicy": true,
   "enableTelemetry": false,
   "telemetryLookbackDays": 7,
@@ -581,7 +603,8 @@ The tool reads a JSON configuration file. An example is provided at `app/myapp/c
 | `seedTagKeys` | `string[]` | No | `[]` | list of non-empty strings | Seed resources by tag-key presence, regardless of value. |
 | `seedEntireSubscriptions` | `bool` | No | `false` | `true`, `false` | Seeds all resources in the listed `subscriptions`. Use this for broad environment baselines when you want more than RG- or tag-scoped discovery. |
 | `outputDir` | `string` | Yes | — | — | Directory where all generated files are written. Created automatically if needed. |
-| `includeRbac` | `bool` | No | `false` | `true`, `false` | When `true`, runs the RBAC stage and writes `rbac.json`, adding `rbac_assignment` edges to the graph. |
+| `includeRbac` | `bool` | No | `false` | `true`, `false` | When `true`, runs the RBAC stage and writes `rbac.json`, adding `rbac_assignment` edges to the graph. Role definition IDs are also resolved to role names when available. |
+| `resolvePrincipalNames` | `bool` | No | `false` | `true`, `false` | When `true`, the RBAC stage performs best-effort Entra display-name lookups for the principals referenced by discovered role assignments. Failures fall back to canonical GUIDs and do not fail the pipeline. |
 | `includePolicy` | `bool` | No | `false` | `true`, `false` | When `true`, runs the Azure Policy stage and writes `policy.json` with policy state records for discovered resources. |
 | `enableTelemetry` | `bool` | No | `false` | `true`, `false` | When `true`, the `run` command executes telemetry enrichment after graph generation. |
 | `telemetryLookbackDays` | `int` | No | `7` | positive integers | Lookback window used by telemetry queries. |
@@ -1010,7 +1033,7 @@ In the `graph` stage, these IDs become placeholder nodes marked `isExternal: tru
 **Produced by:** `run` (RBAC sub-stage, only when `includeRbac: true`)
 **Format:** JSON array of role assignment resource objects
 
-Contains Azure role assignments (`microsoft.authorization/roleassignments`) whose scope matches any discovered resource or resource group. Each object has `id`, `name`, `type`, and `properties` (which includes `scope`, `roleDefinitionId`, `principalId`, etc.).
+Contains Azure role assignments (`microsoft.authorization/roleassignments`) whose scope matches any discovered resource or resource group. Each object has `id`, `name`, `type`, and `properties` (which includes `scope`, `roleDefinitionId`, `principalId`, and related metadata). The RBAC stage now enriches saved rows with `roleDefinitionName` when it can resolve the referenced role definition. When `resolvePrincipalNames: true`, rows may also include `principalDisplayName`, `principalResolutionSource`, and `principalResolutionStatus`. Canonical IDs such as `roleDefinitionId` and `principalId` are always preserved even when human-readable names are resolved.
 
 ### `graph.json`
 
