@@ -10,6 +10,7 @@ from .discover import run_expand, run_policy, run_rbac, run_seed
 from .docs import generate_docs
 from .drawio import generate_drawio
 from .graph import build_graph
+from .insights import generate_vm_details_csv, run_advisor, run_quota
 from .master_report import generate_master_report
 from .migration_plan import generate_migration_plan
 from .split import build_split_preview, run_split
@@ -98,6 +99,7 @@ def _wizard_config_data(config_path: Path, input_fn: PromptFn, echo: EchoFn) -> 
             ("r", "specific resource groups"),
             ("t", "exact tag filters"),
             ("k", "tag-key presence"),
+            ("m", "management groups"),
             ("s", "all listed subscriptions"),
         ],
         input_fn,
@@ -107,6 +109,7 @@ def _wizard_config_data(config_path: Path, input_fn: PromptFn, echo: EchoFn) -> 
     seed_rgs: List[str] = []
     seed_tags: Dict[str, str] = {}
     seed_tag_keys: List[str] = []
+    seed_management_groups: List[str] = []
     seed_all_subs = False
 
     if scope == "r":
@@ -115,12 +118,17 @@ def _wizard_config_data(config_path: Path, input_fn: PromptFn, echo: EchoFn) -> 
         seed_tags = _split_tags(_prompt_text("Tag filters key=value (comma-separated)", input_fn))
     elif scope == "k":
         seed_tag_keys = _split_csv(_prompt_text("Tag keys to require (comma-separated)", input_fn))
+    elif scope == "m":
+        seed_management_groups = _split_csv(_prompt_text("Management groups (comma-separated)", input_fn))
     else:
         seed_all_subs = True
 
     include_rbac = _prompt_yes_no("Collect RBAC assignments", input_fn, default=intent in {"m", "f"})
     include_policy = _prompt_yes_no("Collect Azure Policy state", input_fn, default=intent in {"m", "f"})
     enable_telemetry = _prompt_yes_no("Enable telemetry enrichment", input_fn, default=intent in {"m", "f"})
+    include_advisor = _prompt_yes_no("Collect Azure Advisor recommendations", input_fn, default=intent in {"m", "f"})
+    include_quota = _prompt_yes_no("Collect regional quota snapshots", input_fn, default=intent in {"m", "f"})
+    include_vm_details = _prompt_yes_no("Generate VM details CSV", input_fn, default=intent in {"m", "f"})
     telemetry_days = 7
     if enable_telemetry:
         telemetry_days = int(_prompt_text("Telemetry lookback days", input_fn, default="7"))
@@ -185,6 +193,9 @@ def _wizard_config_data(config_path: Path, input_fn: PromptFn, echo: EchoFn) -> 
         "outputDir": output_dir,
         "includeRbac": include_rbac,
         "includePolicy": include_policy,
+        "includeAdvisor": include_advisor,
+        "includeQuota": include_quota,
+        "includeVmDetails": include_vm_details,
         "enableTelemetry": enable_telemetry,
         "telemetryLookbackDays": telemetry_days,
         "layout": "SUB>REGION>RG>NET",
@@ -206,6 +217,8 @@ def _wizard_config_data(config_path: Path, input_fn: PromptFn, echo: EchoFn) -> 
         config_data["seedTags"] = seed_tags
     if seed_tag_keys:
         config_data["seedTagKeys"] = seed_tag_keys
+    if seed_management_groups:
+        config_data["seedManagementGroups"] = seed_management_groups
     if seed_all_subs:
         config_data["seedEntireSubscriptions"] = True
 
@@ -245,7 +258,12 @@ def _prompt_pack(config_data: Dict[str, object], actions: List[str]) -> List[str
     if config_data.get("migrationPlan", {}).get("enabled"):
         outputs.append("migration-plan/")
 
-    seed_scope = "listed subscriptions" if config_data.get("seedEntireSubscriptions") else "configured RG/tag seed scope"
+    if config_data.get("seedEntireSubscriptions"):
+        seed_scope = "listed subscriptions"
+    elif config_data.get("seedManagementGroups"):
+        seed_scope = "management groups: " + ", ".join(config_data.get("seedManagementGroups", []))
+    else:
+        seed_scope = "configured RG/tag seed scope"
     prompts = [
         "Use the generated config to explain the current Azure deployment, separating known facts, inferred dependencies, and blind spots.",
         "Review the generated migration-plan outputs and identify missing assumptions, hidden dependencies, governance gaps, and rollback risks.",
@@ -299,6 +317,12 @@ def _default_execute(action: str, config_path: str) -> None:
         if cfg.enableTelemetry:
             run_telemetry_enrichment(cfg)
         generate_drawio(cfg)
+        if cfg.includeAdvisor:
+            run_advisor(cfg)
+        if cfg.includeQuota:
+            run_quota(cfg)
+        if cfg.includeVmDetails:
+            generate_vm_details_csv(cfg)
         generate_docs(cfg)
         if cfg.applicationSplit.enabled:
             run_split(cfg)

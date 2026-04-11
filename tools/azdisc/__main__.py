@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from dataclasses import dataclass
+from typing import Callable, Iterable
 
 from .config import load_config
 from .discover import prepare_related_extended_inventory, run_expand, run_policy, run_rbac, run_related_candidates, run_seed
@@ -11,7 +13,8 @@ from .docs import generate_docs
 from .drawio import generate_drawio
 from .graph import build_graph
 from .htmlmap import generate_html
-from .inventory import generate_csv, generate_policy_csv, generate_policy_yaml, generate_yaml
+from .insights import generate_vm_details_csv, run_advisor, run_quota
+from .inventory import generate_csv, generate_inventory_by_type_csv, generate_policy_csv, generate_policy_yaml, generate_yaml
 from .master_report import generate_master_report
 from .review import run_review_related
 from .migration_plan import generate_migration_plan
@@ -20,13 +23,27 @@ from .telemetry import run_telemetry_enrichment
 from .test_all import run_render_all, run_report_all, run_test_all
 from .util import setup_logging
 from .wizard import run_wizard
+from .vm_report import generate_vm_report_packs
 
 log = logging.getLogger(__name__)
 
 
-def cmd_master_report(args) -> None:
-    cfg = load_config(args.config)
-    generate_master_report(cfg)
+@dataclass(frozen=True)
+class CommandSpec:
+    name: str
+    handler: Callable[[argparse.Namespace], None]
+    help_text: str
+    needs_config: bool = True
+    supports_software_inventory: bool = False
+    supports_html_options: bool = False
+
+
+def _run_with_config(action: Callable[..., None], /, **extra_kwargs) -> Callable[[argparse.Namespace], None]:
+    def _handler(args: argparse.Namespace) -> None:
+        cfg = load_config(args.config)
+        action(cfg, **extra_kwargs)
+
+    return _handler
 
 
 def cmd_split_preview(args) -> None:
@@ -34,29 +51,13 @@ def cmd_split_preview(args) -> None:
     print(build_split_preview(cfg), end="")
 
 
-def cmd_split(args) -> None:
-    cfg = load_config(args.config)
-    run_split(cfg)
-
-
-def cmd_seed(args) -> None:
-    cfg = load_config(args.config)
-    run_seed(cfg)
-
-
 def cmd_expand(args) -> None:
     cfg = load_config(args.config)
-    run_expand(cfg)
-
-
-def cmd_related_candidates(args) -> None:
-    cfg = load_config(args.config)
-    run_related_candidates(cfg)
-
-
-def cmd_review_related(args) -> None:
-    cfg = load_config(args.config)
-    run_review_related(cfg)
+    run_expand(
+        cfg,
+        software_inventory_workspace=args.software_inventory_csv,
+        software_inventory_days=args.software_inventory_days,
+    )
 
 
 def cmd_related_extend(args) -> None:
@@ -74,78 +75,13 @@ def cmd_related_extend(args) -> None:
     log.info("Extended related-resource pack complete for app=%s at %s", extended_cfg.app, extended_cfg.outputDir)
 
 
-def cmd_rbac(args) -> None:
-    cfg = load_config(args.config)
-    run_rbac(cfg)
-
-
-def cmd_policy(args) -> None:
-    cfg = load_config(args.config)
-    run_policy(cfg)
-
-
-def cmd_graph(args) -> None:
-    cfg = load_config(args.config)
-    build_graph(cfg)
-
-
-def cmd_drawio(args) -> None:
-    cfg = load_config(args.config)
-    generate_drawio(cfg)
-
-
 def cmd_html(args) -> None:
     cfg = load_config(args.config)
-    generate_html(cfg, artifact=args.artifact)
-
-
-def cmd_docs(args) -> None:
-    cfg = load_config(args.config)
-    generate_docs(cfg)
+    generate_html(cfg, artifact=args.artifact, view=args.view)
 
 
 def cmd_test_all(args) -> None:
     run_test_all(args.output)
-
-
-def cmd_render_all(args) -> None:
-    cfg = load_config(args.config)
-    run_render_all(cfg)
-
-
-def cmd_report_all(args) -> None:
-    cfg = load_config(args.config)
-    run_report_all(cfg)
-
-
-def cmd_inventory_csv(args) -> None:
-    cfg = load_config(args.config)
-    generate_csv(cfg)
-
-
-def cmd_inventory_yaml(args) -> None:
-    cfg = load_config(args.config)
-    generate_yaml(cfg)
-
-
-def cmd_policy_csv(args) -> None:
-    cfg = load_config(args.config)
-    generate_policy_csv(cfg)
-
-
-def cmd_policy_yaml(args) -> None:
-    cfg = load_config(args.config)
-    generate_policy_yaml(cfg)
-
-
-def cmd_telemetry(args) -> None:
-    cfg = load_config(args.config)
-    run_telemetry_enrichment(cfg)
-
-
-def cmd_migration_plan(args) -> None:
-    cfg = load_config(args.config)
-    generate_migration_plan(cfg)
 
 
 def cmd_wizard(args) -> None:
@@ -155,13 +91,24 @@ def cmd_wizard(args) -> None:
 def cmd_run(args) -> None:
     cfg = load_config(args.config)
     run_seed(cfg)
-    run_expand(cfg)
+    run_expand(
+        cfg,
+        software_inventory_workspace=args.software_inventory_csv,
+        software_inventory_days=args.software_inventory_days,
+    )
     run_rbac(cfg)
     run_policy(cfg)
     build_graph(cfg)
     if cfg.enableTelemetry:
         run_telemetry_enrichment(cfg)
     generate_drawio(cfg)
+    if cfg.includeAdvisor:
+        run_advisor(cfg)
+    if cfg.includeQuota:
+        run_quota(cfg)
+    if cfg.includeVmDetails:
+        generate_vm_details_csv(cfg)
+    generate_vm_report_packs(cfg)
     generate_docs(cfg)
     if cfg.applicationSplit.enabled:
         run_split(cfg)
@@ -170,7 +117,41 @@ def cmd_run(args) -> None:
     log.info("Pipeline complete for app=%s", cfg.app)
 
 
-def main() -> None:
+def _iter_command_specs() -> Iterable[CommandSpec]:
+    return [
+        CommandSpec("run", cmd_run, "Run the full pipeline", supports_software_inventory=True),
+        CommandSpec("telemetry", _run_with_config(run_telemetry_enrichment), "Enrich graph with App Insights, Activity Log, and Flow Log telemetry"),
+        CommandSpec("seed", _run_with_config(run_seed), "Seed resources from RGs"),
+        CommandSpec("expand", cmd_expand, "Expand resources transitively", supports_software_inventory=True),
+        CommandSpec("related-candidates", _run_with_config(run_related_candidates), "Find possible related resources by configured name substrings"),
+        CommandSpec("review-related", _run_with_config(run_review_related), "Interactively review and curate related-resource candidates"),
+        CommandSpec("related-extend", cmd_related_extend, "Generate an extended pack from curated related resources in a dedicated directory"),
+        CommandSpec("rbac", _run_with_config(run_rbac), "Collect RBAC assignments for discovered resources"),
+        CommandSpec("policy", _run_with_config(run_policy), "Collect Azure Policy state for discovered resources"),
+        CommandSpec("graph", _run_with_config(build_graph), "Build graph model"),
+        CommandSpec("drawio", _run_with_config(generate_drawio), "Generate draw.io diagram"),
+        CommandSpec("html", cmd_html, "Generate offline HTML mindmap", supports_html_options=True),
+        CommandSpec("docs", _run_with_config(generate_docs), "Generate documentation"),
+        CommandSpec("split-preview", cmd_split_preview, "Preview application split candidates from seed/inventory artifacts"),
+        CommandSpec("split", _run_with_config(run_split), "Generate per-application outputs from an existing inventory/graph"),
+        CommandSpec("migration-plan", _run_with_config(generate_migration_plan), "Generate migration planning packs from existing discovery artifacts"),
+        CommandSpec("wizard", cmd_wizard, "Interactively create config, instructions, and optionally execute the workflow"),
+        CommandSpec("inventory-csv", _run_with_config(generate_csv), "Generate inventory.csv from inventory.json"),
+        CommandSpec("inventory-yaml", _run_with_config(generate_yaml), "Generate inventory.yaml from inventory.json"),
+        CommandSpec("inventory-by-type", _run_with_config(generate_inventory_by_type_csv), "Generate per-type inventory CSV exports"),
+        CommandSpec("policy-csv", _run_with_config(generate_policy_csv), "Generate policy.csv from policy.json"),
+        CommandSpec("policy-yaml", _run_with_config(generate_policy_yaml), "Generate policy.yaml from policy.json"),
+        CommandSpec("advisor", _run_with_config(run_advisor), "Collect Azure Advisor recommendations for discovered resources"),
+        CommandSpec("quota", _run_with_config(run_quota), "Collect regional compute/network quota snapshots"),
+        CommandSpec("vm-details", _run_with_config(generate_vm_details_csv), "Generate vm_details.csv from inventory.json"),
+        CommandSpec("vm-report", _run_with_config(generate_vm_report_packs), "Generate focused per-VM report packs from existing artifacts"),
+        CommandSpec("render-all", _run_with_config(run_render_all), "Generate all layout x mode variants from an existing graph"),
+        CommandSpec("report-all", _run_with_config(run_report_all), "Generate a Markdown report of all layout x mode x spacing variants"),
+        CommandSpec("master-report", _run_with_config(generate_master_report), "Generate a consolidated master architecture report"),
+    ]
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python3 -m tools.azdisc",
         description="Azure Resource Graph -> draw.io diagram tool",
@@ -178,37 +159,26 @@ def main() -> None:
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    for name, func, help_text in [
-        ("run", cmd_run, "Run the full pipeline"),
-        ("telemetry", cmd_telemetry, "Enrich graph with App Insights, Activity Log, and Flow Log telemetry"),
-        ("seed", cmd_seed, "Seed resources from RGs"),
-        ("expand", cmd_expand, "Expand resources transitively"),
-        ("related-candidates", cmd_related_candidates, "Find possible related resources by configured name substrings"),
-        ("review-related", cmd_review_related, "Interactively review and curate related-resource candidates"),
-        ("related-extend", cmd_related_extend, "Generate an extended pack from curated related resources in a dedicated directory"),
-        ("rbac", cmd_rbac, "Collect RBAC assignments for discovered resources"),
-        ("policy", cmd_policy, "Collect Azure Policy state for discovered resources"),
-        ("graph", cmd_graph, "Build graph model"),
-        ("drawio", cmd_drawio, "Generate draw.io diagram"),
-        ("html", cmd_html, "Generate offline HTML mindmap"),
-        ("docs", cmd_docs, "Generate documentation"),
-        ("split-preview", cmd_split_preview, "Preview application split candidates from seed/inventory artifacts"),
-        ("split", cmd_split, "Generate per-application outputs from an existing inventory/graph"),
-        ("migration-plan", cmd_migration_plan, "Generate migration planning packs from existing discovery artifacts"),
-        ("wizard", cmd_wizard, "Interactively create config, instructions, and optionally execute the workflow"),
-        ("inventory-csv", cmd_inventory_csv, "Generate inventory.csv from inventory.json"),
-        ("inventory-yaml", cmd_inventory_yaml, "Generate inventory.yaml from inventory.json"),
-        ("policy-csv", cmd_policy_csv, "Generate policy.csv from policy.json"),
-        ("policy-yaml", cmd_policy_yaml, "Generate policy.yaml from policy.json"),
-        ("render-all", cmd_render_all, "Generate all layout x mode variants from an existing graph"),
-        ("report-all", cmd_report_all, "Generate a Markdown report of all layout x mode x spacing variants"),
-        ("master-report", cmd_master_report, "Generate a consolidated master architecture report"),
-    ]:
-        p = sub.add_parser(name, help=help_text)
-        p.add_argument("config", help="Path to config.json")
-        if name == "html":
+    for spec in _iter_command_specs():
+        p = sub.add_parser(spec.name, help=spec.help_text)
+        if spec.needs_config:
+            p.add_argument("config", help="Path to config.json")
+        if spec.supports_software_inventory:
+            p.add_argument(
+                "--software-inventory-csv",
+                metavar="WORKSPACE",
+                help="Log Analytics workspace ID/name to query Change Tracking and Inventory software data and write software_inventory.csv",
+            )
+            p.add_argument(
+                "--software-inventory-days",
+                type=int,
+                default=30,
+                help="Lookback window in days for software inventory queries (default: 30)",
+            )
+        if spec.supports_html_options:
             p.add_argument("--artifact", choices=["graph", "related-candidates", "related-promoted", "rbac", "policy"], default="graph", help="Artifact to render as HTML (default: graph)")
-        p.set_defaults(func=func)
+            p.add_argument("--view", choices=["topology", "organization", "resources"], default="topology", help="Graph view mode when artifact=graph (default: topology)")
+        p.set_defaults(func=spec.handler)
 
     p_test_all = sub.add_parser("test-all", help="Generate all layout x mode combinations from fixtures")
     p_test_all.add_argument(
@@ -217,6 +187,11 @@ def main() -> None:
     )
     p_test_all.set_defaults(func=cmd_test_all)
 
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
     setup_logging(args.verbose)
     try:

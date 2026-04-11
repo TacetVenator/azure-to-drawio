@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Set, Tuple
 
 from .config import Config
 from .governance import normalize_compliance_state, simplify_rbac_rows, summarize_policy_rows, summarize_resource_access
+from .inventory import generate_inventory_by_type_csv
 from .util import load_json_file, normalize_id
 
 log = logging.getLogger(__name__)
@@ -79,11 +80,17 @@ def generate_docs(cfg: Config) -> None:
     _write_edges(cfg, nodes, edges, unresolved)
     _write_routing(cfg, nodes, edges)
     _write_migration(cfg, nodes, edges, unresolved, inventory, rbac_present)
+    _write_organization(cfg, inventory, nodes)
+    _write_resource_types(cfg, inventory)
+    _write_resource_groups(cfg, inventory, edges, nodes)
+    if inventory:
+        generate_inventory_by_type_csv(cfg)
+    _write_index(cfg)
     _write_policy_summary(cfg, nodes, policy_rows, policy_path.exists())
     _write_policy_by_resource(cfg, nodes, policy_rows, policy_path.exists())
     _write_policy_by_policy(cfg, nodes, policy_rows, policy_path.exists())
     _write_rbac_summary(cfg, nodes, rbac_rows, rbac_path.exists())
-    log.info("Wrote catalog.md, edges.md, routing.md, migration.md, policy_summary.md, policy_by_resource.md, policy_by_policy.md, rbac_summary.md")
+    log.info("Wrote catalog.md, edges.md, routing.md, migration.md, organization.md, resource_types.md, resource_groups.md, index.md, policy_summary.md, policy_by_resource.md, policy_by_policy.md, rbac_summary.md")
 
 
 def _write_catalog(cfg: Config, nodes: List[Dict]) -> None:
@@ -1225,3 +1232,137 @@ def _write_rbac_summary(cfg: Config, nodes: List[Dict], rbac_rows: List[Dict], a
         lines.append("")
 
     cfg.out("rbac_summary.md").write_text("\n".join(lines) + "\n")
+
+
+def _write_organization(cfg: Config, inventory: List[Dict], nodes: List[Dict]) -> None:
+    subs: Dict[str, Dict[str, Any]] = {}
+    for resource in inventory:
+        sub = str(resource.get("subscriptionId") or "unknown")
+        rg = str(resource.get("resourceGroup") or "unknown")
+        location = str(resource.get("location") or "")
+        resource_type = str(resource.get("type") or "unknown").lower()
+        entry = subs.setdefault(sub, {"resourceCount": 0, "resourceGroups": defaultdict(int), "regions": Counter(), "types": Counter()})
+        entry["resourceCount"] += 1
+        entry["resourceGroups"][rg] += 1
+        if location:
+            entry["regions"][location] += 1
+        entry["types"][resource_type] += 1
+
+    lines = [f"# Organization Summary - {cfg.app}", ""]
+    if cfg.seedManagementGroups:
+        lines.append(f"- Management groups: {', '.join(cfg.seedManagementGroups)}")
+    lines.append(f"- Subscriptions in scope: {len(subs)}")
+    lines.append(f"- Graph nodes: {len(nodes)}")
+    lines.append("")
+    for sub_id, summary in sorted(subs.items()):
+        lines += [
+            f"## Subscription `{sub_id}`",
+            "",
+            f"- Resources: {summary['resourceCount']}",
+            f"- Resource groups: {len(summary['resourceGroups'])}",
+            f"- Regions: {', '.join(sorted(summary['regions'])) or 'n/a'}",
+            "",
+            "### Resource Groups",
+            "",
+        ]
+        for rg, count in sorted(summary["resourceGroups"].items()):
+            lines.append(f"- {rg}: {count}")
+        lines += ["", "### Top Resource Types", ""]
+        for resource_type, count in summary["types"].most_common(10):
+            lines.append(f"- {resource_type}: {count}")
+        lines.append("")
+    cfg.out("organization.md").write_text("\n".join(lines) + "\n")
+
+
+def _write_resource_types(cfg: Config, inventory: List[Dict]) -> None:
+    grouped: Dict[str, List[Dict]] = defaultdict(list)
+    for resource in inventory:
+        grouped[str(resource.get("type") or "unknown").lower()].append(resource)
+
+    lines = [f"# Resource Types - {cfg.app}", ""]
+    for resource_type in sorted(grouped):
+        rows = sorted(grouped[resource_type], key=lambda row: (row.get("subscriptionId", ""), row.get("resourceGroup", ""), row.get("name", "")))
+        lines += [
+            f"## `{resource_type}`",
+            "",
+            f"- Count: {len(rows)}",
+            f"- Resource groups: {len({row.get('resourceGroup', '') for row in rows if row.get('resourceGroup')})}",
+            f"- Regions: {', '.join(sorted({row.get('location', '') for row in rows if row.get('location')})) or 'n/a'}",
+            "",
+            "| name | resource group | subscription | location |",
+            "|------|----------------|--------------|----------|",
+        ]
+        for row in rows[:50]:
+            lines.append(f"| {row.get('name', '')} | {row.get('resourceGroup', '')} | {row.get('subscriptionId', '')} | {row.get('location', '')} |")
+        if len(rows) > 50:
+            lines.append(f"| ... | ... | ... | truncated after 50 of {len(rows)} |")
+        lines.append("")
+    cfg.out("resource_types.md").write_text("\n".join(lines) + "\n")
+
+
+def _write_resource_groups(cfg: Config, inventory: List[Dict], edges: List[Dict], nodes: List[Dict]) -> None:
+    grouped: Dict[tuple[str, str], List[Dict]] = defaultdict(list)
+    id_to_node = {node["id"]: node for node in nodes}
+    shared_targets: Dict[tuple[str, str], Set[str]] = defaultdict(set)
+    for edge in edges:
+        target = id_to_node.get(edge.get("target"))
+        if target and target.get("resourceGroup"):
+            shared_targets[(target.get("subscriptionId", ""), target.get("resourceGroup", ""))].add(target.get("name") or target.get("id"))
+    for resource in inventory:
+        grouped[(str(resource.get("subscriptionId") or ""), str(resource.get("resourceGroup") or "unknown"))].append(resource)
+
+    lines = [f"# Resource Groups - {cfg.app}", ""]
+    for key in sorted(grouped):
+        subscription_id, resource_group = key
+        rows = grouped[key]
+        lines += [
+            f"## `{resource_group}` ({subscription_id or 'unknown-subscription'})",
+            "",
+            f"- Resources: {len(rows)}",
+            f"- Regions: {', '.join(sorted({row.get('location', '') for row in rows if row.get('location')})) or 'n/a'}",
+            f"- Types: {len({str(row.get('type') or '').lower() for row in rows})}",
+            "",
+        ]
+        targets = sorted(shared_targets.get(key, set()))
+        if targets:
+            lines.append("### Shared Dependency Candidates")
+            lines.append("")
+            for target_name in targets[:20]:
+                lines.append(f"- {target_name}")
+            lines.append("")
+        lines.append("### Resources")
+        lines.append("")
+        for row in sorted(rows, key=lambda row: (str(row.get("type") or "").lower(), row.get("name", "")))[:50]:
+            lines.append(f"- {row.get('name', '')} ({str(row.get('type') or '').lower()})")
+        if len(rows) > 50:
+            lines.append(f"- ... truncated after 50 of {len(rows)} resources")
+        lines.append("")
+    cfg.out("resource_groups.md").write_text("\n".join(lines) + "\n")
+
+
+def _write_index(cfg: Config) -> None:
+    artifacts = [
+        ("index.md", "Index"),
+        ("organization.md", "Organization summary"),
+        ("resource_groups.md", "Resource-group review"),
+        ("resource_types.md", "Resource-type review"),
+        ("catalog.md", "Catalog"),
+        ("edges.md", "Edges"),
+        ("routing.md", "Routing"),
+        ("migration.md", "Migration"),
+        ("rbac_summary.md", "RBAC summary"),
+        ("policy_summary.md", "Policy summary"),
+        ("advisor_summary.md", "Advisor summary"),
+        ("quota_summary.md", "Quota summary"),
+        ("vm_details.csv", "VM details CSV"),
+        ("vms/index.md", "VM report packs"),
+        ("master_report.md", "Master report"),
+    ]
+    lines = [f"# Report Index - {cfg.app}", "", "## Review Order", ""]
+    for filename, label in artifacts:
+        if cfg.out(filename).exists():
+            lines.append(f"- [{label}]({filename})")
+    manifest = cfg.out("inventory_by_type/manifest.json")
+    if manifest.exists():
+        lines += ["", "## Inventory by Type", "", "- [inventory_by_type/manifest.json](inventory_by_type/manifest.json)"]
+    cfg.out("index.md").write_text("\n".join(lines) + "\n")

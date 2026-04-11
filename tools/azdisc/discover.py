@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import json
 import logging
-import subprocess
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set
 
-from .arg import query, query_by_ids
+from .arg import query, query_by_ids, resolve_subscriptions
+from .azcli import run_az_json
 from .config import Config
-from .util import extract_arm_ids, load_json_file, normalize_id, parse_json_text
+from .inventory import generate_software_inventory_csv
+from .util import extract_arm_ids, load_json_file, normalize_id
 
 log = logging.getLogger(__name__)
 
@@ -32,21 +33,6 @@ def _rg_filter(rgs: List[str]) -> str:
     return f"resources | where resourceGroup in~ ({quoted}) | {_RESOURCE_PROJECT}"
 
 
-
-
-def _safe_json_output(args: List[str]) -> Dict[str, Any]:
-    result = subprocess.run(["az"] + args, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or f"az {' '.join(args)} failed with rc={result.returncode}")
-    if not result.stdout.strip():
-        raise RuntimeError(f"az {' '.join(args)} returned empty stdout")
-    return parse_json_text(
-        result.stdout,
-        source="az " + " ".join(args),
-        context="Azure CLI JSON output",
-        expected_type=dict,
-        advice="Re-run the command with --debug or verify the signed-in identity has directory read permissions.",
-    )
 
 
 def _role_definition_lookup(subscriptions: List[str]) -> Dict[str, str]:
@@ -86,7 +72,7 @@ def _resolve_principal_name(principal_id: str, principal_type: str) -> Optional[
 
     for command in commands:
         try:
-            data = _safe_json_output(command)
+            data = run_az_json(command, expected_type=dict, advice="Re-run the command with --debug or verify the signed-in identity has directory read permissions.")
         except RuntimeError:
             continue
         for key in ("displayName", "userPrincipalName", "appDisplayName", "mailNickname"):
@@ -97,7 +83,7 @@ def _resolve_principal_name(principal_id: str, principal_type: str) -> Optional[
 
 
 def _enrich_rbac_rows(rows: List[Dict[str, Any]], cfg: Config) -> List[Dict[str, Any]]:
-    role_lookup = _role_definition_lookup(cfg.subscriptions)
+    role_lookup = _role_definition_lookup(resolve_subscriptions(cfg.subscriptions, cfg.seedManagementGroups))
     principal_cache: Dict[str, Optional[str]] = {}
     enriched: List[Dict[str, Any]] = []
     for row in rows:
@@ -147,8 +133,23 @@ def _enrich_rbac_rows(rows: List[Dict[str, Any]], cfg: Config) -> List[Dict[str,
         enriched.append(item)
     return enriched
 
+
+
+def _query_with_cfg(kusto: str, cfg: Config) -> List[Dict[str, Any]]:
+    try:
+        return query(kusto, cfg.subscriptions, cfg.seedManagementGroups)
+    except TypeError:
+        return query(kusto, cfg.subscriptions)
+
+
+def _query_by_ids_with_cfg(ids: List[str], cfg: Config) -> List[Dict[str, Any]]:
+    try:
+        return query_by_ids(ids, cfg.subscriptions, cfg.seedManagementGroups)
+    except TypeError:
+        return query_by_ids(ids, cfg.subscriptions)
+
 def _seed_query(cfg: Config) -> str:
-    if cfg.seedEntireSubscriptions:
+    if cfg.seedEntireSubscriptions or (cfg.seedManagementGroups and not (cfg.seedResourceGroups or cfg.seedResourceIds or cfg.seedTags or cfg.seedTagKeys)):
         return (
             "resources "
             f"| {_RESOURCE_PROJECT}"
@@ -158,6 +159,9 @@ def _seed_query(cfg: Config) -> str:
     if cfg.seedResourceGroups:
         quoted = ", ".join(f"'{_kusto_quote(rg.lower())}'" for rg in cfg.seedResourceGroups)
         clauses.append(f"resourceGroup in~ ({quoted})")
+    if cfg.seedResourceIds:
+        quoted_ids = ", ".join(f"'{_kusto_quote(normalize_id(rid))}'" for rid in cfg.seedResourceIds)
+        clauses.append(f"id in~ ({quoted_ids})")
     for key, value in sorted(cfg.seedTags.items(), key=lambda item: item[0].lower()):
         clauses.append(
             f"tostring(tags['{_kusto_quote(key)}']) =~ '{_kusto_quote(value)}'"
@@ -178,11 +182,15 @@ def _seed_scope_summary(cfg: Config) -> str:
     parts: List[str] = []
     if cfg.seedResourceGroups:
         parts.append(f"RGs={cfg.seedResourceGroups}")
+    if cfg.seedResourceIds:
+        parts.append(f"resourceIds={cfg.seedResourceIds}")
     if cfg.seedTags:
         tag_parts = [f"{key}={value}" for key, value in sorted(cfg.seedTags.items(), key=lambda item: item[0].lower())]
         parts.append(f"tags={tag_parts}")
     if cfg.seedTagKeys:
         parts.append(f"tagKeys={cfg.seedTagKeys}")
+    if cfg.seedManagementGroups:
+        parts.append(f"managementGroups={cfg.seedManagementGroups}")
     if cfg.seedEntireSubscriptions:
         parts.append("scope=all-listed-subscriptions")
     return ", ".join(parts)
@@ -527,7 +535,14 @@ def write_related_review_report(
 
 def run_seed(cfg: Config) -> List[Dict]:
     log.info("Seeding resources from: %s", _seed_scope_summary(cfg))
-    rows = query(_seed_query(cfg), cfg.subscriptions)
+    rows = _query_with_cfg(_seed_query(cfg), cfg)
+    deduped: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        rid = normalize_id(row.get("id", ""))
+        if not rid:
+            continue
+        deduped[rid] = row
+    rows = [deduped[rid] for rid in sorted(deduped)]
     cfg.ensure_output_dir()
     out = cfg.out("seed.json")
     out.write_text(json.dumps(rows, indent=2, sort_keys=True))
@@ -567,7 +582,7 @@ def run_related_candidates(cfg: Config) -> List[Dict]:
     inventory = _load_inventory_artifact(inv_path, "Deep discovery base inventory")
     existing_ids = {normalize_id(r.get("id", "")) for r in inventory if r.get("id")}
 
-    rows = query(_deep_discovery_query(cfg), cfg.subscriptions)
+    rows = _query_with_cfg(_deep_discovery_query(cfg), cfg)
     deduped: Dict[str, Dict[str, Any]] = {}
     for row in rows:
         rid = normalize_id(row.get("id", ""))
@@ -735,7 +750,12 @@ def prepare_related_extended_inventory(cfg: Config) -> Config:
     return extended_cfg
 
 
-def run_expand(cfg: Config) -> None:
+def run_expand(
+    cfg: Config,
+    *,
+    software_inventory_workspace: Optional[str] = None,
+    software_inventory_days: int = 30,
+) -> None:
     seed_path = cfg.out("seed.json")
     if not seed_path.exists():
         raise FileNotFoundError(f"seed.json not found at {seed_path}. Run 'seed' first.")
@@ -783,7 +803,7 @@ def run_expand(cfg: Config) -> None:
         log.info("Iteration %d: fetching %d missing resources", iteration + 1, len(missing))
         fetched: List[Dict[str, Any]] = []
         for resource_id in sorted(missing):
-            fetched.extend(query_by_ids([resource_id], cfg.subscriptions))
+            fetched.extend(_query_by_ids_with_cfg([resource_id], cfg))
         fetched_ids = set()
         for resource in fetched:
             nid = normalize_id(resource["id"])
@@ -815,6 +835,13 @@ def run_expand(cfg: Config) -> None:
     cfg.out("inventory.json").write_text(json.dumps(inventory, indent=2, sort_keys=True))
     cfg.out("unresolved.json").write_text(json.dumps(sorted(unresolved), indent=2))
     _write_expand_reason_artifacts(cfg, seed_ids, collected, unresolved, reason_map, synthesized_ids)
+    if software_inventory_workspace:
+        generate_software_inventory_csv(
+            cfg,
+            software_inventory_workspace,
+            days=software_inventory_days,
+            inventory=inventory,
+        )
     log.info("Wrote inventory (%d resources) and unresolved (%d IDs)", len(inventory), len(unresolved))
 
 
@@ -836,7 +863,7 @@ def run_rbac(cfg: Config) -> None:
 
     # Query role assignments via authorizationresources
     kusto = "authorizationresources | where type =~ 'microsoft.authorization/roleassignments' | project id, name, type, properties"
-    rows = query(kusto, cfg.subscriptions)
+    rows = _query_with_cfg(kusto, cfg)
     # Filter to relevant scopes
     relevant = [r for r in rows if normalize_id(r.get("properties", {}).get("scope", "")) in scopes or
                 any(normalize_id(r.get("properties", {}).get("scope", "")).startswith(s) for s in scopes)]
@@ -929,7 +956,7 @@ def run_policy(cfg: Config) -> None:
     policy_rows: List[Dict[str, Any]] = []
     for start in range(0, len(resource_ids), _POLICY_BATCH_SIZE):
         batch = resource_ids[start:start + _POLICY_BATCH_SIZE]
-        policy_rows.extend(query(_policy_query_for_ids(batch), cfg.subscriptions))
+        policy_rows.extend(_query_with_cfg(_policy_query_for_ids(batch), cfg))
 
     relevant: List[Dict[str, Any]] = []
     resource_id_set = set(resource_ids)

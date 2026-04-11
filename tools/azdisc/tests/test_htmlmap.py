@@ -77,6 +77,33 @@ def test_generate_html_graph_mode_writes_mindmap(tmp_path):
     assert "const MAX_ZOOM = 8;" in content
 
 
+
+
+def test_build_html_view_model_supports_organization_and_resource_views(tmp_path):
+    _seed_output_files(tmp_path)
+    cfg = _make_config(tmp_path)
+    graph = build_graph(cfg)
+
+    org_view = build_html_view_model(graph, view="organization")
+    resource_view = build_html_view_model(graph, view="resources")
+
+    assert any(node["name"] == "Inventory by Type" for node in resource_view["nodes"])
+    assert any(node["type"] == "Resource Type" for node in org_view["nodes"])
+
+
+def test_generate_html_graph_alternate_views_write_named_outputs(tmp_path):
+    _seed_output_files(tmp_path)
+    cfg = _make_config(tmp_path)
+    build_graph(cfg)
+
+    org_output = generate_html(cfg, view="organization")
+    resource_output = generate_html(cfg, view="resources")
+
+    assert org_output == tmp_path / "organization.html"
+    assert resource_output == tmp_path / "resources.html"
+    assert "Azure organization mindmap" in org_output.read_text()
+    assert "Inventory by Type" in resource_output.read_text()
+
 def test_generate_html_related_candidate_modes(tmp_path):
     cfg = _make_config(tmp_path)
     cfg.ensure_deep_output_dir()

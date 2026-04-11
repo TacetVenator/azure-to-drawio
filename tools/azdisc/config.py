@@ -58,12 +58,17 @@ class Config:
     subscriptions: List[str]
     seedResourceGroups: List[str]
     outputDir: str
+    seedManagementGroups: List[str] = field(default_factory=list)
+    seedResourceIds: List[str] = field(default_factory=list)
     seedTags: Dict[str, str] = field(default_factory=dict)
     seedTagKeys: List[str] = field(default_factory=list)
     seedEntireSubscriptions: bool = False
     includeRbac: bool = False
     resolvePrincipalNames: bool = False
     includePolicy: bool = False
+    includeAdvisor: bool = False
+    includeQuota: bool = False
+    includeVmDetails: bool = False
     enableTelemetry: bool = False
     telemetryLookbackDays: int = 7
     layout: str = "SUB>REGION>RG>NET"
@@ -250,16 +255,18 @@ def load_config(path: str) -> Config:
         raise ValueError(f"Config missing required keys: {missing}")
 
     seed_rgs = _validate_string_list("seedResourceGroups", data.get("seedResourceGroups", []))
+    seed_resource_ids = _validate_string_list("seedResourceIds", data.get("seedResourceIds", []))
     seed_tags = _validate_seed_tags(data.get("seedTags", {}))
     seed_tag_keys = _validate_string_list("seedTagKeys", data.get("seedTagKeys", []))
+    seed_management_groups = _validate_string_list("seedManagementGroups", data.get("seedManagementGroups", []))
     seed_entire_subscriptions = data.get("seedEntireSubscriptions", False)
     if not isinstance(seed_entire_subscriptions, bool):
         raise ValueError(
             f"seedEntireSubscriptions must be a boolean, got {seed_entire_subscriptions!r}"
         )
-    if not seed_rgs and not seed_tags and not seed_tag_keys and not seed_entire_subscriptions:
+    if not seed_rgs and not seed_resource_ids and not seed_tags and not seed_tag_keys and not seed_entire_subscriptions and not seed_management_groups:
         raise ValueError(
-            "Config must include at least one of seedResourceGroups, seedTags, seedTagKeys, or seedEntireSubscriptions"
+            "Config must include at least one of seedResourceGroups, seedResourceIds, seedTags, seedTagKeys, or seedEntireSubscriptions (or seedManagementGroups)"
         )
 
     layout = data.get("layout", "SUB>REGION>RG>NET")
@@ -310,6 +317,18 @@ def load_config(path: str) -> Config:
     if not isinstance(include_policy, bool):
         raise ValueError(f"includePolicy must be a boolean, got {include_policy!r}")
 
+    include_advisor = data.get("includeAdvisor", False)
+    if not isinstance(include_advisor, bool):
+        raise ValueError(f"includeAdvisor must be a boolean, got {include_advisor!r}")
+
+    include_quota = data.get("includeQuota", False)
+    if not isinstance(include_quota, bool):
+        raise ValueError(f"includeQuota must be a boolean, got {include_quota!r}")
+
+    include_vm_details = data.get("includeVmDetails", False)
+    if not isinstance(include_vm_details, bool):
+        raise ValueError(f"includeVmDetails must be a boolean, got {include_vm_details!r}")
+
     lookback_days = data.get("telemetryLookbackDays", 7)
     if not isinstance(lookback_days, int) or lookback_days < 1:
         raise ValueError(f"telemetryLookbackDays must be a positive integer, got {lookback_days!r}")
@@ -321,14 +340,19 @@ def load_config(path: str) -> Config:
     cfg = Config(
         app=data["app"],
         subscriptions=data["subscriptions"],
+        seedManagementGroups=seed_management_groups,
         seedResourceGroups=seed_rgs,
         outputDir=data["outputDir"],
+        seedResourceIds=seed_resource_ids,
         seedTags=seed_tags,
         seedTagKeys=seed_tag_keys,
         seedEntireSubscriptions=seed_entire_subscriptions,
         includeRbac=include_rbac,
         resolvePrincipalNames=resolve_principal_names,
         includePolicy=include_policy,
+        includeAdvisor=include_advisor,
+        includeQuota=include_quota,
+        includeVmDetails=include_vm_details,
         enableTelemetry=enable_telemetry,
         telemetryLookbackDays=lookback_days,
         layout=layout,
@@ -346,16 +370,21 @@ def load_config(path: str) -> Config:
         migrationPlan=migration_plan,
     )
     log.info(
-        "Loaded config for app=%s, subs=%d, seedRGs=%d, seedTags=%d, seedTagKeys=%d, seedAllSubs=%s, includeRbac=%s, resolvePrincipalNames=%s, includePolicy=%s, deepDiscovery=%s, appSplit=%s, migrationPlan=%s",
+        "Loaded config for app=%s, subs=%d, seedMGs=%d, seedRGs=%d, seedResourceIds=%d, seedTags=%d, seedTagKeys=%d, seedAllSubs=%s, includeRbac=%s, resolvePrincipalNames=%s, includePolicy=%s, includeAdvisor=%s, includeQuota=%s, includeVmDetails=%s, deepDiscovery=%s, appSplit=%s, migrationPlan=%s",
         cfg.app,
         len(cfg.subscriptions),
+        len(cfg.seedManagementGroups),
         len(cfg.seedResourceGroups),
+        len(cfg.seedResourceIds),
         len(cfg.seedTags),
         len(cfg.seedTagKeys),
         cfg.seedEntireSubscriptions,
         cfg.includeRbac,
         cfg.resolvePrincipalNames,
         cfg.includePolicy,
+        cfg.includeAdvisor,
+        cfg.includeQuota,
+        cfg.includeVmDetails,
         cfg.deepDiscovery.enabled,
         cfg.applicationSplit.enabled,
         cfg.migrationPlan.enabled,
