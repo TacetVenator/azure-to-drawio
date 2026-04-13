@@ -59,13 +59,19 @@ python3 -m tools.azdisc [-v] <command> <config.json>
 
 #### `run` — Run the full pipeline
 
-Executes all pipeline stages in order: seed, expand, rbac, policy, graph, drawio, docs. When `applicationSplit.enabled` is `true`, `run` also generates per-application outputs after the root diagram and docs are written. When `migrationPlan.enabled` is `true`, `run` generates migration planning packs after any split outputs are available.
+Executes all pipeline stages in order: seed, expand, rbac, policy, graph, drawio, focused VM packs, docs. When virtual machines are present in the discovered inventory, `run` also generates focused per-VM packs under `vms/`. When `applicationSplit.enabled` is `true`, `run` also generates per-application outputs after the root diagram and docs are written. When `migrationPlan.enabled` is `true`, `run` generates migration planning packs after any split outputs are available.
 
 ```bash
 python3 -m tools.azdisc run app/myapp/config.json
 ```
 
 This is the most common way to use the tool. A single command produces the complete diagram and all documentation from scratch.
+
+To also export per-VM software inventory from Change Tracking and Inventory while discovery runs, pass a Log Analytics workspace identifier:
+
+```bash
+python3 -m tools.azdisc run app/myapp/config.json --software-inventory-csv <workspace-id-or-name>
+```
 
 #### `wizard` — Interactively create config, instructions, and outputs
 
@@ -154,9 +160,10 @@ Queries Azure Resource Graph for the configured seed scope and writes `seed.json
 python3 -m tools.azdisc seed app/myapp/config.json
 ```
 
-The tool supports four seed patterns. You must configure at least one of them:
+The tool supports five seed patterns. You must configure at least one of them:
 
 - `seedResourceGroups`: start from one or more specific resource groups
+- `seedResourceIds`: start from one or more exact ARM resource IDs such as a single VM
 - `seedTags`: start from exact tag/value matches such as `Application=SAP`
 - `seedTagKeys`: start from resources that merely have a tag key such as `Application`, regardless of value
 - `seedEntireSubscriptions`: start from all resources in the listed `subscriptions`
@@ -170,6 +177,21 @@ resources
 | where resourceGroup in~ ('rg-app-dev', 'rg-app-prod')
 | project id, name, type, location, subscriptionId, resourceGroup, tags, sku, kind, systemData, properties
 ```
+
+For exact resource-ID seeding, the query matches the normalized ARM IDs directly. This is the deterministic way to scope discovery and reporting to one VM inside a shared resource group:
+
+```json
+{
+  "app": "vm-web-01",
+  "subscriptions": ["<sub1>"],
+  "outputDir": "app/vm-web-01/out",
+  "seedResourceIds": [
+    "/subscriptions/<sub1>/resourceGroups/rg-app-prod/providers/Microsoft.Compute/virtualMachines/vm-web-01"
+  ]
+}
+```
+
+Use `seedResourceIds` when you need exact scoping for one VM or another specific resource and do not want to rely on RG or tag boundaries.
 
 For exact tag-based seeding, the query matches the configured tag/value pair exactly, case-insensitively:
 
@@ -218,7 +240,7 @@ Important distinction:
 
 A common tag-driven workflow is:
 
-1. Seed by `seedTagKeys` or a shared resource group.
+1. Seed by `seedTagKeys`, `seedResourceIds`, or a shared resource group.
 2. Run `expand` or `run` to build the full inventory.
 3. Run `split-preview` to inspect common tag values such as `Application`, `App`, `Workload`, or `Service`.
 4. Enable `applicationSplit` and run `split` to generate per-application diagrams and docs.
@@ -237,6 +259,14 @@ python3 -m tools.azdisc expand app/myapp/config.json
 This stage is what makes the tool discover resources across resource group boundaries. For example, if a NIC in `rg-app-prod` references a subnet in `rg-network-shared`, the expand stage will automatically fetch that subnet even though it was not in the seed list.
 
 IDs that match non-resource patterns (marketplace image references, location metadata, role/policy definitions) are automatically filtered out.
+
+To also emit `software_inventory.csv` for discovered VMs, query the Change Tracking and Inventory data in a Log Analytics workspace during expansion:
+
+```bash
+python3 -m tools.azdisc expand app/myapp/config.json --software-inventory-csv <workspace-id-or-name>
+```
+
+Use `--software-inventory-days <n>` to control the Log Analytics lookback window. The export matches software rows to discovered VMs by Azure resource ID when present, or by computer name as a fallback.
 
 **Requires:** `seed.json` in the output directory, Azure CLI authenticated.
 **Produces:** `inventory.json`, `unresolved.json`, `expand_reasons.json`, `expand_reasons.md`
@@ -441,6 +471,30 @@ python3 -m tools.azdisc inventory-yaml app/myapp/config.json
 **Requires:** `inventory.json` in the output directory.
 **Produces:** `inventory.yaml`
 
+#### `vm-details` — Export VM inventory details
+
+Reads `inventory.json` and writes `vm_details.csv` with one row per VM, including size, OS, image, disk counts, power state, and zone data when surfaced by Azure.
+
+```bash
+python3 -m tools.azdisc vm-details app/myapp/config.json
+```
+
+**Requires:** `inventory.json` in the output directory.
+**Produces:** `vm_details.csv`
+
+#### `vm-report` — Generate focused per-VM report packs
+
+Reads the existing root discovery artifacts and writes one focused pack per VM under `vms/<vm-slug>/`. Each pack contains a VM-scoped inventory, graph, draw.io diagram, markdown report, CSV export, and the normal supporting docs generated from that slice.
+
+```bash
+python3 -m tools.azdisc vm-report app/myapp/config.json
+```
+
+This is especially useful with `seedResourceIds` when you want a deterministic one-VM report and diagram containing the VM, NICs, disks, subnet, VNet, NSGs, ASGs, route tables, public IPs, and merged extensions.
+
+**Requires:** `inventory.json` and `graph.json` in the output directory.
+**Produces:** `vms/index.md` plus `vms/<vm-slug>/inventory.json`, `graph.json`, `diagram.drawio`, `vm_report.md`, `vm_report.csv`, `vm_details.csv`, and supporting docs
+
 #### `master-report` — Generate a consolidated architecture report
 
 Reads the current output folder and writes a single `master_report.md` that links inventory, topology, routing, migration, governance, and migration-planning artifacts. When policy and RBAC artifacts are present, it also includes snapshot counts and a per-resource access summary table.
@@ -552,6 +606,7 @@ The tool reads a JSON configuration file. An example is provided at `app/myapp/c
   "app": "myapp",
   "subscriptions": ["<sub1>", "<sub2>"],
   "seedResourceGroups": ["rg-app-dev", "rg-app-prod"],
+  "seedResourceIds": [],
   "outputDir": "app/myapp/out",
   "includeRbac": true,
   "resolvePrincipalNames": false,
@@ -599,6 +654,7 @@ The tool reads a JSON configuration file. An example is provided at `app/myapp/c
 | `app` | `string` | Yes | — | — | Application name. Used as the diagram tab label and report title. |
 | `subscriptions` | `string[]` | Yes | — | — | Azure subscription IDs passed to `az graph query --subscriptions`. |
 | `seedResourceGroups` | `string[]` | No | `[]` | list of non-empty strings | Resource groups used as the initial discovery seed. |
+| `seedResourceIds` | `string[]` | No | `[]` | list of non-empty strings | Exact ARM resource IDs used as additional seed criteria. Use this for deterministic single-resource or single-VM discovery. |
 | `seedTags` | `object` | No | `{}` | object of non-empty string pairs | Exact tag/value pairs used as additional seed criteria. A resource matches if any configured pair matches. |
 | `seedTagKeys` | `string[]` | No | `[]` | list of non-empty strings | Seed resources by tag-key presence, regardless of value. |
 | `seedEntireSubscriptions` | `bool` | No | `false` | `true`, `false` | Seeds all resources in the listed `subscriptions`. Use this for broad environment baselines when you want more than RG- or tag-scoped discovery. |
@@ -622,18 +678,19 @@ The tool reads a JSON configuration file. An example is provided at `app/myapp/c
 | `applicationSplit` | `object` | No | disabled | see below | Optional post-discovery slicing of inventory, graph, diagram, and reports into per-application outputs based on tags. |
 | `migrationPlan` | `object` | No | disabled | see below | Optional migration planning pack generation from existing discovery artifacts. |
 
-At least one of `seedResourceGroups`, `seedTags`, `seedTagKeys`, or `seedEntireSubscriptions` must be provided.
+At least one of `seedResourceGroups`, `seedResourceIds`, `seedTags`, `seedTagKeys`, or `seedEntireSubscriptions` must be provided.
 
 ### Choosing A Seed Strategy
 
 Use these rules of thumb:
 
 - Choose `seedResourceGroups` when the environment is already cleanly separated by resource group.
+- Choose `seedResourceIds` when you need deterministic one-resource or one-VM scoping inside a shared resource group.
 - Choose `seedTags` when you know the exact application or workload value to target, such as `Application=SAP`.
 - Choose `seedTagKeys` when you want to discover tagged workloads first and decide later which values to split by.
 - Choose `seedEntireSubscriptions` when you are building a broad baseline of a shared platform, landing zone, or poorly tagged estate.
 
-You can combine `seedResourceGroups`, `seedTags`, and `seedTagKeys`. The seed stage treats them as additive scope criteria. `seedEntireSubscriptions` is the broadest mode and is typically used on its own.
+You can combine `seedResourceGroups`, `seedResourceIds`, `seedTags`, and `seedTagKeys`. The seed stage treats them as additive scope criteria. `seedEntireSubscriptions` is the broadest mode and is typically used on its own.
 
 ## Deep Discovery
 

@@ -362,8 +362,13 @@ def compute_canvas_bounds(positions: Dict[str, Dict[str, float]], node_lookup: N
     return {"width": max_right + 140.0, "height": max_bottom + 140.0}
 
 
-def build_html_view_model(graph: Dict[str, Any]) -> ViewModel:
+def build_html_view_model(graph: Dict[str, Any], view: str = "topology") -> ViewModel:
     """Build the graph.json HTML view model."""
+    if view == "organization":
+        return _build_graph_organization_view(graph)
+    if view == "resources":
+        return _build_graph_resource_type_view(graph)
+
     nodes_by_id: NodeMap = {}
     order: List[str] = []
     overlay_edges: List[Dict[str, str]] = []
@@ -605,9 +610,10 @@ def _build_policy_view(rows: List[Dict[str, Any]]) -> ViewModel:
     return _build_tree_view(nodes_by_id, order, overlay_edges, "Azure Policy mindmap")
 
 
-def _artifact_spec(cfg: Config, artifact: str) -> Tuple[Path, str, type, Callable[[Any], ViewModel]]:
+def _artifact_spec(cfg: Config, artifact: str, view: str = "topology") -> Tuple[Path, str, type, Callable[[Any], ViewModel]]:
     if artifact == "graph":
-        return cfg.out("graph.json"), "mindmap.html", dict, build_html_view_model
+        output_name = {"topology": "mindmap.html", "organization": "organization.html", "resources": "resources.html"}[view]
+        return cfg.out("graph.json"), output_name, dict, lambda payload: build_html_view_model(payload, view=view)
     if artifact == "related-candidates":
         return cfg.deep_out(cfg.deepDiscovery.candidateFile), "related_candidates.html", list, lambda rows: _build_related_view(rows, "Related candidates mindmap")
     if artifact == "related-promoted":
@@ -1005,9 +1011,9 @@ def _html_document(data: Dict[str, Any], title: str) -> str:
     return doc.replace("__TITLE__", html.escape(title)).replace("__DATA__", _json_for_script(data))
 
 
-def generate_html(cfg: Config, artifact: str = "graph") -> Path:
+def generate_html(cfg: Config, artifact: str = "graph", view: str = "topology") -> Path:
     """Generate a standalone offline HTML mindmap from the selected artifact."""
-    artifact_path, output_name, expected_type, builder = _artifact_spec(cfg, artifact)
+    artifact_path, output_name, expected_type, builder = _artifact_spec(cfg, artifact, view=view)
     if not artifact_path.exists():
         raise FileNotFoundError(f"{artifact_path.name} not found at {artifact_path}.")
 
@@ -1025,3 +1031,68 @@ def generate_html(cfg: Config, artifact: str = "graph") -> Path:
     output_path.write_text(_html_document(view_model, full_title))
     log.info("Wrote offline HTML mindmap for artifact=%s: %s", artifact, output_path)
     return output_path
+
+
+def _build_graph_organization_view(graph: Dict[str, Any]) -> ViewModel:
+    nodes_by_id: NodeMap = {}
+    order: List[str] = []
+    overlay_edges: List[Dict[str, str]] = []
+
+    type_groups: Dict[str, str] = {}
+    for resource in sorted(graph.get("nodes") or [], key=lambda node: (node.get("subscriptionId", ""), node.get("resourceGroup", ""), node.get("type", ""), node.get("name", ""))):
+        sub_node_id = _ensure_subscription(nodes_by_id, order, (resource.get("subscriptionId") or "").strip(), label="External / Unresolved" if resource.get("isExternal") and not resource.get("subscriptionId") else None)
+        rg_value = (resource.get("resourceGroup") or "ungrouped").strip() or "ungrouped"
+        rg_node_id = _ensure_group(nodes_by_id, order, sub_node_id, _slug(rg_value), label=rg_value)
+        type_name = (resource.get("type") or "unknown").lower()
+        type_node_id = type_groups.get(f"{rg_node_id}::{type_name}")
+        if type_node_id is None:
+            type_node_id = f"type::{rg_node_id}::{_slug(type_name)}"
+            type_groups[f"{rg_node_id}::{type_name}"] = type_node_id
+            _add_node(nodes_by_id, order, _make_node(type_node_id, kind="resourceGroup", name=type_name, type_name="Resource Type", fill="#d8efe3", parent_id=rg_node_id, width=280, height=78))
+        _add_node(
+            nodes_by_id,
+            order,
+            _make_node(
+                resource["id"],
+                kind="resource",
+                name=resource.get("name") or resource.get("id", "").split("/")[-1] or "unnamed",
+                type_name=type_name,
+                fill=EXTERNAL_FILL if resource.get("isExternal") else RESOURCE_FILL,
+                parent_id=type_node_id,
+                attributes=resource.get("attributes") or [],
+            ),
+        )
+
+    for edge in sorted(graph.get("edges") or [], key=lambda item: (item.get("source", ""), item.get("target", ""), item.get("kind", ""))):
+        if edge.get("source") in nodes_by_id and edge.get("target") in nodes_by_id:
+            overlay_edges.append({"source": edge["source"], "target": edge["target"], "kind": edge.get("kind", "unknown"), "category": classify_edge_kind(edge.get("kind", "unknown"))})
+
+    return _build_tree_view(nodes_by_id, order, overlay_edges, "Azure organization mindmap")
+
+
+def _build_graph_resource_type_view(graph: Dict[str, Any]) -> ViewModel:
+    nodes_by_id: NodeMap = {}
+    order: List[str] = []
+    overlay_edges: List[Dict[str, str]] = []
+    root_id = _ensure_subscription(nodes_by_id, order, "inventory", label="Inventory by Type")
+    type_nodes: Dict[str, str] = {}
+
+    for resource in sorted(graph.get("nodes") or [], key=lambda node: (node.get("type", ""), node.get("subscriptionId", ""), node.get("resourceGroup", ""), node.get("name", ""))):
+        type_name = (resource.get("type") or "unknown").lower()
+        type_node_id = type_nodes.get(type_name)
+        if type_node_id is None:
+            type_node_id = f"type::{_slug(type_name)}"
+            type_nodes[type_name] = type_node_id
+            _add_node(nodes_by_id, order, _make_node(type_node_id, kind="resourceGroup", name=type_name, type_name="Resource Type", fill="#d8efe3", parent_id=root_id, width=300, height=78))
+        attributes = [
+            f"subscription: {resource.get('subscriptionId', '')}" if resource.get("subscriptionId") else "",
+            f"resource group: {resource.get('resourceGroup', '')}" if resource.get("resourceGroup") else "",
+            f"location: {resource.get('location', '')}" if resource.get("location") else "",
+        ]
+        _add_node(nodes_by_id, order, _make_node(resource["id"], kind="resource", name=resource.get("name") or resource.get("id", "").split("/")[-1] or "unnamed", type_name=type_name, fill=EXTERNAL_FILL if resource.get("isExternal") else RESOURCE_FILL, parent_id=type_node_id, attributes=attributes))
+
+    for edge in sorted(graph.get("edges") or [], key=lambda item: (item.get("source", ""), item.get("target", ""), item.get("kind", ""))):
+        if edge.get("source") in nodes_by_id and edge.get("target") in nodes_by_id:
+            overlay_edges.append({"source": edge["source"], "target": edge["target"], "kind": edge.get("kind", "unknown"), "category": classify_edge_kind(edge.get("kind", "unknown"))})
+
+    return _build_tree_view(nodes_by_id, order, overlay_edges, "Azure resource inventory mindmap")

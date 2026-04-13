@@ -1,4 +1,4 @@
-"""Utility helpers: logging setup, stable IDs, ARM ID parsing."""
+"""Utility helpers: logging setup, stable IDs, JSON parsing, ARM ID parsing."""
 from __future__ import annotations
 
 import hashlib
@@ -45,6 +45,20 @@ def stable_id(resource_id: str) -> str:
 def normalize_id(arm_id: str) -> str:
     """Lowercase and strip trailing slashes from an ARM resource ID."""
     return arm_id.lower().rstrip('/')
+
+
+def get_in(obj: Any, *keys: Any) -> Any:
+    """Safely traverse nested dict/list structures."""
+    for key in keys:
+        if isinstance(obj, dict):
+            obj = obj.get(key)
+        elif isinstance(obj, list) and isinstance(key, int):
+            obj = obj[key] if key < len(obj) else None
+        else:
+            return None
+        if obj is None:
+            return None
+    return obj
 
 
 def _is_resource_id(arm_id: str) -> bool:

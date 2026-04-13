@@ -8,25 +8,12 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .azcli import run_az_json
 from .config import Config
 from .governance import normalize_compliance_state
-from .util import load_json_file, normalize_id
+from .util import get_in, load_json_file, normalize_id
 
 log = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Shared helpers
-# ---------------------------------------------------------------------------
-
-def _safe_get(obj: Any, *keys) -> Any:
-    for k in keys:
-        if isinstance(obj, dict):
-            obj = obj.get(k)
-        else:
-            return None
-        if obj is None:
-            return None
-    return obj
 
 
 def _format_tags(tags: Any) -> str:
@@ -72,6 +59,11 @@ _CSV_FIELDS = [
     "ProvisioningState", "Tags", "CreatedDate", "CreatedBy", "SkuName",
 ]
 
+_SOFTWARE_INVENTORY_FIELDS = [
+    "VmName", "VmResourceId", "SubscriptionId", "ResourceGroup", "Location",
+    "Computer", "SoftwareName", "CurrentVersion", "Publisher", "TimeGenerated",
+]
+
 
 def generate_csv(cfg: Config) -> Path:
     """Read inventory.json and write inventory.csv to outputDir."""
@@ -88,14 +80,142 @@ def generate_csv(cfg: Config) -> Path:
                 "Location": r.get("location", ""),
                 "ResourceGroup": r.get("resourceGroup", ""),
                 "SubscriptionId": r.get("subscriptionId", ""),
-                "ProvisioningState": _safe_get(r, "properties", "provisioningState") or "",
+                "ProvisioningState": get_in(r, "properties", "provisioningState") or "",
                 "Tags": _format_tags(r.get("tags")),
-                "CreatedDate": _safe_get(r, "systemData", "createdAt") or "",
-                "CreatedBy": _safe_get(r, "systemData", "createdBy") or "",
-                "SkuName": _safe_get(r, "sku", "name") or "",
+                "CreatedDate": get_in(r, "systemData", "createdAt") or "",
+                "CreatedBy": get_in(r, "systemData", "createdBy") or "",
+                "SkuName": get_in(r, "sku", "name") or "",
             })
 
     log.info("Wrote inventory CSV (%d rows) to %s", len(inventory), out_path)
+    return out_path
+
+
+def _software_table_rows(data: Any) -> List[Dict[str, Any]]:
+    if isinstance(data, dict):
+        tables = data.get("tables")
+        if isinstance(tables, list) and tables:
+            table = tables[0]
+            columns = [str(col.get("name", "")) for col in table.get("columns", []) if isinstance(col, dict)]
+            rows = table.get("rows", [])
+            if isinstance(rows, list):
+                return [
+                    {columns[idx]: values[idx] if idx < len(values) else None for idx in range(len(columns))}
+                    for values in rows
+                    if isinstance(values, list)
+                ]
+        value = data.get("value")
+        if isinstance(value, list):
+            return [row for row in value if isinstance(row, dict)]
+    if isinstance(data, list):
+        return [row for row in data if isinstance(row, dict)]
+    raise RuntimeError("Unsupported Log Analytics query result shape.")
+
+
+def _vm_inventory_rows(inventory: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for item in inventory:
+        if normalize_id(item.get("type") or "") != "microsoft.compute/virtualmachines":
+            continue
+        vm_id = normalize_id(item.get("id") or "")
+        if not vm_id:
+            continue
+        name = str(item.get("name") or "")
+        rows.append({
+            "id": vm_id,
+            "name": name,
+            "name_lower": name.lower(),
+            "name_short_lower": name.split(".")[0].lower() if name else "",
+            "subscriptionId": item.get("subscriptionId", ""),
+            "resourceGroup": item.get("resourceGroup", ""),
+            "location": item.get("location", ""),
+        })
+    return rows
+
+
+def _match_software_row(vm_rows: List[Dict[str, Any]], row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    for key in ("AzureResourceId", "_ResourceId", "ResourceId", "resourceId"):
+        value = row.get(key)
+        if isinstance(value, str) and "/subscriptions/" in value.lower():
+            normalized = normalize_id(value)
+            for vm in vm_rows:
+                if vm["id"] == normalized:
+                    return vm
+
+    computer = str(row.get("Computer") or row.get("computer") or "").strip().lower()
+    if not computer:
+        return None
+    computer_short = computer.split(".")[0]
+    for vm in vm_rows:
+        if computer in {vm["name_lower"], vm["name_short_lower"]}:
+            return vm
+        if computer_short and computer_short in {vm["name_lower"], vm["name_short_lower"]}:
+            return vm
+    return None
+
+
+def generate_software_inventory_csv(
+    cfg: Config,
+    workspace: str,
+    *,
+    days: int = 30,
+    inventory: Optional[List[Dict[str, Any]]] = None,
+) -> Path:
+    """Query Change Tracking / Inventory software data and write software_inventory.csv."""
+    if days < 1:
+        raise ValueError(f"software inventory lookback days must be positive, got {days!r}")
+
+    if inventory is None:
+        inventory = _load_inventory(cfg)
+    vm_rows = _vm_inventory_rows(inventory)
+    out_path = cfg.out("software_inventory.csv")
+
+    with out_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=_SOFTWARE_INVENTORY_FIELDS)
+        writer.writeheader()
+
+        if not vm_rows:
+            log.info("No virtual machines found in inventory; wrote empty software inventory CSV to %s", out_path)
+            return out_path
+
+        query = "\n".join([
+            "ConfigurationData",
+            '| where ConfigDataType == "Software"',
+            "| summarize arg_max(TimeGenerated, *) by Computer, SoftwareName",
+        ])
+        data = run_az_json([
+            "monitor", "log-analytics", "query",
+            "--workspace", workspace,
+            "--analytics-query", query,
+            "--timespan", f"P{days}D",
+        ])
+        software_rows = _software_table_rows(data)
+
+        written = 0
+        for row in software_rows:
+            vm = _match_software_row(vm_rows, row)
+            if vm is None:
+                continue
+            writer.writerow({
+                "VmName": vm["name"],
+                "VmResourceId": vm["id"],
+                "SubscriptionId": vm["subscriptionId"],
+                "ResourceGroup": vm["resourceGroup"],
+                "Location": vm["location"],
+                "Computer": row.get("Computer") or row.get("computer") or "",
+                "SoftwareName": row.get("SoftwareName") or row.get("softwareName") or "",
+                "CurrentVersion": row.get("CurrentVersion") or row.get("currentVersion") or "",
+                "Publisher": row.get("Publisher") or row.get("publisher") or "",
+                "TimeGenerated": row.get("TimeGenerated") or row.get("timeGenerated") or "",
+            })
+            written += 1
+
+    log.info(
+        "Wrote software inventory CSV (%d rows across %d VMs) to %s",
+        written,
+        len(vm_rows),
+        out_path,
+    )
     return out_path
 
 
@@ -310,7 +430,7 @@ def _build_resource_entry(r: Dict) -> Dict:
         v = r.get(field)
         if v is not None:
             entry[field] = v
-    prov = _safe_get(r, "properties", "provisioningState")
+    prov = get_in(r, "properties", "provisioningState")
     if prov is not None:
         entry["provisioningState"] = prov
     tags = r.get("tags")
@@ -390,3 +510,65 @@ def generate_yaml(cfg: Config) -> Path:
     out_path.write_text("\n".join(header_lines) + "\n".join(buf) + "\n", encoding="utf-8")
     log.info("Wrote inventory YAML (%d resources, group=%s) to %s", len(inventory), group_by, out_path)
     return out_path
+
+
+def _slug(value: str) -> str:
+    lowered = str(value or '').lower()
+    chars = [ch if ch.isalnum() else '-' for ch in lowered]
+    slug = ''.join(chars).strip('-')
+    while '--' in slug:
+        slug = slug.replace('--', '-')
+    return slug or 'unknown'
+
+
+def _flatten_resource_for_csv(resource: Dict[str, Any]) -> Dict[str, Any]:
+    props = resource.get('properties') or {}
+    system_data = resource.get('systemData') or {}
+    sku = resource.get('sku') or {}
+    return {
+        'Name': resource.get('name', ''),
+        'Id': resource.get('id', ''),
+        'Type': resource.get('type', ''),
+        'Location': resource.get('location', ''),
+        'ResourceGroup': resource.get('resourceGroup', ''),
+        'SubscriptionId': resource.get('subscriptionId', ''),
+        'ProvisioningState': props.get('provisioningState', ''),
+        'Kind': resource.get('kind', ''),
+        'SkuName': sku.get('name', ''),
+        'SkuTier': sku.get('tier', ''),
+        'ManagedBy': resource.get('managedBy', ''),
+        'CreatedAt': system_data.get('createdAt', ''),
+        'CreatedBy': system_data.get('createdBy', ''),
+        'Tags': _format_tags(resource.get('tags')),
+    }
+
+
+def generate_inventory_by_type_csv(cfg: Config) -> Path:
+    inventory = _load_inventory(cfg)
+    root = cfg.out('inventory_by_type')
+    root.mkdir(parents=True, exist_ok=True)
+
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for resource in inventory:
+        key = str(resource.get('type') or 'unknown').lower()
+        grouped.setdefault(key, []).append(resource)
+
+    fieldnames = [
+        'Name', 'Id', 'Type', 'Location', 'ResourceGroup', 'SubscriptionId', 'ProvisioningState',
+        'Kind', 'SkuName', 'SkuTier', 'ManagedBy', 'CreatedAt', 'CreatedBy', 'Tags',
+    ]
+    manifest: Dict[str, Any] = {'exports': []}
+    for resource_type, rows in sorted(grouped.items()):
+        filename = f"{_slug(resource_type)}.csv"
+        path = root / filename
+        flattened = sorted((_flatten_resource_for_csv(row) for row in rows), key=lambda row: (row['SubscriptionId'], row['ResourceGroup'], row['Name']))
+        with path.open('w', newline='', encoding='utf-8') as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(flattened)
+        manifest['exports'].append({'type': resource_type, 'count': len(flattened), 'path': f"inventory_by_type/{filename}"})
+
+    manifest_path = root / 'manifest.json'
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
+    log.info('Wrote %d per-type inventory CSV exports to %s', len(grouped), root)
+    return manifest_path

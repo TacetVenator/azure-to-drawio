@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from .arg import query as arg_query, resolve_subscriptions
 from .config import Config
 from .util import load_json_file, normalize_id, parse_json_text
 
@@ -465,7 +466,7 @@ def _phase_flow_logs(cfg: Config, nodes: List[Dict]) -> List[Dict]:
             " | where type =~ 'microsoft.network/networkwatchers/flowlogs'"
             " | project id, name, properties"
         )
-        flow_logs = arg_query(flow_log_kql, cfg.subscriptions)
+        flow_logs = arg_query(flow_log_kql, cfg.subscriptions, cfg.seedManagementGroups)
     except Exception as exc:  # noqa: BLE001
         log.warning("Failed to query ARG for flow logs: %s", exc)
         return []
