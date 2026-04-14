@@ -30,4 +30,12 @@
     "applicationScope": "both",
     "includeCopilotPrompts": true
   }
+,
+  "localAnalysis": {
+    "enabled": false,
+    "provider": "ollama",
+    "model": "gemma3:latest",
+    "intents": ["*"],
+    "packScope": "both"
+  }
 }

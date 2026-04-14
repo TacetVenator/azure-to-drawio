@@ -20,6 +20,8 @@ VALID_APPLICATION_SPLIT_MODES = {"tag-value"}
 VALID_APPLICATION_SPLIT_OUTPUT_LAYOUTS = {"subdirs"}
 VALID_MIGRATION_PLAN_AUDIENCES = {"mixed", "technical", "executive"}
 VALID_MIGRATION_PLAN_APPLICATION_SCOPES = {"root", "split", "both"}
+VALID_LOCAL_ANALYSIS_PROVIDERS = {"ollama"}
+VALID_LOCAL_ANALYSIS_PACK_SCOPES = {"root", "split", "both"}
 APPLICATION_SPLIT_DEFAULT_TAG_KEYS = ["Application", "App", "Workload", "Service"]
 
 
@@ -50,6 +52,30 @@ class MigrationPlanConfig:
     audience: str = "mixed"
     applicationScope: str = "both"
     includeCopilotPrompts: bool = True
+
+
+@dataclass
+class LocalAnalysisConfig:
+    enabled: bool = False
+    provider: str = "ollama"
+    model: str = ""
+    outputDir: str = "local-analysis"
+    intents: List[str] = field(default_factory=lambda: ["*"])
+    packScope: str = "both"
+    includeArtifacts: List[str] = field(
+        default_factory=lambda: [
+            "migration-plan",
+            "graph",
+            "unresolved",
+            "policy",
+            "rbac",
+        ]
+    )
+    maxContextTokens: int = 24000
+    maxChunkTokens: int = 1200
+    topK: int = 8
+    temperature: float = 0.1
+    keepIntermediate: bool = True
 
 
 @dataclass
@@ -84,6 +110,7 @@ class Config:
     deepDiscovery: DeepDiscoveryConfig = field(default_factory=DeepDiscoveryConfig)
     applicationSplit: ApplicationSplitConfig = field(default_factory=ApplicationSplitConfig)
     migrationPlan: MigrationPlanConfig = field(default_factory=MigrationPlanConfig)
+    localAnalysis: LocalAnalysisConfig = field(default_factory=LocalAnalysisConfig)
 
     def out(self, filename: str) -> Path:
         return Path(self.outputDir) / filename
@@ -237,6 +264,90 @@ def _load_migration_plan(data: object) -> MigrationPlanConfig:
     )
 
 
+def _load_local_analysis(data: object) -> LocalAnalysisConfig:
+    if data is None:
+        return LocalAnalysisConfig()
+    if not isinstance(data, dict):
+        raise ValueError(f"localAnalysis must be an object, got {data!r}")
+
+    enabled = data.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ValueError(f"localAnalysis.enabled must be a boolean, got {enabled!r}")
+
+    provider = data.get("provider", "ollama")
+    if provider not in VALID_LOCAL_ANALYSIS_PROVIDERS:
+        raise ValueError(
+            f"Unsupported localAnalysis.provider: {provider!r}. Valid: {sorted(VALID_LOCAL_ANALYSIS_PROVIDERS)}"
+        )
+
+    model = data.get("model", "")
+    if not isinstance(model, str):
+        raise ValueError(f"localAnalysis.model must be a string, got {model!r}")
+    model = model.strip()
+
+    output_dir = _validate_nonempty_string("localAnalysis.outputDir", data.get("outputDir", "local-analysis"))
+    intents = _validate_string_list("localAnalysis.intents", data.get("intents", ["*"]))
+
+    pack_scope = data.get("packScope", "both")
+    if pack_scope not in VALID_LOCAL_ANALYSIS_PACK_SCOPES:
+        raise ValueError(
+            "Unsupported localAnalysis.packScope: "
+            f"{pack_scope!r}. Valid: {sorted(VALID_LOCAL_ANALYSIS_PACK_SCOPES)}"
+        )
+
+    include_artifacts = _validate_string_list(
+        "localAnalysis.includeArtifacts",
+        data.get("includeArtifacts", ["migration-plan", "graph", "unresolved", "policy", "rbac"]),
+    )
+
+    max_context_tokens = data.get("maxContextTokens", 24000)
+    if not isinstance(max_context_tokens, int) or max_context_tokens < 1000:
+        raise ValueError(
+            "localAnalysis.maxContextTokens must be an integer >= 1000, "
+            f"got {max_context_tokens!r}"
+        )
+
+    max_chunk_tokens = data.get("maxChunkTokens", 1200)
+    if not isinstance(max_chunk_tokens, int) or max_chunk_tokens < 100:
+        raise ValueError(
+            "localAnalysis.maxChunkTokens must be an integer >= 100, "
+            f"got {max_chunk_tokens!r}"
+        )
+
+    top_k = data.get("topK", 8)
+    if not isinstance(top_k, int) or top_k < 1:
+        raise ValueError(f"localAnalysis.topK must be a positive integer, got {top_k!r}")
+
+    temperature = data.get("temperature", 0.1)
+    if not isinstance(temperature, (int, float)):
+        raise ValueError(f"localAnalysis.temperature must be numeric, got {temperature!r}")
+
+    keep_intermediate = data.get("keepIntermediate", True)
+    if not isinstance(keep_intermediate, bool):
+        raise ValueError(
+            "localAnalysis.keepIntermediate must be a boolean, "
+            f"got {keep_intermediate!r}"
+        )
+
+    if enabled and not model:
+        raise ValueError("localAnalysis.model must be set when localAnalysis.enabled is true")
+
+    return LocalAnalysisConfig(
+        enabled=enabled,
+        provider=provider,
+        model=model,
+        outputDir=output_dir,
+        intents=intents,
+        packScope=pack_scope,
+        includeArtifacts=include_artifacts,
+        maxContextTokens=max_context_tokens,
+        maxChunkTokens=max_chunk_tokens,
+        topK=top_k,
+        temperature=float(temperature),
+        keepIntermediate=keep_intermediate,
+    )
+
+
 def load_config(path: str) -> Config:
     p = Path(path)
     if not p.exists():
@@ -336,6 +447,7 @@ def load_config(path: str) -> Config:
     deep_discovery = _load_deep_discovery(data.get("deepDiscovery"))
     application_split = _load_application_split(data.get("applicationSplit"))
     migration_plan = _load_migration_plan(data.get("migrationPlan"))
+    local_analysis = _load_local_analysis(data.get("localAnalysis"))
 
     cfg = Config(
         app=data["app"],
@@ -368,9 +480,10 @@ def load_config(path: str) -> Config:
         deepDiscovery=deep_discovery,
         applicationSplit=application_split,
         migrationPlan=migration_plan,
+        localAnalysis=local_analysis,
     )
     log.info(
-        "Loaded config for app=%s, subs=%d, seedMGs=%d, seedRGs=%d, seedResourceIds=%d, seedTags=%d, seedTagKeys=%d, seedAllSubs=%s, includeRbac=%s, resolvePrincipalNames=%s, includePolicy=%s, includeAdvisor=%s, includeQuota=%s, includeVmDetails=%s, deepDiscovery=%s, appSplit=%s, migrationPlan=%s",
+        "Loaded config for app=%s, subs=%d, seedMGs=%d, seedRGs=%d, seedResourceIds=%d, seedTags=%d, seedTagKeys=%d, seedAllSubs=%s, includeRbac=%s, resolvePrincipalNames=%s, includePolicy=%s, includeAdvisor=%s, includeQuota=%s, includeVmDetails=%s, deepDiscovery=%s, appSplit=%s, migrationPlan=%s, localAnalysis=%s",
         cfg.app,
         len(cfg.subscriptions),
         len(cfg.seedManagementGroups),
@@ -388,5 +501,6 @@ def load_config(path: str) -> Config:
         cfg.deepDiscovery.enabled,
         cfg.applicationSplit.enabled,
         cfg.migrationPlan.enabled,
+        cfg.localAnalysis.enabled,
     )
     return cfg

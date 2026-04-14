@@ -169,6 +169,13 @@ def _wizard_config_data(config_path: Path, input_fn: PromptFn, echo: EchoFn) -> 
         "applicationScope": "both" if enable_split else "root",
         "includeCopilotPrompts": True,
     }
+    local_analysis = {
+        "enabled": False,
+        "provider": "ollama",
+        "model": "",
+        "intents": ["*"],
+        "packScope": "both" if enable_split else "root",
+    }
     if enable_migration:
         migration_plan["audience"] = {
             "m": "mixed",
@@ -182,6 +189,9 @@ def _wizard_config_data(config_path: Path, input_fn: PromptFn, echo: EchoFn) -> 
                 "s": "split",
             }[_prompt_choice("Migration pack scope", [("b", "root and split packs"), ("r", "root only"), ("s", "split only")], input_fn, default="b")]
         migration_plan["includeCopilotPrompts"] = _prompt_yes_no("Include Copilot prompts", input_fn, default=True)
+        if _prompt_yes_no("Run consultant-style local analysis with Ollama", input_fn, default=False):
+            local_analysis["enabled"] = True
+            local_analysis["model"] = _prompt_text("Ollama model name", input_fn, default="gemma3:latest")
 
     generate_variant_report = _prompt_yes_no("Generate all diagram/report variants", input_fn, default=False)
     generate_master = _prompt_yes_no("Generate the master architecture report", input_fn, default=True)
@@ -210,6 +220,7 @@ def _wizard_config_data(config_path: Path, input_fn: PromptFn, echo: EchoFn) -> 
         "layoutMagic": False,
         "applicationSplit": application_split,
         "migrationPlan": migration_plan,
+        "localAnalysis": local_analysis,
     }
     if seed_rgs:
         config_data["seedResourceGroups"] = seed_rgs
@@ -257,6 +268,8 @@ def _prompt_pack(config_data: Dict[str, object], actions: List[str]) -> List[str
         outputs.append("applications.md")
     if config_data.get("migrationPlan", {}).get("enabled"):
         outputs.append("migration-plan/")
+    if config_data.get("localAnalysis", {}).get("enabled"):
+        outputs.append("local-analysis/")
 
     if config_data.get("seedEntireSubscriptions"):
         seed_scope = "listed subscriptions"
@@ -290,6 +303,8 @@ def _prompt_pack(config_data: Dict[str, object], actions: List[str]) -> List[str
         lines.append("- Per-application inventory, diagrams, and reports based on the selected common tags.")
     if config_data.get("migrationPlan", {}).get("enabled"):
         lines.append("- Migration planning templates, questionnaires, decision trees, wave plans, and Copilot prompts.")
+    if config_data.get("localAnalysis", {}).get("enabled"):
+        lines.append("- Consultant-style local analysis reports generated through Ollama with indexed evidence packs.")
     lines += [
         "",
         "## Copilot Prompts",

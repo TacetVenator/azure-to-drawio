@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Callable, Iterable
 
 from .config import load_config
+from .analyze import run_analysis
 from .discover import prepare_related_extended_inventory, run_expand, run_policy, run_rbac, run_related_candidates, run_seed
 from .docs import generate_docs
 from .drawio import generate_drawio
@@ -88,6 +89,18 @@ def cmd_wizard(args) -> None:
     run_wizard(args.config)
 
 
+def cmd_analyze(args) -> None:
+    cfg = load_config(args.config)
+    run_analysis(
+        cfg,
+        stage=args.stage,
+        intent_name=args.intent,
+        pack_name=args.pack,
+        rebuild_index=args.rebuild_index,
+        model_override=args.model,
+    )
+
+
 def cmd_run(args) -> None:
     cfg = load_config(args.config)
     run_seed(cfg)
@@ -135,6 +148,7 @@ def _iter_command_specs() -> Iterable[CommandSpec]:
         CommandSpec("split-preview", cmd_split_preview, "Preview application split candidates from seed/inventory artifacts"),
         CommandSpec("split", _run_with_config(run_split), "Generate per-application outputs from an existing inventory/graph"),
         CommandSpec("migration-plan", _run_with_config(generate_migration_plan), "Generate migration planning packs from existing discovery artifacts"),
+        CommandSpec("analyze", cmd_analyze, "Run consultant-style local analysis with Ollama"),
         CommandSpec("wizard", cmd_wizard, "Interactively create config, instructions, and optionally execute the workflow"),
         CommandSpec("inventory-csv", _run_with_config(generate_csv), "Generate inventory.csv from inventory.json"),
         CommandSpec("inventory-yaml", _run_with_config(generate_yaml), "Generate inventory.yaml from inventory.json"),
@@ -178,6 +192,12 @@ def build_parser() -> argparse.ArgumentParser:
         if spec.supports_html_options:
             p.add_argument("--artifact", choices=["graph", "related-candidates", "related-promoted", "rbac", "policy"], default="graph", help="Artifact to render as HTML (default: graph)")
             p.add_argument("--view", choices=["topology", "organization", "resources"], default="topology", help="Graph view mode when artifact=graph (default: topology)")
+        if spec.name == "analyze":
+            p.add_argument("--stage", choices=["extract-evidence", "index", "analyze-intents", "synthesize", "review"], help="Stop after the selected analysis stage")
+            p.add_argument("--intent", help="Run only one named analysis intent")
+            p.add_argument("--pack", help="Analyze only one pack slug such as root or an application name")
+            p.add_argument("--rebuild-index", action="store_true", help="Rebuild the local chunk index before analysis")
+            p.add_argument("--model", help="Override the configured localAnalysis.model for this run")
         p.set_defaults(func=spec.handler)
 
     p_test_all = sub.add_parser("test-all", help="Generate all layout x mode combinations from fixtures")

@@ -17,3 +17,14 @@ def test_command_specs_include_expected_handlers():
     assert specs["run"].supports_software_inventory is True
     assert specs["html"].supports_html_options is True
     assert specs["wizard"].needs_config is True
+    assert "analyze" in specs
+
+
+def test_analyze_parser_supports_stage_and_intent_flags():
+    parser = build_parser()
+    args = parser.parse_args(["analyze", "app/myapp/config.json", "--stage", "index", "--intent", "estate-summary", "--pack", "root", "--rebuild-index", "--model", "gemma4"] )
+    assert args.stage == "index"
+    assert args.intent == "estate-summary"
+    assert args.pack == "root"
+    assert args.rebuild_index is True
+    assert args.model == "gemma4"
