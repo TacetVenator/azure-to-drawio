@@ -166,6 +166,7 @@ The tool supports five seed patterns. You must configure at least one of them:
 - `seedResourceIds`: start from one or more exact ARM resource IDs such as a single VM
 - `seedTags`: start from exact tag/value matches such as `Application=SAP`
 - `seedTagKeys`: start from resources that merely have a tag key such as `Application`, regardless of value
+- `tagFallbackToResourceGroup`: when enabled, include resources in RGs whose RG tags match `seedTags` or `seedTagKeys`
 - `seedEntireSubscriptions`: start from all resources in the listed `subscriptions`
 
 ARG results are automatically paged and batched across all configured subscriptions.
@@ -220,6 +221,8 @@ For tag-key presence seeding, the query only checks that the key exists:
 ```
 
 Use `seedTagKeys` when you want to discover all tagged workloads first and decide later which tag values matter. This pairs well with `split-preview` and `applicationSplit.values: ["*"]`.
+
+If your estate mostly tags resource groups instead of resources, set `tagFallbackToResourceGroup: true`. Resource tags still win when both resource and RG define the same key.
 
 For broad environment baselines, seed all resources in the listed subscriptions:
 
@@ -607,6 +610,8 @@ The tool reads a JSON configuration file. An example is provided at `app/myapp/c
   "subscriptions": ["<sub1>", "<sub2>"],
   "seedResourceGroups": ["rg-app-dev", "rg-app-prod"],
   "seedResourceIds": [],
+  "seedTags": {"Application": "ERP"},
+  "tagFallbackToResourceGroup": true,
   "outputDir": "app/myapp/out",
   "includeRbac": true,
   "resolvePrincipalNames": false,
@@ -657,6 +662,7 @@ The tool reads a JSON configuration file. An example is provided at `app/myapp/c
 | `seedResourceIds` | `string[]` | No | `[]` | list of non-empty strings | Exact ARM resource IDs used as additional seed criteria. Use this for deterministic single-resource or single-VM discovery. |
 | `seedTags` | `object` | No | `{}` | object of non-empty string pairs | Exact tag/value pairs used as additional seed criteria. A resource matches if any configured pair matches. |
 | `seedTagKeys` | `string[]` | No | `[]` | list of non-empty strings | Seed resources by tag-key presence, regardless of value. |
+| `tagFallbackToResourceGroup` | `bool` | No | `false` | `true`, `false` | When `true`, `seed` and `split` use resource-group tags as fallback for untagged resources. Resource tags take precedence when both are present. |
 | `seedEntireSubscriptions` | `bool` | No | `false` | `true`, `false` | Seeds all resources in the listed `subscriptions`. Use this for broad environment baselines when you want more than RG- or tag-scoped discovery. |
 | `outputDir` | `string` | Yes | — | — | Directory where all generated files are written. Created automatically if needed. |
 | `includeRbac` | `bool` | No | `false` | `true`, `false` | When `true`, runs the RBAC stage and writes `rbac.json`, adding `rbac_assignment` edges to the graph. Role definition IDs are also resolved to role names when available. |
@@ -814,6 +820,8 @@ Use `applicationSplit` when multiple applications share the same resource group 
 | `values` | `string[]` | `["*"]` | Explicit application values to render, or `["*"]` to auto-discover values from the extracted data. |
 | `includeSharedDependencies` | `bool` | `true` | Includes shared, untagged, or contextual dependencies needed to keep each application slice coherent. |
 | `outputLayout` | `string` | `"subdirs"` | Output layout for split artifacts. Only `subdirs` is supported. |
+
+When `tagFallbackToResourceGroup` is enabled, split classification also checks RG tags for untagged resources.
 
 With `values: ["*"]`, you can:
 

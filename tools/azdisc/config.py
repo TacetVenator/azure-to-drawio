@@ -88,6 +88,7 @@ class Config:
     seedResourceIds: List[str] = field(default_factory=list)
     seedTags: Dict[str, str] = field(default_factory=dict)
     seedTagKeys: List[str] = field(default_factory=list)
+    tagFallbackToResourceGroup: bool = False
     seedEntireSubscriptions: bool = False
     includeRbac: bool = False
     resolvePrincipalNames: bool = False
@@ -369,6 +370,12 @@ def load_config(path: str) -> Config:
     seed_resource_ids = _validate_string_list("seedResourceIds", data.get("seedResourceIds", []))
     seed_tags = _validate_seed_tags(data.get("seedTags", {}))
     seed_tag_keys = _validate_string_list("seedTagKeys", data.get("seedTagKeys", []))
+    tag_fallback_to_rg = data.get("tagFallbackToResourceGroup", False)
+    if not isinstance(tag_fallback_to_rg, bool):
+        raise ValueError(
+            "tagFallbackToResourceGroup must be a boolean, "
+            f"got {tag_fallback_to_rg!r}"
+        )
     seed_management_groups = _validate_string_list("seedManagementGroups", data.get("seedManagementGroups", []))
     seed_entire_subscriptions = data.get("seedEntireSubscriptions", False)
     if not isinstance(seed_entire_subscriptions, bool):
@@ -458,6 +465,7 @@ def load_config(path: str) -> Config:
         seedResourceIds=seed_resource_ids,
         seedTags=seed_tags,
         seedTagKeys=seed_tag_keys,
+        tagFallbackToResourceGroup=tag_fallback_to_rg,
         seedEntireSubscriptions=seed_entire_subscriptions,
         includeRbac=include_rbac,
         resolvePrincipalNames=resolve_principal_names,
@@ -483,7 +491,7 @@ def load_config(path: str) -> Config:
         localAnalysis=local_analysis,
     )
     log.info(
-        "Loaded config for app=%s, subs=%d, seedMGs=%d, seedRGs=%d, seedResourceIds=%d, seedTags=%d, seedTagKeys=%d, seedAllSubs=%s, includeRbac=%s, resolvePrincipalNames=%s, includePolicy=%s, includeAdvisor=%s, includeQuota=%s, includeVmDetails=%s, deepDiscovery=%s, appSplit=%s, migrationPlan=%s, localAnalysis=%s",
+        "Loaded config for app=%s, subs=%d, seedMGs=%d, seedRGs=%d, seedResourceIds=%d, seedTags=%d, seedTagKeys=%d, tagFallbackToRG=%s, seedAllSubs=%s, includeRbac=%s, resolvePrincipalNames=%s, includePolicy=%s, includeAdvisor=%s, includeQuota=%s, includeVmDetails=%s, deepDiscovery=%s, appSplit=%s, migrationPlan=%s, localAnalysis=%s",
         cfg.app,
         len(cfg.subscriptions),
         len(cfg.seedManagementGroups),
@@ -491,6 +499,7 @@ def load_config(path: str) -> Config:
         len(cfg.seedResourceIds),
         len(cfg.seedTags),
         len(cfg.seedTagKeys),
+        cfg.tagFallbackToResourceGroup,
         cfg.seedEntireSubscriptions,
         cfg.includeRbac,
         cfg.resolvePrincipalNames,

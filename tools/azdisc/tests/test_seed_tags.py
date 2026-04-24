@@ -147,6 +147,21 @@ def test_load_config_accepts_seed_tag_keys(tmp_path):
     assert cfg.seedTagKeys == ["Application", "Workload"]
 
 
+def test_load_config_accepts_tag_fallback_to_resource_group(tmp_path):
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(json.dumps({
+        "app": "tag-fallback",
+        "subscriptions": ["sub1"],
+        "outputDir": str(tmp_path / "out"),
+        "seedTags": {"Application": "ERP"},
+        "tagFallbackToResourceGroup": True,
+    }))
+
+    cfg = load_config(str(cfg_file))
+
+    assert cfg.tagFallbackToResourceGroup is True
+
+
 def test_load_config_requires_at_least_one_seed_scope(tmp_path):
     cfg_file = tmp_path / "config.json"
     cfg_file.write_text(json.dumps({
@@ -294,6 +309,72 @@ def test_run_seed_uses_tag_seed_query(monkeypatch, tmp_path):
     assert "tostring(tags['Application']) =~ 'checkout'" in seen["kusto"]
     assert seen["subscriptions"] == ["sub1"]
     assert json.loads((tmp_path / "seed.json").read_text())[0]["name"] == "app1"
+
+
+def test_run_seed_includes_resources_from_matching_rg_tags(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_query(kusto, subscriptions):
+        calls.append(kusto)
+        if "resources | where (tostring(tags['Application']) =~ 'ERP')" in kusto:
+            return [
+                {
+                    "id": "/subscriptions/sub1/resourceGroups/rg-direct/providers/Microsoft.Web/sites/tagged-app",
+                    "name": "tagged-app",
+                    "type": "Microsoft.Web/sites",
+                    "subscriptionId": "sub1",
+                    "resourceGroup": "rg-direct",
+                    "tags": {"Application": "ERP"},
+                }
+            ]
+        if "resourcecontainers" in kusto:
+            return [
+                {
+                    "id": "/subscriptions/sub1/resourceGroups/rg-erp",
+                    "name": "rg-erp",
+                    "subscriptionId": "sub1",
+                    "tags": {"Application": "ERP"},
+                }
+            ]
+        if "resourceGroup in~ ('rg-erp')" in kusto:
+            return [
+                {
+                    "id": "/subscriptions/sub1/resourceGroups/rg-erp/providers/Microsoft.Logic/workflows/erp-orchestrator",
+                    "name": "erp-orchestrator",
+                    "type": "Microsoft.Logic/workflows",
+                    "subscriptionId": "sub1",
+                    "resourceGroup": "rg-erp",
+                    "tags": {},
+                },
+                {
+                    "id": "/subscriptions/sub2/resourceGroups/rg-erp/providers/Microsoft.Logic/workflows/wrong-sub",
+                    "name": "wrong-sub",
+                    "type": "Microsoft.Logic/workflows",
+                    "subscriptionId": "sub2",
+                    "resourceGroup": "rg-erp",
+                    "tags": {},
+                },
+            ]
+        raise AssertionError(kusto)
+
+    monkeypatch.setattr("tools.azdisc.discover.query", fake_query)
+
+    cfg = Config(
+        app="erp",
+        subscriptions=["sub1"],
+        seedResourceGroups=[],
+        outputDir=str(tmp_path),
+        seedTags={"Application": "ERP"},
+        tagFallbackToResourceGroup=True,
+    )
+
+    rows = run_seed(cfg)
+    ids = {normalize_id(row["id"]) for row in rows}
+
+    assert normalize_id("/subscriptions/sub1/resourceGroups/rg-direct/providers/Microsoft.Web/sites/tagged-app") in ids
+    assert normalize_id("/subscriptions/sub1/resourceGroups/rg-erp/providers/Microsoft.Logic/workflows/erp-orchestrator") in ids
+    assert normalize_id("/subscriptions/sub2/resourceGroups/rg-erp/providers/Microsoft.Logic/workflows/wrong-sub") not in ids
+    assert any("resourcecontainers" in call for call in calls)
 
 
 def test_l2r_direct_network_items_respect_seed_tags():

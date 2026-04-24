@@ -2,6 +2,10 @@
   "app": "myapp",
   "subscriptions": ["<sub1>", "<sub2>"],
   "seedResourceGroups": ["rg-app-dev", "rg-app-prod"],
+  "seedTags": {
+    "Application": "ERP"
+  },
+  "tagFallbackToResourceGroup": true,
   "outputDir": "app/myapp/out",
   "includeRbac": true,
   "includePolicy": true,
@@ -14,9 +18,9 @@
   "inventoryGroupBy": "type",
   "networkDetail": "full",
   "edgeLabels": false,
-  "subnetColors": false,
+  "subnetColors": true,
   "groupByTag": ["Application"],
-  "layoutMagic": false,
+  "layoutMagic": true,
   "applicationSplit": {
     "enabled": true,
     "tagKeys": ["Application", "App", "Workload", "Service"],

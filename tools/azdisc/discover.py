@@ -197,11 +197,77 @@ def _seed_scope_summary(cfg: Config) -> str:
         parts.append(f"tags={tag_parts}")
     if cfg.seedTagKeys:
         parts.append(f"tagKeys={cfg.seedTagKeys}")
+    if cfg.tagFallbackToResourceGroup:
+        parts.append("tagFallbackToRG=true")
     if cfg.seedManagementGroups:
         parts.append(f"managementGroups={cfg.seedManagementGroups}")
     if cfg.seedEntireSubscriptions:
         parts.append("scope=all-listed-subscriptions")
     return ", ".join(parts)
+
+
+def _resource_group_seed_tag_query(cfg: Config) -> str:
+    clauses: List[str] = []
+    for key, value in sorted(cfg.seedTags.items(), key=lambda item: item[0].lower()):
+        clauses.append(
+            f"tostring(tags['{_kusto_quote(key)}']) =~ '{_kusto_quote(value)}'"
+        )
+    for key in sorted(cfg.seedTagKeys, key=str.lower):
+        clauses.append(f"isnotempty(tostring(tags['{_kusto_quote(key)}']))")
+    if not clauses:
+        return ""
+    where_clause = " or ".join(f"({clause})" for clause in clauses)
+    return (
+        "resourcecontainers "
+        "| where type =~ 'microsoft.resources/subscriptions/resourcegroups' "
+        f"| where {where_clause} "
+        "| project id, name, subscriptionId, tags"
+    )
+
+
+def _seed_rows_from_matching_resource_group_tags(cfg: Config) -> List[Dict[str, Any]]:
+    if not cfg.tagFallbackToResourceGroup:
+        return []
+    if not cfg.seedTags and not cfg.seedTagKeys:
+        return []
+
+    rg_kusto = _resource_group_seed_tag_query(cfg)
+    if not rg_kusto:
+        return []
+
+    rg_rows = _query_with_cfg(rg_kusto, cfg)
+    if not rg_rows:
+        return []
+
+    matched_pairs: Set[Tuple[str, str]] = set()
+    matched_rg_names: Set[str] = set()
+    for row in rg_rows:
+        sub_id = str(row.get("subscriptionId") or "").strip().lower()
+        rg_name = str(row.get("name") or "").strip().lower()
+        if not sub_id or not rg_name:
+            continue
+        matched_pairs.add((sub_id, rg_name))
+        matched_rg_names.add(rg_name)
+
+    if not matched_pairs:
+        return []
+
+    kusto = _rg_filter(sorted(matched_rg_names))
+    candidates = _query_with_cfg(kusto, cfg)
+    selected: List[Dict[str, Any]] = []
+    for row in candidates:
+        pair = (
+            str(row.get("subscriptionId") or "").strip().lower(),
+            str(row.get("resourceGroup") or "").strip().lower(),
+        )
+        if pair in matched_pairs:
+            selected.append(row)
+    log.info(
+        "RG tag fallback matched %d resource groups and added %d candidate seed resources",
+        len(matched_pairs),
+        len(selected),
+    )
+    return selected
 
 
 def _safe_get(obj, *keys):
@@ -655,6 +721,7 @@ def write_related_review_report(
 def run_seed(cfg: Config) -> List[Dict]:
     log.info("Seeding resources from: %s", _seed_scope_summary(cfg))
     rows = _query_with_cfg(_seed_query(cfg), cfg)
+    rows.extend(_seed_rows_from_matching_resource_group_tags(cfg))
     deduped: Dict[str, Dict[str, Any]] = {}
     for row in rows:
         rid = normalize_id(row.get("id", ""))

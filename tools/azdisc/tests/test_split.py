@@ -106,6 +106,47 @@ def test_split_preview_defaults_to_common_tag_keys(tmp_path):
     assert "`workload`" in preview.lower()
 
 
+def test_split_preview_uses_rg_tag_fallback(monkeypatch, tmp_path):
+    inventory = [
+        {
+            "id": "/subscriptions/sub1/resourceGroups/rg-erp/providers/Microsoft.Web/sites/erp-web",
+            "name": "erp-web",
+            "type": "Microsoft.Web/sites",
+            "location": "eastus",
+            "subscriptionId": "sub1",
+            "resourceGroup": "rg-erp",
+            "tags": {},
+            "properties": {},
+        }
+    ]
+    (tmp_path / "inventory.json").write_text(json.dumps(inventory))
+
+    def fake_query(kusto, subscriptions):
+        assert "resourcecontainers" in kusto
+        return [
+            {
+                "subscriptionId": "sub1",
+                "name": "rg-erp",
+                "tags": {"Application": "ERP"},
+            }
+        ]
+
+    monkeypatch.setattr("tools.azdisc.split.query", fake_query)
+
+    cfg = Config(
+        app="corp-apps",
+        subscriptions=["sub1"],
+        seedResourceGroups=["rg-erp"],
+        outputDir=str(tmp_path),
+        tagFallbackToResourceGroup=True,
+    )
+
+    preview = build_split_preview(cfg)
+
+    assert "`ERP`" in preview
+    assert "Untagged for configured keys: 0" in preview
+
+
 def test_run_policy_collects_policy_states_for_inventory_resources(monkeypatch, tmp_path):
     inventory = _write_split_inventory(tmp_path)
     cfg = Config(
@@ -366,6 +407,52 @@ def test_run_split_generates_per_application_outputs_with_shared_context(tmp_pat
     applications_report = (tmp_path / "applications.md").read_text()
     assert "`SAP`" in applications_report
     assert "`applications/sap`" in applications_report
+
+
+def test_run_split_uses_rg_tag_fallback_for_direct_count(monkeypatch, tmp_path):
+    inventory = [
+        {
+            "id": "/subscriptions/sub1/resourceGroups/rg-erp/providers/Microsoft.Web/sites/erp-web",
+            "name": "erp-web",
+            "type": "Microsoft.Web/sites",
+            "location": "eastus",
+            "subscriptionId": "sub1",
+            "resourceGroup": "rg-erp",
+            "tags": {},
+            "properties": {},
+        }
+    ]
+    (tmp_path / "inventory.json").write_text(json.dumps(inventory))
+    (tmp_path / "unresolved.json").write_text(json.dumps([]))
+
+    def fake_query(kusto, subscriptions):
+        return [
+            {
+                "subscriptionId": "sub1",
+                "name": "rg-erp",
+                "tags": {"Application": "ERP"},
+            }
+        ]
+
+    monkeypatch.setattr("tools.azdisc.split.query", fake_query)
+
+    cfg = Config(
+        app="corp-apps",
+        subscriptions=["sub1"],
+        seedResourceGroups=["rg-erp"],
+        outputDir=str(tmp_path),
+        tagFallbackToResourceGroup=True,
+    )
+    cfg.applicationSplit.enabled = True
+    cfg.applicationSplit.tagKeys = ["Application"]
+    cfg.applicationSplit.values = ["ERP"]
+
+    build_graph(cfg)
+    summaries = run_split(cfg)
+
+    assert len(summaries) == 1
+    assert summaries[0]["application"] == "ERP"
+    assert summaries[0]["directCount"] == 1
 
 
 def test_load_config_reports_invalid_json_with_position(tmp_path):

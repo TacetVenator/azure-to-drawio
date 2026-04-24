@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
+from .arg import query
 from .config import Config
 from .docs import generate_docs
 from .drawio import generate_drawio
@@ -33,26 +34,129 @@ def _normalized_tags(tags: object) -> Dict[str, str]:
     return normalized
 
 
-def _tag_value(resource: Dict[str, Any], tag_keys: List[str]) -> Optional[str]:
+def _kusto_quote(value: str) -> str:
+    return value.replace("'", "''")
+
+
+def _load_rg_tag_lookup_from_artifact(cfg: Config) -> Dict[Tuple[str, str], Dict[str, str]]:
+    rg_path = cfg.out("resource_groups.json")
+    if not rg_path.exists():
+        return {}
+    rows = load_json_file(
+        rg_path,
+        context="Split stage resource group tag artifact",
+        expected_type=list,
+        advice="Fix resource_groups.json or rerun seed before split.",
+    )
+    lookup: Dict[Tuple[str, str], Dict[str, str]] = {}
+    for row in rows:
+        sub_id = str(row.get("subscriptionId") or "").strip().lower()
+        rg_name = str((row.get("name") or row.get("resourceGroup") or "")).strip().lower()
+        if not sub_id or not rg_name:
+            continue
+        lookup[(sub_id, rg_name)] = _normalized_tags(row.get("tags"))
+    return lookup
+
+
+def _query_rg_tag_lookup(cfg: Config, resources: List[Dict[str, Any]]) -> Dict[Tuple[str, str], Dict[str, str]]:
+    pairs = {
+        (
+            str(resource.get("subscriptionId") or "").strip().lower(),
+            str(resource.get("resourceGroup") or "").strip().lower(),
+        )
+        for resource in resources
+        if resource.get("subscriptionId") and resource.get("resourceGroup")
+    }
+    if not pairs:
+        return {}
+
+    subs = sorted({sub for sub, _ in pairs})
+    rgs = sorted({rg for _, rg in pairs})
+    quoted_subs = ", ".join(f"'{_kusto_quote(sub)}'" for sub in subs)
+    quoted_rgs = ", ".join(f"'{_kusto_quote(rg)}'" for rg in rgs)
+    kusto = (
+        "resourcecontainers "
+        "| where type =~ 'microsoft.resources/subscriptions/resourcegroups' "
+        f"| where subscriptionId in~ ({quoted_subs}) and name in~ ({quoted_rgs}) "
+        "| project subscriptionId, name, tags"
+    )
+
+    try:
+        rows = query(kusto, cfg.subscriptions, cfg.seedManagementGroups)
+    except TypeError:
+        rows = query(kusto, cfg.subscriptions)
+
+    lookup: Dict[Tuple[str, str], Dict[str, str]] = {}
+    for row in rows:
+        sub_id = str(row.get("subscriptionId") or "").strip().lower()
+        rg_name = str(row.get("name") or "").strip().lower()
+        if not sub_id or not rg_name:
+            continue
+        pair = (sub_id, rg_name)
+        if pair not in pairs:
+            continue
+        lookup[pair] = _normalized_tags(row.get("tags"))
+    return lookup
+
+
+def _resolve_rg_tag_lookup(cfg: Config, resources: List[Dict[str, Any]]) -> Dict[Tuple[str, str], Dict[str, str]]:
+    lookup = _load_rg_tag_lookup_from_artifact(cfg)
+    if lookup:
+        return lookup
+    return _query_rg_tag_lookup(cfg, resources)
+
+
+def _tag_value(
+    resource: Dict[str, Any],
+    tag_keys: List[str],
+    rg_tag_lookup: Optional[Dict[Tuple[str, str], Dict[str, str]]] = None,
+) -> Optional[str]:
     tags = _normalized_tags(resource.get("tags"))
     for key in tag_keys:
         value = tags.get(key.lower())
         if value:
             return value
+    if not rg_tag_lookup:
+        return None
+
+    pair = (
+        str(resource.get("subscriptionId") or "").strip().lower(),
+        str(resource.get("resourceGroup") or "").strip().lower(),
+    )
+    rg_tags = rg_tag_lookup.get(pair, {})
+    for key in tag_keys:
+        value = rg_tags.get(key.lower())
+        if value:
+            return value
     return None
 
 
-def _matches_application(resource: Dict[str, Any], tag_keys: List[str], value: str) -> bool:
-    tag_value = _tag_value(resource, tag_keys)
+def _matches_application(
+    resource: Dict[str, Any],
+    tag_keys: List[str],
+    value: str,
+    rg_tag_lookup: Optional[Dict[Tuple[str, str], Dict[str, str]]] = None,
+) -> bool:
+    tag_value = _tag_value(resource, tag_keys, rg_tag_lookup)
     return bool(tag_value and tag_value.lower() == value.lower())
 
 
-def _has_other_application(resource: Dict[str, Any], tag_keys: List[str], value: str) -> bool:
-    tag_value = _tag_value(resource, tag_keys)
+def _has_other_application(
+    resource: Dict[str, Any],
+    tag_keys: List[str],
+    value: str,
+    rg_tag_lookup: Optional[Dict[Tuple[str, str], Dict[str, str]]] = None,
+) -> bool:
+    tag_value = _tag_value(resource, tag_keys, rg_tag_lookup)
     return bool(tag_value and tag_value.lower() != value.lower())
 
 
-def _resolve_split_values(resources: List[Dict[str, Any]], tag_keys: List[str], configured_values: List[str]) -> List[str]:
+def _resolve_split_values(
+    resources: List[Dict[str, Any]],
+    tag_keys: List[str],
+    configured_values: List[str],
+    rg_tag_lookup: Optional[Dict[Tuple[str, str], Dict[str, str]]] = None,
+) -> List[str]:
     if configured_values and any(value != "*" for value in configured_values):
         seen = set()
         ordered = []
@@ -68,7 +172,7 @@ def _resolve_split_values(resources: List[Dict[str, Any]], tag_keys: List[str], 
 
     discovered: Dict[str, str] = {}
     for resource in resources:
-        value = _tag_value(resource, tag_keys)
+        value = _tag_value(resource, tag_keys, rg_tag_lookup)
         if value and value.lower() not in discovered:
             discovered[value.lower()] = value
     return [discovered[key] for key in sorted(discovered)]
@@ -104,17 +208,20 @@ def build_split_preview(cfg: Config) -> str:
     key_counts: Counter[str] = Counter()
     value_counts: Counter[str] = Counter()
     unclassified = 0
+    rg_tag_lookup: Dict[Tuple[str, str], Dict[str, str]] = {}
+    if cfg.tagFallbackToResourceGroup:
+        rg_tag_lookup = _resolve_rg_tag_lookup(cfg, resources)
 
     for resource in resources:
         tags = _normalized_tags(resource.get("tags"))
         key_counts.update(tags.keys())
-        app_value = _tag_value(resource, tag_keys)
+        app_value = _tag_value(resource, tag_keys, rg_tag_lookup)
         if app_value:
             value_counts[app_value] += 1
         else:
             unclassified += 1
 
-    candidate_values = _resolve_split_values(resources, tag_keys, split_cfg.values or ["*"])
+    candidate_values = _resolve_split_values(resources, tag_keys, split_cfg.values or ["*"], rg_tag_lookup)
 
     lines = [
         f"# Application Split Preview — {cfg.app}",
@@ -196,6 +303,7 @@ def _project_slice(
     application_value: str,
     tag_keys: List[str],
     include_shared_dependencies: bool,
+    rg_tag_lookup: Optional[Dict[Tuple[str, str], Dict[str, str]]] = None,
 ) -> Optional[Dict[str, Any]]:
     nodes: List[Dict[str, Any]] = graph.get("nodes", [])
     edges: List[Dict[str, Any]] = graph.get("edges", [])
@@ -204,7 +312,7 @@ def _project_slice(
     matched_ids = {
         normalize_id(node["id"])
         for node in nodes
-        if not node.get("isExternal") and _matches_application(node, tag_keys, application_value)
+        if not node.get("isExternal") and _matches_application(node, tag_keys, application_value, rg_tag_lookup)
     }
     if not matched_ids:
         return None
@@ -221,7 +329,7 @@ def _project_slice(
                 neighbor_node = node_by_id.get(neighbor)
                 if neighbor_node is None:
                     continue
-                if not neighbor_node.get("isExternal") and _has_other_application(neighbor_node, tag_keys, application_value):
+                if not neighbor_node.get("isExternal") and _has_other_application(neighbor_node, tag_keys, application_value, rg_tag_lookup):
                     continue
                 included_ids.add(neighbor)
                 queue.append(neighbor)
@@ -256,8 +364,8 @@ def _project_slice(
         if node.get("isExternal")
     ]
 
-    direct_count = sum(1 for resource in projected_inventory if _matches_application(resource, tag_keys, application_value))
-    shared_count = sum(1 for resource in projected_inventory if not _matches_application(resource, tag_keys, application_value))
+    direct_count = sum(1 for resource in projected_inventory if _matches_application(resource, tag_keys, application_value, rg_tag_lookup))
+    shared_count = sum(1 for resource in projected_inventory if not _matches_application(resource, tag_keys, application_value, rg_tag_lookup))
 
     return {
         "application": application_value,
@@ -309,7 +417,10 @@ def run_split(cfg: Config) -> List[Dict[str, Any]]:
         )
 
     tag_keys = split_cfg.tagKeys or _COMMON_APP_TAG_KEYS
-    values = _resolve_split_values(inventory, tag_keys, split_cfg.values or ["*"])
+    rg_tag_lookup: Dict[Tuple[str, str], Dict[str, str]] = {}
+    if cfg.tagFallbackToResourceGroup:
+        rg_tag_lookup = _resolve_rg_tag_lookup(cfg, inventory)
+    values = _resolve_split_values(inventory, tag_keys, split_cfg.values or ["*"], rg_tag_lookup)
 
     applications_root = Path(cfg.outputDir) / "applications"
     applications_root.mkdir(parents=True, exist_ok=True)
@@ -322,6 +433,7 @@ def run_split(cfg: Config) -> List[Dict[str, Any]]:
             value,
             tag_keys,
             split_cfg.includeSharedDependencies,
+            rg_tag_lookup,
         )
         if projected is None:
             continue
@@ -388,7 +500,7 @@ def run_split(cfg: Config) -> List[Dict[str, Any]]:
     else:
         lines.append("No application slices were produced for the configured tag rules.")
 
-    unclassified = sum(1 for resource in inventory if not _tag_value(resource, tag_keys))
+    unclassified = sum(1 for resource in inventory if not _tag_value(resource, tag_keys, rg_tag_lookup))
     lines.extend([
         "",
         f"Unclassified resources for configured keys: {unclassified}",
