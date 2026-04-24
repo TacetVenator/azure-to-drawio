@@ -220,12 +220,12 @@ class TestExtractRelatedIds:
         scoped_ids = _extract_related_ids(resource)
         full_ids = set(extract_arm_ids(resource.get("properties", {})))
 
-        # Scoped should only get the peered VNET
-        assert len(scoped_ids) == 1
-        assert any("vnet2" in i for i in scoped_ids)
+        # Scoped mode should not walk VNet peerings because that creates hub-and-spoke noise.
+        assert len(scoped_ids) == 0
 
-        # Full extraction would get subnets, NSGs, UDRs, and the peered VNET
+        # Full extraction still sees subnets, NSGs, UDRs, and the peered VNET.
         assert len(full_ids) > len(scoped_ids)
+        assert any("vnet2" in i for i in full_ids)
         # Full would also grab the subnet IDs, NSG IDs, route table IDs
         assert any("nsg1" in i for i in full_ids)
         assert any("udr1" in i for i in full_ids)
@@ -282,6 +282,107 @@ class TestExtractRelatedIds:
         assert any("dst-asg" in i for i in ids)
 
 
+def test_run_expand_discovers_reverse_attached_load_balancer_and_public_ip(tmp_path, monkeypatch):
+    seed = [
+        {
+            "id": "/subscriptions/sub1/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachines/vm1",
+            "name": "vm1",
+            "type": "Microsoft.Compute/virtualMachines",
+            "resourceGroup": "rg-app",
+            "subscriptionId": "sub1",
+            "location": "eastus",
+            "properties": {
+                "networkProfile": {
+                    "networkInterfaces": [
+                        {"id": "/subscriptions/sub1/resourceGroups/rg-net/providers/Microsoft.Network/networkInterfaces/nic1"}
+                    ]
+                }
+            },
+        }
+    ]
+    (tmp_path / "seed.json").write_text(__import__("json").dumps(seed))
+
+    cfg = Config(
+        app="test",
+        subscriptions=["sub1"],
+        seedResourceGroups=["rg-app"],
+        outputDir=str(tmp_path),
+    )
+
+    def fake_query_by_ids(ids, _subscriptions):
+        if ids == ["/subscriptions/sub1/resourcegroups/rg-net/providers/microsoft.network/networkinterfaces/nic1"]:
+            return [{
+                "id": "/subscriptions/sub1/resourceGroups/rg-net/providers/Microsoft.Network/networkInterfaces/nic1",
+                "name": "nic1",
+                "type": "Microsoft.Network/networkInterfaces",
+                "resourceGroup": "rg-net",
+                "subscriptionId": "sub1",
+                "location": "eastus",
+                "properties": {"ipConfigurations": []},
+            }]
+        if ids == ["/subscriptions/sub1/resourcegroups/rg-net/providers/microsoft.network/loadbalancers/lb1"]:
+            return [{
+                "id": "/subscriptions/sub1/resourceGroups/rg-net/providers/Microsoft.Network/loadBalancers/lb1",
+                "name": "lb1",
+                "type": "Microsoft.Network/loadBalancers",
+                "resourceGroup": "rg-net",
+                "subscriptionId": "sub1",
+                "location": "eastus",
+                "properties": {"backendAddressPools": []},
+            }]
+        if ids == ["/subscriptions/sub1/resourcegroups/rg-net/providers/microsoft.network/publicipaddresses/pip1"]:
+            return [{
+                "id": "/subscriptions/sub1/resourceGroups/rg-net/providers/Microsoft.Network/publicIPAddresses/pip1",
+                "name": "pip1",
+                "type": "Microsoft.Network/publicIPAddresses",
+                "resourceGroup": "rg-net",
+                "subscriptionId": "sub1",
+                "location": "eastus",
+                "properties": {},
+            }]
+        return []
+
+    def fake_query(kusto, _subscriptions):
+        if "loadBalancers" in kusto:
+            return [{
+                "id": "/subscriptions/sub1/resourceGroups/rg-net/providers/Microsoft.Network/loadBalancers/lb1",
+                "name": "lb1",
+                "type": "Microsoft.Network/loadBalancers",
+                "resourceGroup": "rg-net",
+                "subscriptionId": "sub1",
+                "location": "eastus",
+                "properties": {},
+                "matchedTargetId": "/subscriptions/sub1/resourceGroups/rg-net/providers/Microsoft.Network/networkInterfaces/nic1",
+            }]
+        if "publicIPAddresses" in kusto:
+            return [{
+                "id": "/subscriptions/sub1/resourceGroups/rg-net/providers/Microsoft.Network/publicIPAddresses/pip1",
+                "name": "pip1",
+                "type": "Microsoft.Network/publicIPAddresses",
+                "resourceGroup": "rg-net",
+                "subscriptionId": "sub1",
+                "location": "eastus",
+                "properties": {},
+                "matchedTargetId": "/subscriptions/sub1/resourceGroups/rg-net/providers/Microsoft.Network/networkInterfaces/nic1",
+            }]
+        return []
+
+    monkeypatch.setattr("tools.azdisc.discover.query_by_ids", fake_query_by_ids)
+    monkeypatch.setattr("tools.azdisc.discover.query", fake_query)
+
+    run_expand(cfg)
+
+    inventory = __import__("json").loads((tmp_path / "inventory.json").read_text())
+    inventory_ids = {item["id"].lower() for item in inventory}
+    assert "/subscriptions/sub1/resourcegroups/rg-net/providers/microsoft.network/loadbalancers/lb1" in inventory_ids
+    assert "/subscriptions/sub1/resourcegroups/rg-net/providers/microsoft.network/publicipaddresses/pip1" in inventory_ids
+
+    reasons = __import__("json").loads((tmp_path / "expand_reasons.json").read_text())
+    reason_by_id = {item["resourceId"]: item["reasons"] for item in reasons["addedResources"]}
+    assert any(reason["relationship"] == "backend-nic-load-balancer" for reason in reason_by_id["/subscriptions/sub1/resourcegroups/rg-net/providers/microsoft.network/loadbalancers/lb1"])
+    assert any(reason["relationship"] == "nic-public-ip" for reason in reason_by_id["/subscriptions/sub1/resourcegroups/rg-net/providers/microsoft.network/publicipaddresses/pip1"])
+
+
 def test_run_expand_writes_provenance_artifacts(tmp_path, monkeypatch):
     seed = [
         {
@@ -327,6 +428,7 @@ def test_run_expand_writes_provenance_artifacts(tmp_path, monkeypatch):
         return []
 
     monkeypatch.setattr("tools.azdisc.discover.query_by_ids", fake_query_by_ids)
+    monkeypatch.setattr("tools.azdisc.discover.query", lambda *_args, **_kwargs: [])
 
     run_expand(cfg)
 

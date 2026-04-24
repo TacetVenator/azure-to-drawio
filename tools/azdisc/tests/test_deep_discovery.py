@@ -69,6 +69,8 @@ def test_deep_discovery_query_escapes_terms_and_ors_clauses():
     query = _deep_discovery_query(cfg)
 
     assert "name contains 'SAP'" in query
+    assert "tostring(tags) contains 'SAP'" in query
+    assert "tostring(properties) contains 'SAP'" in query
     assert "name contains 'bpc''s'" in query
     assert " or " in query
 
@@ -144,7 +146,7 @@ def test_run_related_candidates_writes_candidate_and_promoted_files(tmp_path, mo
     assert candidates[0]["subscriptionId"] == "sub2"
     assert candidates[0][_DEEP_MATCH_FIELD] == ["bpc", "SAP"]
     assert candidates[0][_DEEP_REASON_FIELD][0]["matchField"] == "name"
-    assert "matched search strings" in candidates[0][_DEEP_REASON_FIELD][0]["explanation"]
+    assert "search strings matched resource name" in candidates[0][_DEEP_REASON_FIELD][0]["explanation"]
     assert candidates[1][_DEEP_MATCH_FIELD] == ["bpc", "SAP"]
 
     candidate_path = cfg.deep_out(cfg.deepDiscovery.candidateFile)
@@ -156,7 +158,77 @@ def test_run_related_candidates_writes_candidate_and_promoted_files(tmp_path, mo
     assert "Potential in-scope context" in report_path.read_text()
 
 
-def test_prepare_related_extended_inventory_merges_promoted_resources(tmp_path):
+def test_run_related_candidates_matches_properties_and_records_reference_association(tmp_path, monkeypatch):
+    base_inventory = [
+        {
+            "id": "/subscriptions/sub1/resourceGroups/rg-monitor/providers/Microsoft.OperationalInsights/workspaces/law1",
+            "name": "law1",
+            "type": "Microsoft.OperationalInsights/workspaces",
+            "resourceGroup": "rg-monitor",
+            "subscriptionId": "sub1",
+            "location": "eastus",
+            "properties": {},
+        },
+        {
+            "id": "/subscriptions/sub1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-sap",
+            "name": "vnet-sap",
+            "type": "Microsoft.Network/virtualNetworks",
+            "resourceGroup": "rg-net",
+            "subscriptionId": "sub1",
+            "location": "eastus",
+            "properties": {},
+            "tags": {"Application": "SAP"},
+        }
+    ]
+    (tmp_path / "inventory.json").write_text(json.dumps(base_inventory))
+
+    cfg = Config(
+        app="sap-app",
+        subscriptions=["sub1", "sub2"],
+        seedResourceGroups=["rg-app"],
+        outputDir=str(tmp_path),
+    )
+    cfg.deepDiscovery.enabled = True
+    cfg.deepDiscovery.searchStrings = ["SAP"]
+
+    def fake_query(_kusto, _subscriptions):
+        return [
+            {
+                "id": "/subscriptions/sub2/resourceGroups/rg-ops/providers/Microsoft.Insights/dataCollectionRules/dcr1",
+                "name": "telemetry-dcr",
+                "type": "Microsoft.Insights/dataCollectionRules",
+                "resourceGroup": "rg-ops",
+                "subscriptionId": "sub2",
+                "location": "eastus2",
+                "properties": {
+                    "description": "Routes SAP telemetry",
+                    "destinations": {
+                        "logAnalytics": [
+                            {
+                                "workspaceResourceId": "/subscriptions/sub1/resourceGroups/rg-monitor/providers/Microsoft.OperationalInsights/workspaces/law1"
+                            }
+                        ]
+                    }
+                },
+                "tags": {},
+            }
+        ]
+
+    monkeypatch.setattr("tools.azdisc.discover.query", fake_query)
+
+    candidates = run_related_candidates(cfg)
+
+    assert len(candidates) == 1
+    assert candidates[0][_DEEP_MATCH_FIELD] == ["SAP"]
+    assert candidates[0][_DEEP_REASON_FIELD][0]["matchField"] == "properties"
+    assert candidates[0][_DEEP_REASON_FIELD][0]["matchFields"] == ["properties"]
+    related = candidates[0][_DEEP_REASON_FIELD][1]["relatedResources"]
+    assert [item["name"] for item in related] == ["law1"]
+    assert "candidate refers to base inventory" in related[0]["association"]
+
+
+
+def test_prepare_related_extended_inventory_writes_extended_seed(tmp_path):
     base_inventory = [
         {
             "id": "/subscriptions/sub1/resourceGroups/rg-app/providers/Microsoft.Web/sites/app1",
@@ -181,9 +253,6 @@ def test_prepare_related_extended_inventory_merges_promoted_resources(tmp_path):
         }
     ]
     (tmp_path / "inventory.json").write_text(json.dumps(base_inventory))
-    (tmp_path / "unresolved.json").write_text(json.dumps([
-        "/subscriptions/sub1/resourceGroups/rg-shared/providers/Microsoft.Network/virtualNetworks/vnet-shared"
-    ]))
 
     cfg = Config(
         app="sap-app",
@@ -199,9 +268,76 @@ def test_prepare_related_extended_inventory_merges_promoted_resources(tmp_path):
     extended_cfg = prepare_related_extended_inventory(cfg)
 
     assert extended_cfg.outputDir == str(cfg.extended_output_dir())
-    extended_inventory = json.loads(extended_cfg.out("inventory.json").read_text())
-    assert [item["name"] for item in extended_inventory] == ["app1", "sap-sync"]
-    assert extended_inventory[1][_DEEP_MATCH_FIELD] == ["SAP"]
-    assert json.loads(extended_cfg.out("unresolved.json").read_text()) == [
-        "/subscriptions/sub1/resourceGroups/rg-shared/providers/Microsoft.Network/virtualNetworks/vnet-shared"
+    extended_seed = json.loads(extended_cfg.out("seed.json").read_text())
+    assert [item["name"] for item in extended_seed] == ["app1", "sap-sync"]
+    assert extended_seed[1][_DEEP_MATCH_FIELD] == ["SAP"]
+    assert not extended_cfg.out("inventory.json").exists()
+
+
+def test_related_extend_promoted_resources_can_be_expanded(tmp_path, monkeypatch):
+    base_inventory = [
+        {
+            "id": "/subscriptions/sub1/resourceGroups/rg-app/providers/Microsoft.Web/sites/app1",
+            "name": "app1",
+            "type": "Microsoft.Web/sites",
+            "resourceGroup": "rg-app",
+            "subscriptionId": "sub1",
+            "location": "eastus",
+            "properties": {},
+        }
     ]
+    promoted = [
+        {
+            "id": "/subscriptions/sub2/resourceGroups/rg-ops/providers/Microsoft.Compute/virtualMachines/sap-vm",
+            "name": "sap-vm",
+            "type": "Microsoft.Compute/virtualMachines",
+            "resourceGroup": "rg-ops",
+            "subscriptionId": "sub2",
+            "location": "eastus2",
+            "properties": {
+                "networkProfile": {
+                    "networkInterfaces": [
+                        {"id": "/subscriptions/sub2/resourceGroups/rg-ops/providers/Microsoft.Network/networkInterfaces/nic1"}
+                    ]
+                }
+            },
+            _DEEP_MATCH_FIELD: ["SAP"],
+        }
+    ]
+    (tmp_path / "inventory.json").write_text(json.dumps(base_inventory))
+
+    cfg = Config(
+        app="sap-app",
+        subscriptions=["sub1", "sub2"],
+        seedResourceGroups=["rg-app"],
+        outputDir=str(tmp_path),
+    )
+    cfg.deepDiscovery.enabled = True
+    cfg.deepDiscovery.searchStrings = ["SAP"]
+    cfg.ensure_deep_output_dir()
+    cfg.deep_out(cfg.deepDiscovery.promotedFile).write_text(json.dumps(promoted))
+
+    extended_cfg = prepare_related_extended_inventory(cfg)
+
+    def fake_query_by_ids(ids, _subscriptions):
+        if ids == ["/subscriptions/sub2/resourcegroups/rg-ops/providers/microsoft.network/networkinterfaces/nic1"]:
+            return [{
+                "id": "/subscriptions/sub2/resourceGroups/rg-ops/providers/Microsoft.Network/networkInterfaces/nic1",
+                "name": "nic1",
+                "type": "Microsoft.Network/networkInterfaces",
+                "resourceGroup": "rg-ops",
+                "subscriptionId": "sub2",
+                "location": "eastus2",
+                "properties": {"ipConfigurations": []},
+            }]
+        return []
+
+    monkeypatch.setattr("tools.azdisc.discover.query_by_ids", fake_query_by_ids)
+    monkeypatch.setattr("tools.azdisc.discover.query", lambda *_args, **_kwargs: [])
+
+    from tools.azdisc.discover import run_expand
+
+    run_expand(extended_cfg)
+
+    extended_inventory = json.loads(extended_cfg.out("inventory.json").read_text())
+    assert {item["name"] for item in extended_inventory} == {"app1", "nic1", "sap-vm"}

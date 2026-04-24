@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from .arg import query, query_by_ids, resolve_subscriptions
 from .azcli import run_az_json
@@ -148,6 +148,14 @@ def _query_by_ids_with_cfg(ids: List[str], cfg: Config) -> List[Dict[str, Any]]:
     except TypeError:
         return query_by_ids(ids, cfg.subscriptions)
 
+
+def _query_reverse_related_with_cfg(kusto: str, cfg: Config) -> List[Dict[str, Any]]:
+    try:
+        return query(kusto, cfg.subscriptions, cfg.seedManagementGroups)
+    except TypeError:
+        return query(kusto, cfg.subscriptions)
+
+
 def _seed_query(cfg: Config) -> str:
     if cfg.seedEntireSubscriptions or (cfg.seedManagementGroups and not (cfg.seedResourceGroups or cfg.seedResourceIds or cfg.seedTags or cfg.seedTagKeys)):
         return (
@@ -254,25 +262,10 @@ def _extract_related_references(resource: Dict) -> List[Dict[str, str]]:
             for asg_idx, asg in enumerate(_safe_get(ipc, "properties", "applicationSecurityGroups") or []):
                 _append_reference(refs, seen, _safe_get(asg, "id"), path=f"properties.ipConfigurations[{idx}].properties.applicationSecurityGroups[{asg_idx}].id", relationship="nic-asg", note="NIC application security group")
 
-    elif t == "microsoft.network/virtualnetworks":
-        for idx, peer in enumerate(_safe_get(p, "virtualNetworkPeerings") or []):
-            _append_reference(refs, seen, _safe_get(peer, "properties", "remoteVirtualNetwork", "id"), path=f"properties.virtualNetworkPeerings[{idx}].properties.remoteVirtualNetwork.id", relationship="vnet-peering", note="VNet peering target")
-
     elif t == "microsoft.network/virtualnetworks/subnets" or "/subnets/" in (resource.get("id") or "").lower():
         _append_reference(refs, seen, _safe_get(p, "networkSecurityGroup", "id"), path="properties.networkSecurityGroup.id", relationship="subnet-nsg", note="Subnet network security group")
         rt_id = _safe_get(p, "routeTable", "id")
         _append_reference(refs, seen, rt_id, path="properties.routeTable.id", relationship="subnet-route-table", note="Subnet route table")
-        if rt_id:
-            parts = rt_id.split("/")
-            if "subscriptions" in parts and "resourceGroups" in parts:
-                try:
-                    sub_idx = parts.index("subscriptions") + 1
-                    rg_idx = parts.index("resourceGroups") + 1
-                    sub_id = parts[sub_idx]
-                    rg_name = parts[rg_idx]
-                    _append_reference(refs, seen, f"/subscriptions/{sub_id}/resourceGroups/{rg_name}", path="properties.routeTable.id", relationship="subnet-route-table-resource-group", note="Route table resource group context")
-                except Exception:
-                    pass
 
     elif t == "microsoft.network/networksecuritygroups":
         for rule_idx, rule in enumerate(_safe_get(p, "securityRules") or []):
@@ -366,6 +359,68 @@ def _extract_all_references(resource: Dict) -> List[Dict[str, str]]:
     return refs
 
 
+def _reverse_attachment_queries(nic_ids: Iterable[str]) -> List[str]:
+    normalized_nics = sorted({normalize_id(rid) for rid in nic_ids if rid})
+    if not normalized_nics:
+        return []
+    quoted_nics = ", ".join(f"'{_kusto_quote(rid)}'" for rid in normalized_nics)
+    return [
+        (
+            "resources "
+            "| where type =~ 'microsoft.network/loadBalancers' "
+            "| mv-expand backendAddressPool = properties.backendAddressPools to typeof(dynamic) "
+            "| mv-expand backendIpConfiguration = backendAddressPool.properties.backendIPConfigurations to typeof(dynamic) "
+            "| extend matchedTargetId = tolower(split(tostring(backendIpConfiguration.id), '/ipconfigurations/')[0]) "
+            f"| where matchedTargetId in~ ({quoted_nics}) "
+            f"| {_RESOURCE_PROJECT}, matchedTargetId"
+        ),
+        (
+            "resources "
+            "| where type =~ 'microsoft.network/publicIPAddresses' "
+            "| extend matchedTargetId = tolower(split(tostring(properties.ipConfiguration.id), '/ipconfigurations/')[0]) "
+            f"| where matchedTargetId in~ ({quoted_nics}) "
+            f"| {_RESOURCE_PROJECT}, matchedTargetId"
+        ),
+    ]
+
+
+def _find_reverse_attachment_references(collected: Dict[str, Dict], cfg: Config) -> List[Dict[str, str]]:
+    nic_ids = [
+        rid
+        for rid, resource in collected.items()
+        if str(resource.get("type", "")).lower() == "microsoft.network/networkinterfaces"
+    ]
+    refs: List[Dict[str, str]] = []
+    seen: Set[tuple[str, str]] = set()
+    for kusto in _reverse_attachment_queries(nic_ids):
+        for row in _query_reverse_related_with_cfg(kusto, cfg):
+            target_id = normalize_id(row.get("id", ""))
+            matched_target = normalize_id(row.get("matchedTargetId", ""))
+            if not target_id or not matched_target:
+                continue
+            relation_type = str(row.get("type", "")).lower()
+            if relation_type == "microsoft.network/loadbalancers":
+                relationship = "backend-nic-load-balancer"
+                note = "Load balancer backend pool contains discovered NIC"
+            elif relation_type == "microsoft.network/publicipaddresses":
+                relationship = "nic-public-ip"
+                note = "Public IP is attached to discovered NIC"
+            else:
+                continue
+            key = (target_id, matched_target)
+            if key in seen:
+                continue
+            seen.add(key)
+            refs.append({
+                "targetId": target_id,
+                "sourceId": matched_target,
+                "path": "reverse-attachment",
+                "relationship": relationship,
+                "note": note,
+            })
+    return refs
+
+
 def _derive_parent_references(referenced: Iterable[str]) -> List[Dict[str, str]]:
     parents: List[Dict[str, str]] = []
     seen: Set[str] = set()
@@ -448,43 +503,104 @@ def _synthesize_subnets_from_vnets(
     return resolved_from_vnet
 
 
+def _resource_search_haystacks(resource: Dict[str, Any]) -> Dict[str, str]:
+    return {
+        "name": str(resource.get("name") or ""),
+        "tags": json.dumps(resource.get("tags") or {}, sort_keys=True),
+        "properties": json.dumps(resource.get("properties") or {}, sort_keys=True),
+    }
+
+
+def _matching_search_details(resource: Dict[str, Any], search_strings: List[str]) -> Tuple[List[str], Dict[str, List[str]]]:
+    matched_fields: Dict[str, List[str]] = {}
+    if not search_strings:
+        return [], matched_fields
+    for field, haystack in _resource_search_haystacks(resource).items():
+        lowered = haystack.lower()
+        matched = sorted({term for term in search_strings if term.lower() in lowered}, key=str.lower)
+        if matched:
+            matched_fields[field] = matched
+    merged = sorted({term for values in matched_fields.values() for term in values}, key=str.lower)
+    return merged, matched_fields
+
+
 def _matching_inventory_context(resource: Dict[str, Any], inventory: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     matched_terms = [term for term in resource.get(_DEEP_MATCH_FIELD, []) if isinstance(term, str) and term]
     if not matched_terms:
         return []
+
+    resource_id = normalize_id(resource.get("id", ""))
+    outgoing_refs: Dict[str, List[Dict[str, str]]] = {}
+    for ref in _extract_all_references(resource):
+        outgoing_refs.setdefault(ref["targetId"], []).append(ref)
+
     hits: List[Dict[str, str]] = []
     for candidate in inventory:
-        name = candidate.get("name") or ""
-        haystack = f"{name}\n{json.dumps(candidate.get('tags') or {}, sort_keys=True)}\n{json.dumps(candidate.get('properties') or {}, sort_keys=True)}".lower()
-        matched = [term for term in matched_terms if term.lower() in haystack]
-        if matched:
-            hits.append({
-                "id": candidate.get("id", ""),
-                "name": name,
-                "type": candidate.get("type", ""),
-                "matchedTerms": ", ".join(matched),
-            })
-    hits.sort(key=lambda item: (item["name"].lower(), item["id"]))
+        candidate_id = normalize_id(candidate.get("id", ""))
+        if not candidate_id or candidate_id == resource_id:
+            continue
+
+        associations: List[str] = []
+        related_matches, related_fields = _matching_search_details(candidate, matched_terms)
+        if related_matches:
+            field_text = ", ".join(sorted(related_fields))
+            associations.append(f"shared matched terms in base inventory {field_text}")
+
+        if candidate_id in outgoing_refs:
+            ref = outgoing_refs[candidate_id][0]
+            associations.append(f"candidate refers to base inventory via {ref.get('path', 'properties')}")
+
+        incoming_refs = [ref for ref in _extract_all_references(candidate) if ref.get("targetId") == resource_id]
+        if incoming_refs:
+            associations.append(f"base inventory refers to candidate via {incoming_refs[0].get('path', 'properties')}")
+
+        has_direct_reference = candidate_id in outgoing_refs or bool(incoming_refs)
+        if not has_direct_reference and str(candidate.get("type", "")).lower().startswith("microsoft.network/"):
+            continue
+
+        if not associations:
+            continue
+
+        hits.append({
+            "id": candidate.get("id", ""),
+            "name": candidate.get("name", ""),
+            "type": candidate.get("type", ""),
+            "resourceGroup": candidate.get("resourceGroup", ""),
+            "subscriptionId": candidate.get("subscriptionId", ""),
+            "matchedTerms": ", ".join(related_matches),
+            "association": "; ".join(associations),
+            "hasDirectReference": "yes" if len(associations) > (1 if related_matches else 0) else "no",
+        })
+
+    hits.sort(key=lambda item: (item["hasDirectReference"] != "yes", item["name"].lower(), item["id"]))
     return hits[:5]
 
 
-def _candidate_evidence(resource: Dict[str, Any], matches: List[str], inventory: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _candidate_evidence(
+    resource: Dict[str, Any],
+    matches: List[str],
+    matched_fields: Dict[str, List[str]],
+    inventory: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
     if not matches:
         return []
     name = resource.get("name") or "<unnamed>"
+    field_names = sorted(matched_fields)
+    field_label = ", ".join(field_names) if field_names else "name"
     evidence: List[Dict[str, Any]] = [{
         "source": "deep-discovery",
-        "matchField": "name",
+        "matchField": field_label,
+        "matchFields": field_names,
         "matchedTerms": matches,
-        "explanation": f"Candidate surfaced because resource name '{name}' matched search strings: {', '.join(matches)}.",
+        "explanation": f"Candidate surfaced because search strings matched resource {field_label}: {', '.join(matches)} ({name}).",
     }]
     related = _matching_inventory_context(resource, inventory)
     if related:
         evidence.append({
             "source": "base-inventory",
-            "matchField": "name-or-properties",
+            "matchField": "shared-terms-or-references",
             "matchedTerms": matches,
-            "explanation": "Potential in-scope context found in the base inventory sharing one or more matched terms.",
+            "explanation": "Potential in-scope context found in the base inventory through shared matched terms or direct ARM references.",
             "relatedResources": related,
         })
     return evidence
@@ -526,7 +642,10 @@ def write_related_review_report(
             lines.append(f"- Why: {evidence.get('explanation', '')}")
             related = evidence.get("relatedResources") or []
             if related:
-                related_text = "; ".join(f"{entry.get('name', '<unnamed>')} ({entry.get('matchedTerms', '')})" for entry in related)
+                related_text = "; ".join(
+                    f"{entry.get('name', '<unnamed>')} ({entry.get('matchedTerms', '') or 'direct reference'}; {entry.get('association', 'associated')})"
+                    for entry in related
+                )
                 lines.append(f"- Base context: {related_text}")
         lines.append("")
     report_path.write_text("\n".join(lines) + "\n")
@@ -553,14 +672,20 @@ def run_seed(cfg: Config) -> List[Dict]:
 def _deep_discovery_query(cfg: Config) -> str:
     if not cfg.deepDiscovery.searchStrings:
         raise ValueError("deepDiscovery.searchStrings must include at least one value")
-    clauses = [f"name contains '{_kusto_quote(term)}'" for term in cfg.deepDiscovery.searchStrings]
+    clauses = [
+        (
+            f"name contains '{_kusto_quote(term)}' "
+            f"or tostring(tags) contains '{_kusto_quote(term)}' "
+            f"or tostring(properties) contains '{_kusto_quote(term)}'"
+        )
+        for term in cfg.deepDiscovery.searchStrings
+    ]
     where_clause = " or ".join(f"({clause})" for clause in clauses)
     return f"resources | where {where_clause} | {_RESOURCE_PROJECT}"
 
 
-def _matching_search_strings(name: str, search_strings: List[str]) -> List[str]:
-    lowered = (name or "").lower()
-    return [term for term in search_strings if term.lower() in lowered]
+def _matching_search_strings(resource: Dict[str, Any], search_strings: List[str]) -> Tuple[List[str], Dict[str, List[str]]]:
+    return _matching_search_details(resource, search_strings)
 
 
 def _load_inventory_artifact(path: Path, context: str) -> List[Dict[str, Any]]:
@@ -588,14 +713,14 @@ def run_related_candidates(cfg: Config) -> List[Dict]:
         rid = normalize_id(row.get("id", ""))
         if not rid or rid in existing_ids:
             continue
-        matches = _matching_search_strings(row.get("name", ""), cfg.deepDiscovery.searchStrings)
+        matches, matched_fields = _matching_search_strings(row, cfg.deepDiscovery.searchStrings)
         if not matches:
             continue
         entry = dict(row)
         prior = deduped.get(rid)
         merged_matches = sorted(set((prior or {}).get(_DEEP_MATCH_FIELD, [])) | set(matches), key=str.lower)
         entry[_DEEP_MATCH_FIELD] = merged_matches
-        entry[_DEEP_REASON_FIELD] = _candidate_evidence(entry, merged_matches, inventory)
+        entry[_DEEP_REASON_FIELD] = _candidate_evidence(entry, merged_matches, matched_fields, inventory)
         deduped[rid] = entry
 
     candidates = sorted(deduped.values(), key=lambda r: (r.get("subscriptionId", ""), r.get("resourceGroup", ""), r.get("name", ""), r.get("id", "")))
@@ -712,60 +837,13 @@ def _write_expand_reason_artifacts(
     cfg.out(_EXPAND_REASONS_REPORT).write_text("\n".join(lines) + "\n")
 
 
-def prepare_related_extended_inventory(cfg: Config) -> Config:
-    if not cfg.deepDiscovery.enabled:
-        raise ValueError("deepDiscovery.enabled must be true to build an extended related-resource pack")
-
-    inv_path = cfg.out("inventory.json")
-    if not inv_path.exists():
-        raise FileNotFoundError("inventory.json not found. Run 'expand' or 'run' first.")
-    promoted_path = cfg.deep_out(cfg.deepDiscovery.promotedFile)
-    if not promoted_path.exists():
-        raise FileNotFoundError(f"Promoted related resource file not found at {promoted_path}. Run 'related-candidates' first and curate the promoted file.")
-
-    base_inventory = _load_inventory_artifact(inv_path, "Extended pack base inventory")
-    promoted_inventory = _load_inventory_artifact(promoted_path, "Extended pack promoted related resources")
-
-    merged: Dict[str, Dict[str, Any]] = {normalize_id(r["id"]): dict(r) for r in base_inventory if r.get("id")}
-    for resource in promoted_inventory:
-        rid = normalize_id(resource.get("id", ""))
-        if not rid:
-            continue
-        merged[rid] = dict(resource)
-
-    unresolved_path = cfg.out("unresolved.json")
-    unresolved: List[str] = load_json_file(
-        unresolved_path,
-        context="Extended pack unresolved references",
-        expected_type=list,
-        advice="Fix unresolved.json or rerun the expand stage.",
-    ) if unresolved_path.exists() else []
-
-    extended_cfg = cfg.with_output_dir(str(cfg.extended_output_dir()))
-    extended_cfg.ensure_output_dir()
-    extended_inventory = sorted(merged.values(), key=lambda r: normalize_id(r.get("id", "")))
-    extended_cfg.out("inventory.json").write_text(json.dumps(extended_inventory, indent=2, sort_keys=True))
-    extended_cfg.out("unresolved.json").write_text(json.dumps(sorted(unresolved), indent=2))
-    log.info("Prepared extended inventory with %d resources at %s", len(extended_inventory), extended_cfg.outputDir)
-    return extended_cfg
-
-
-def run_expand(
+def _expand_resources(
     cfg: Config,
+    seed: List[Dict[str, Any]],
     *,
     software_inventory_workspace: Optional[str] = None,
     software_inventory_days: int = 30,
 ) -> None:
-    seed_path = cfg.out("seed.json")
-    if not seed_path.exists():
-        raise FileNotFoundError(f"seed.json not found at {seed_path}. Run 'seed' first.")
-    seed: List[Dict] = load_json_file(
-        seed_path,
-        context="Seed stage artifact",
-        expected_type=list,
-        advice="Fix seed.json or rerun the seed stage.",
-    )
-
     collected: Dict[str, Dict] = {normalize_id(r["id"]): r for r in seed}
     seed_ids = set(collected.keys())
     unresolved: Set[str] = set()
@@ -795,6 +873,14 @@ def run_expand(
             referenced.add(target_id)
             source = collected.get(ref["sourceId"], {"id": ref["sourceId"], "name": ref["sourceId"], "type": "derived"})
             _append_discovery_reason(reason_map, target_id, _reason_entry(source, ref, iteration + 1, extraction_mode))
+
+        if use_scoped:
+            reverse_refs = _find_reverse_attachment_references(collected, cfg)
+            for ref in reverse_refs:
+                target_id = normalize_id(ref["targetId"])
+                referenced.add(target_id)
+                source = collected.get(ref["sourceId"], {"id": ref["sourceId"], "name": ref["sourceId"], "type": "derived"})
+                _append_discovery_reason(reason_map, target_id, _reason_entry(source, ref, iteration + 1, extraction_mode))
 
         missing = referenced - set(collected.keys()) - unresolved
         if not missing:
@@ -843,6 +929,59 @@ def run_expand(
             inventory=inventory,
         )
     log.info("Wrote inventory (%d resources) and unresolved (%d IDs)", len(inventory), len(unresolved))
+
+
+def prepare_related_extended_inventory(cfg: Config) -> Config:
+    if not cfg.deepDiscovery.enabled:
+        raise ValueError("deepDiscovery.enabled must be true to build an extended related-resource pack")
+
+    inv_path = cfg.out("inventory.json")
+    if not inv_path.exists():
+        raise FileNotFoundError("inventory.json not found. Run 'expand' or 'run' first.")
+    promoted_path = cfg.deep_out(cfg.deepDiscovery.promotedFile)
+    if not promoted_path.exists():
+        raise FileNotFoundError(f"Promoted related resource file not found at {promoted_path}. Run 'related-candidates' first and curate the promoted file.")
+
+    base_inventory = _load_inventory_artifact(inv_path, "Extended pack base inventory")
+    promoted_inventory = _load_inventory_artifact(promoted_path, "Extended pack promoted related resources")
+
+    merged: Dict[str, Dict[str, Any]] = {normalize_id(r["id"]): dict(r) for r in base_inventory if r.get("id")}
+    for resource in promoted_inventory:
+        rid = normalize_id(resource.get("id", ""))
+        if not rid:
+            continue
+        merged[rid] = dict(resource)
+
+    extended_cfg = cfg.with_output_dir(str(cfg.extended_output_dir()))
+    extended_cfg.ensure_output_dir()
+    extended_seed = sorted(merged.values(), key=lambda r: normalize_id(r.get("id", "")))
+    extended_cfg.out("seed.json").write_text(json.dumps(extended_seed, indent=2, sort_keys=True))
+    log.info("Prepared extended seed with %d resources at %s", len(extended_seed), extended_cfg.outputDir)
+    return extended_cfg
+
+
+def run_expand(
+    cfg: Config,
+    *,
+    software_inventory_workspace: Optional[str] = None,
+    software_inventory_days: int = 30,
+) -> None:
+    seed_path = cfg.out("seed.json")
+    if not seed_path.exists():
+        raise FileNotFoundError(f"seed.json not found at {seed_path}. Run 'seed' first.")
+    seed: List[Dict] = load_json_file(
+        seed_path,
+        context="Seed stage artifact",
+        expected_type=list,
+        advice="Fix seed.json or rerun the seed stage.",
+    )
+
+    _expand_resources(
+        cfg,
+        seed,
+        software_inventory_workspace=software_inventory_workspace,
+        software_inventory_days=software_inventory_days,
+    )
 
 
 def run_rbac(cfg: Config) -> None:

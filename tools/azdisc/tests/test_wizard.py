@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from tools.azdisc import wizard
 from tools.azdisc.wizard import run_wizard
 
 
@@ -32,6 +33,7 @@ def test_run_wizard_writes_full_subscription_config_and_instructions(tmp_path):
         "",
         "",
         "",
+        "n",
         "y",
         "",
         "n",
@@ -93,3 +95,33 @@ def test_run_wizard_can_execute_selected_actions(tmp_path):
     cfg = json.loads(config_path.read_text())
     assert cfg["seedResourceGroups"] == ["rg-app"]
     assert cfg["migrationPlan"]["enabled"] is False
+
+def test_default_run_generates_master_report_after_optional_outputs(monkeypatch, tmp_path):
+    config_path = tmp_path / "wizard.json"
+    config_path.write_text(json.dumps({
+        "app": "checkout",
+        "subscriptions": ["sub1"],
+        "seedResourceGroups": ["rg-app"],
+        "outputDir": str(tmp_path / "out"),
+        "applicationSplit": {"enabled": True},
+        "migrationPlan": {"enabled": True},
+    }))
+    calls = []
+
+    for name in (
+        "run_seed",
+        "run_expand",
+        "run_rbac",
+        "run_policy",
+        "build_graph",
+        "generate_drawio",
+        "generate_docs",
+        "run_split",
+        "generate_migration_plan",
+        "generate_master_report",
+    ):
+        monkeypatch.setattr(wizard, name, lambda *args, _name=name, **kwargs: calls.append(_name))
+
+    wizard._default_execute("run", str(config_path))
+
+    assert calls[-3:] == ["run_split", "generate_migration_plan", "generate_master_report"]

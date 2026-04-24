@@ -59,13 +59,13 @@ python3 -m tools.azdisc [-v] <command> <config.json>
 
 #### `run` — Run the full pipeline
 
-Executes all pipeline stages in order: seed, expand, rbac, policy, graph, drawio, focused VM packs, docs. When virtual machines are present in the discovered inventory, `run` also generates focused per-VM packs under `vms/`. When `applicationSplit.enabled` is `true`, `run` also generates per-application outputs after the root diagram and docs are written. When `migrationPlan.enabled` is `true`, `run` generates migration planning packs after any split outputs are available.
+Executes all pipeline stages in order: seed, expand, rbac, policy, graph, drawio, focused VM packs, docs, optional split and migration outputs, and the consolidated `master_report.md`. When virtual machines are present in the discovered inventory, `run` also generates focused per-VM packs under `vms/`. When `applicationSplit.enabled` is `true`, `run` also generates per-application outputs after the root diagram and docs are written. When `migrationPlan.enabled` is `true`, `run` generates migration planning packs after any split outputs are available.
 
 ```bash
 python3 -m tools.azdisc run app/myapp/config.json
 ```
 
-This is the most common way to use the tool. A single command produces the complete diagram and all documentation from scratch.
+This is the most common way to use the tool. A single command produces the complete diagram and documentation from scratch. Open `master_report.md` first; it is the default landing page that links the generated inventory, topology, governance, migration, and supporting artifacts.
 
 To also export per-VM software inventory from Change Tracking and Inventory while discovery runs, pass a Log Analytics workspace identifier:
 
@@ -250,13 +250,13 @@ A common tag-driven workflow is:
 
 #### `expand` — Transitively expand resources
 
-Reads `seed.json` and recursively discovers related resources by scanning all ARM ID references embedded in resource properties. Resources referenced but not yet collected are fetched from ARG in batches of 200 IDs. This loop repeats (up to 50 iterations) until convergence — i.e., no new IDs are found.
+Reads `seed.json` and recursively completes the workload topology around the seeded resources. In the default `expandScope: "related"` mode, expansion follows curated forward references such as VM -> NIC -> subnet and also performs a narrow reverse-attachment lookup for common Azure network infrastructure such as load balancers and public IPs attached to discovered NICs. To avoid hub-and-spoke noise, scoped expansion does not walk broad network fan-out such as VNet peerings. Resources referenced but not yet collected are fetched from ARG in batches of 200 IDs. This loop repeats (up to 50 iterations) until convergence — i.e., no new IDs are found.
 
 ```bash
 python3 -m tools.azdisc expand app/myapp/config.json
 ```
 
-This stage is what makes the tool discover resources across resource group boundaries. For example, if a NIC in `rg-app-prod` references a subnet in `rg-network-shared`, the expand stage will automatically fetch that subnet even though it was not in the seed list.
+This stage is what makes the tool discover resources across resource group boundaries and complete the attached application topology. For example, if a NIC in `rg-app-prod` references a subnet in `rg-network-shared`, the expand stage will automatically fetch that subnet even though it was not in the seed list. Likewise, if a discovered VM NIC is a backend member of a load balancer, the related load balancer is pulled into the inventory even though the NIC does not directly reference it.
 
 IDs that match non-resource patterns (marketplace image references, location metadata, role/policy definitions) are automatically filtered out.
 
@@ -271,7 +271,7 @@ Use `--software-inventory-days <n>` to control the Log Analytics lookback window
 **Requires:** `seed.json` in the output directory, Azure CLI authenticated.
 **Produces:** `inventory.json`, `unresolved.json`, `expand_reasons.json`, `expand_reasons.md`
 
-#### `related-candidates` — Find possible related resources by name
+#### `related-candidates` — Find possible related resources by name, tags, or properties
 
 Runs the first step of the deep-discovery workflow and writes candidate artifacts under the configured deep-discovery directory.
 
@@ -295,14 +295,14 @@ python3 -m tools.azdisc review-related app/myapp/config.json
 
 #### `related-extend` — Generate an extended pack from curated matches
 
-Runs the second step of the deep-discovery workflow by merging the curated promoted resources into a separate extended output directory and reusing the normal report and diagram pipeline there.
+Runs the second step of the deep-discovery workflow by writing a separate extended seed set from the curated promoted resources and base inventory, then rerunning normal expansion, graphing, and reporting in the extended output directory.
 
 ```bash
 python3 -m tools.azdisc related-extend app/myapp/config.json
 ```
 
 **Requires:** base `inventory.json`, curated promoted related-resource file.
-**Produces:** the configured extended inventory plus the derived graph, diagram, and report artifacts.
+**Produces:** an extended `seed.json`, expanded `inventory.json`, and the derived graph, diagram, and report artifacts.
 
 #### `graph` — Build graph model
 
@@ -497,7 +497,7 @@ This is especially useful with `seedResourceIds` when you want a deterministic o
 
 #### `master-report` — Generate a consolidated architecture report
 
-Reads the current output folder and writes a single `master_report.md` that links inventory, topology, routing, migration, governance, and migration-planning artifacts. When policy and RBAC artifacts are present, it also includes snapshot counts and a per-resource access summary table.
+Reads the current output folder and writes a single `master_report.md` that links inventory, topology, routing, migration, governance, and migration-planning artifacts. The main `run` command now generates this by default; use `master-report` when you want to regenerate only the consolidated report from existing artifacts. When policy and RBAC artifacts are present, it also includes snapshot counts and a per-resource access summary table.
 
 ```bash
 python3 -m tools.azdisc master-report app/myapp/config.json
@@ -667,7 +667,7 @@ The tool reads a JSON configuration file. An example is provided at `app/myapp/c
 | `layout` | `string` | No | `"SUB>REGION>RG>NET"` | `"SUB>REGION>RG>NET"` | The only supported layout. Groups nodes as subscription → region → resource group, with separate Networking and Resources sections inside each RG. |
 | `diagramMode` | `string` | No | `"MSFT"` | `"MSFT"`, `"L2R"` | Rendering mode for the supported layout. See [Diagram Modes](#diagram-modes). |
 | `spacing` | `string` | No | `"compact"` | `"compact"`, `"spacious"` | Whitespace preset for diagram layout. |
-| `expandScope` | `string` | No | `"related"` | `"related"`, `"all"` | Discovery breadth during `expand`. `related` follows known relationship references; `all` follows every ARM ID found in resource properties. |
+| `expandScope` | `string` | No | `"related"` | `"related"`, `"all"` | Discovery breadth during `expand`. `related` completes workload topology using curated forward references plus narrow reverse attachment lookups for common Azure networking while intentionally avoiding high-noise fan-out such as VNet peerings; `all` follows every ARM ID found in resource properties. |
 | `inventoryGroupBy` | `string` | No | `"type"` | `"type"`, `"rg"` | Controls the top-level grouping in `inventory.yaml`. |
 | `networkDetail` | `string` | No | `"full"` | `"compact"`, `"full"` | Network rendering detail level. `compact` hides plumbing nodes such as NICs and subnets and replaces them with per-resource network summary annotations where supported. |
 | `edgeLabels` | `bool` | No | `false` | `true`, `false` | When `true`, writes textual relationship labels on diagram edges. |
@@ -694,7 +694,7 @@ You can combine `seedResourceGroups`, `seedResourceIds`, `seedTags`, and `seedTa
 
 ## Deep Discovery
 
-Use deep discovery when the normal seeded discovery is complete but you still need to do due diligence for possible related resources that may sit in a different resource group or subscription and may not be reachable through ARM-ID expansion. The intended use case is catching name-based clues such as `SAP` or `bpc` in resources like Logic Apps or Data Collection Rules.
+Use deep discovery when the normal seeded discovery is complete but you still need to do due diligence for possible related resources that may sit in a different resource group or subscription and may not be reachable through ARM-ID expansion. The intended use case is catching clues such as `SAP` or `bpc` in resource names, tags, or configuration properties for resources like Logic Apps or Data Collection Rules.
 
 This workflow is intentionally separate from the default `run` pipeline:
 - Base discovery stays deterministic and scope-driven.
@@ -706,7 +706,7 @@ This workflow is intentionally separate from the default `run` pipeline:
 Deep discovery has two commands:
 
 1. `related-candidates`
-   Searches Azure Resource Graph across the configured `subscriptions` for resources whose `name` contains one or more configured `deepDiscovery.searchStrings`.
+   Searches Azure Resource Graph across the configured `subscriptions` for resources whose `name`, `tags`, or `properties` contain one or more configured `deepDiscovery.searchStrings`.
 
 2. `review-related`
    Opens the candidate set in a terminal review loop so you can inspect nested JSON, filter noise, and update the promoted file without manually editing raw JSON.
@@ -731,7 +731,7 @@ Deep discovery has two commands:
 
 Field meanings:
 - `enabled`: turns the feature on for the related-resource commands.
-- `searchStrings`: case-insensitive substrings matched against Azure resource `name`.
+- `searchStrings`: case-insensitive substrings matched against Azure resource `name`, `tags`, and serialized `properties`.
 - `candidateFile`: raw candidate output written by `related-candidates`.
 - `promotedFile`: editable file used to curate which candidates should enter the extended pack.
 - `outputDirName`: subdirectory under the base `outputDir` used for deep-discovery artifacts.
@@ -745,14 +745,14 @@ Field meanings:
 python3 -m tools.azdisc run app/myapp/config.json
 ```
 
-2. Find possible related resources by name.
+2. Find possible related resources by name, tag content, or configuration content.
 
 ```bash
 python3 -m tools.azdisc related-candidates app/myapp/config.json
 ```
 
 This writes two files under `outputDir/deep-discovery/` by default:
-- `related_candidates.json`: the raw candidate set discovered by name matching, now including additive explainability metadata.
+- `related_candidates.json`: the raw candidate set discovered by name, tag, and property matching, including explainability metadata and base-inventory association hints.
 - `related_promoted.json`: initialized with the same content so the user can remove noise.
 - `related_review.md`: a Markdown review/report artifact describing why each candidate was surfaced and whether it is currently kept or dropped.
 
@@ -767,7 +767,8 @@ python3 -m tools.azdisc related-extend app/myapp/config.json
 ```
 
 This writes a separate pack under `outputDir/deep-discovery/extended/` by default, including:
-- merged `inventory.json`
+- extended `seed.json`
+- expanded `inventory.json`
 - `graph.json`
 - `diagram.drawio`
 - Markdown reports
@@ -775,8 +776,10 @@ This writes a separate pack under `outputDir/deep-discovery/extended/` by defaul
 
 ### Behavior Notes
 
-- Matching is currently case-insensitive substring matching on `resources.name` only.
+- Matching is case-insensitive substring matching on `resources.name`, `tags`, and serialized `properties`.
 - Candidates already present in the base `inventory.json` are excluded.
+- Candidate evidence highlights direct ARM-reference associations back to the base inventory when they exist, so property hits can still be tied to the seeded workload during review.
+- Shared-term-only network context is intentionally suppressed in deep-discovery review output unless there is a direct ARM reference, which helps reduce generic VNet and subnet noise.
 - `related-candidates` initializes the promoted file from the raw candidate set each time it runs.
 - `related-extend` uses only the curated promoted file, not the full candidate file.
 - The base output directory is not modified by the extended generation step.

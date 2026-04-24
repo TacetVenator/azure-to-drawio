@@ -445,7 +445,10 @@ def _build_related_view(rows: List[Dict[str, Any]], title: str) -> ViewModel:
                         name=related.get("name") or related_id.split("/")[-1],
                         type_name=related.get("type") or "base-inventory-context",
                         fill=CONTEXT_FILL,
-                        attributes=[f"matched terms: {related.get('matchedTerms', '')}"] if related.get("matchedTerms") else [],
+                        attributes=[
+                            *( [f"matched terms: {related.get('matchedTerms', '')}"] if related.get("matchedTerms") else [] ),
+                            *( [f"association: {related.get('association', '')}"] if related.get("association") else [] ),
+                        ],
                         subscription_label="External / Unresolved" if not (related.get("subscriptionId") or row.get("subscriptionId")) else None,
                     )
                 overlay_edges.append(

@@ -39,6 +39,7 @@ def _candidate_context(candidate: Dict[str, Any]) -> str:
         for related in evidence.get("relatedResources") or []:
             parts.append(related.get("name", ""))
             parts.append(related.get("matchedTerms", ""))
+            parts.append(related.get("association", ""))
     return "\n".join(parts).lower()
 
 

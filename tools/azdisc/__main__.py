@@ -64,6 +64,7 @@ def cmd_expand(args) -> None:
 def cmd_related_extend(args) -> None:
     cfg = load_config(args.config)
     extended_cfg = prepare_related_extended_inventory(cfg)
+    run_expand(extended_cfg)
     if extended_cfg.includeRbac:
         run_rbac(extended_cfg)
     if extended_cfg.includePolicy:
@@ -127,6 +128,7 @@ def cmd_run(args) -> None:
         run_split(cfg)
     if cfg.migrationPlan.enabled:
         generate_migration_plan(cfg)
+    generate_master_report(cfg)
     log.info("Pipeline complete for app=%s", cfg.app)
 
 

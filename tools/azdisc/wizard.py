@@ -343,6 +343,7 @@ def _default_execute(action: str, config_path: str) -> None:
             run_split(cfg)
         if cfg.migrationPlan.enabled:
             generate_migration_plan(cfg)
+        generate_master_report(cfg)
         return
     if action == "report-all":
         run_report_all(cfg)
