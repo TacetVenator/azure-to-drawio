@@ -93,7 +93,7 @@ _ASSOCIATION_EDGE_KINDS = {
     "subnet->nsg", "subnet->routeTable", "nic->nsg", "nic->asg",
     "nsgRule->sourceAsg", "nsgRule->destAsg",
     "rbac_assignment", "appInsights->workspace", "udr_detail", "nsg_detail",
-    "activityLog->access",
+    "activityLog->access", "resource->dependency",
 }
 _PEERING_EDGE_KINDS = {
     "vnet->peeredVnet",
@@ -243,6 +243,11 @@ NET_CONTEXT_EDGE_STYLE = (
     "strokeColor=#6c8ebf;dashed=1;strokeWidth=1;"
 )
 
+CALLOUT_COLUMN_WIDTH = 260
+CALLOUT_COLUMN_GAP = 24
+CALLOUT_COLUMN_ITEM_GAP = 12
+CALLOUT_COLUMN_MARGIN = 20
+
 
 def _edge_style(kind: str, msft: bool = False) -> str:
     """Return the appropriate edge style based on edge kind and rendering mode."""
@@ -337,6 +342,72 @@ def _diagram_inventory_lines(nodes: List[Dict], visible_node_ids: set[str]) -> L
     return lines
 
 
+def _resource_type_description(resource_type: str) -> str:
+    if not resource_type:
+        return "Unknown resource type"
+    parts = [segment for segment in resource_type.split("/") if segment]
+    if len(parts) == 1:
+        return parts[0]
+    provider = parts[0]
+    family = " / ".join(parts[1:])
+    return f"{provider} - {family}"
+
+
+def _write_resource_catalog(
+    cfg: Config,
+    nodes: List[Dict],
+    visible_node_ids: set[str],
+    icons_used: Dict[str, Any],
+) -> None:
+    type_counts: Dict[str, int] = defaultdict(int)
+    for node in nodes:
+        node_id = node.get("id")
+        if not node_id or node_id not in visible_node_ids:
+            continue
+        node_type = (node.get("type") or "").lower()
+        if node_type.startswith("__boundary__"):
+            continue
+        type_counts[node_type or "unknown"] += 1
+
+    if not type_counts:
+        cfg.out("resource_catalog.json").write_text("[]\n")
+        return
+
+    mapped = icons_used.get("mapped") or {}
+    fallback = set(icons_used.get("fallback") or [])
+    unknown = set(icons_used.get("unknown") or [])
+
+    rows: List[Dict[str, Any]] = []
+    for resource_type in sorted(type_counts):
+        if resource_type in unknown:
+            icon_status = "unknown"
+        elif resource_type in fallback:
+            icon_status = "fallback"
+        elif mapped.get(resource_type):
+            icon_status = "mapped"
+        else:
+            icon_status = "unknown"
+        rows.append({
+            "type": resource_type,
+            "count": type_counts[resource_type],
+            "category": _type_category(resource_type),
+            "description": _resource_type_description(resource_type),
+            "iconStatus": icon_status,
+        })
+
+    payload = {
+        "summary": {
+            "resourceCount": sum(type_counts.values()),
+            "typeCount": len(rows),
+            "mappedTypeCount": sum(1 for row in rows if row["iconStatus"] == "mapped"),
+            "fallbackTypeCount": sum(1 for row in rows if row["iconStatus"] == "fallback"),
+            "unknownTypeCount": sum(1 for row in rows if row["iconStatus"] == "unknown"),
+        },
+        "types": rows,
+    }
+    cfg.out("resource_catalog.json").write_text(json.dumps(payload, indent=2, sort_keys=True))
+
+
 def _emit_text_panel(
     root: ET.Element,
     panel_id: str,
@@ -371,12 +442,31 @@ def _emit_resource_metadata_boxes(
     positions: Dict[str, Tuple[int, int, int, int]],
     node_parents: Dict[str, str],
     container_positions: Dict[str, Tuple[int, int]],
+    callout_column: Optional[Dict[str, int]] = None,
 ) -> None:
     attr_edge_style = (
         "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;"
         "strokeColor=#9673a6;dashed=1;strokeWidth=2;"
     )
-    for node in nodes:
+    ordered_nodes = sorted(
+        [n for n in nodes if n.get("id") in positions],
+        key=lambda n: (
+            _absolute_child_position(
+                positions[n["id"]][0],
+                positions[n["id"]][1],
+                node_parents.get(n["id"], LAYER_RESOURCES),
+                container_positions,
+            )[1],
+            _absolute_child_position(
+                positions[n["id"]][0],
+                positions[n["id"]][1],
+                node_parents.get(n["id"], LAYER_RESOURCES),
+                container_positions,
+            )[0],
+            n.get("name", "").lower(),
+        ),
+    )
+    for node in ordered_nodes:
         nid = node.get("id")
         if not nid or nid not in positions:
             continue
@@ -389,10 +479,13 @@ def _emit_resource_metadata_boxes(
         x, y, _w, _h = positions[nid]
         parent_id = node_parents.get(nid, LAYER_RESOURCES)
         abs_x, abs_y = _absolute_child_position(x, y, parent_id, container_positions)
-        box_w = 220
+        box_w = callout_column.get("width", CALLOUT_COLUMN_WIDTH) if callout_column else 220
         box_h = max(40, 12 + 16 * len(lines))
-        box_x = abs_x - box_w - 10
-        box_y = abs_y
+        if callout_column:
+            box_x, box_y = _next_callout_slot(callout_column, box_h)
+        else:
+            box_x = abs_x - box_w - 10
+            box_y = abs_y
 
         attr_id = "attr_" + stable_id(nid)
         ab = ET.SubElement(root, "mxCell")
@@ -494,6 +587,256 @@ def _absolute_child_position(
         px, py = container_positions[parent_id]
         return x + px, y + py
     return x, y
+
+
+def _next_callout_slot(column: Dict[str, int], height: int) -> Tuple[int, int]:
+    y = column["cursorY"]
+    column["cursorY"] = y + height + CALLOUT_COLUMN_ITEM_GAP
+    return column["x"], y
+
+
+def _shift_layout_for_left_margin(
+    containers: List[Dict],
+    positions: Dict[str, Tuple[int, int, int, int]],
+    node_parents: Dict[str, str],
+    type_headers: Optional[List[Dict]],
+    required_min_x: int,
+) -> int:
+    """Shift top-level layout right so a left callout column does not overlap content."""
+    if not containers and not positions:
+        return 0
+    container_ids = {c["id"] for c in containers}
+
+    min_x_candidates: List[int] = [c["x"] for c in containers if c.get("parent") == "1"]
+    for nid, (x, _y, _w, _h) in positions.items():
+        parent_id = node_parents.get(nid, LAYER_RESOURCES)
+        if parent_id not in container_ids:
+            min_x_candidates.append(x)
+    if type_headers:
+        for th in type_headers:
+            if th.get("parent") not in container_ids:
+                min_x_candidates.append(th["x"])
+
+    if not min_x_candidates:
+        return 0
+
+    min_x = min(min_x_candidates)
+    dx = max(0, required_min_x - min_x)
+    if dx <= 0:
+        return 0
+
+    for cont in containers:
+        if cont.get("parent") == "1":
+            cont["x"] += dx
+
+    for nid, (x, y, w, h) in list(positions.items()):
+        parent_id = node_parents.get(nid, LAYER_RESOURCES)
+        if parent_id not in container_ids:
+            positions[nid] = (x + dx, y, w, h)
+
+    if type_headers:
+        for th in type_headers:
+            if th.get("parent") not in container_ids:
+                th["x"] += dx
+
+    return dx
+
+
+def _new_left_callout_column(
+    containers: List[Dict],
+    positions: Dict[str, Tuple[int, int, int, int]],
+    node_parents: Dict[str, str],
+) -> Dict[str, int]:
+    """Create a deterministic left-side callout column descriptor."""
+    required_min_x = CALLOUT_COLUMN_MARGIN + CALLOUT_COLUMN_WIDTH + CALLOUT_COLUMN_GAP
+    _shift_layout_for_left_margin(containers, positions, node_parents, None, required_min_x)
+
+    top_y_candidates: List[int] = [c["y"] for c in containers if c.get("parent") == "1"]
+    container_ids = {c["id"] for c in containers}
+    for nid, (_x, y, _w, _h) in positions.items():
+        parent_id = node_parents.get(nid, LAYER_RESOURCES)
+        if parent_id not in container_ids:
+            top_y_candidates.append(y)
+    start_y = max(CALLOUT_COLUMN_MARGIN, min(top_y_candidates) if top_y_candidates else CALLOUT_COLUMN_MARGIN)
+
+    return {
+        "x": CALLOUT_COLUMN_MARGIN,
+        "cursorY": start_y,
+        "width": CALLOUT_COLUMN_WIDTH,
+    }
+
+
+def _fit_nested_container_bounds(
+    containers: List[Dict],
+    positions: Dict[str, Tuple[int, int, int, int]],
+    node_parents: Dict[str, str],
+    type_headers: Optional[List[Dict]] = None,
+    padding: int = 10,
+) -> None:
+    """Ensure each nested container fully encloses its direct children."""
+    by_id = {c["id"]: c for c in containers}
+    child_containers: Dict[str, List[Dict]] = defaultdict(list)
+    child_nodes: Dict[str, List[Tuple[int, int, int, int]]] = defaultdict(list)
+    child_headers: Dict[str, List[Dict]] = defaultdict(list)
+
+    for cont in containers:
+        parent = cont.get("parent")
+        if parent in by_id:
+            child_containers[parent].append(cont)
+
+    for nid, (x, y, w, h) in positions.items():
+        parent = node_parents.get(nid, LAYER_RESOURCES)
+        if parent in by_id:
+            child_nodes[parent].append((x, y, w, h))
+
+    for th in type_headers or []:
+        parent = th.get("parent")
+        if parent in by_id:
+            child_headers[parent].append(th)
+
+    for cont in reversed(_topo_sort_containers(containers)):
+        cid = cont["id"]
+        max_x = 0
+        max_y = 0
+
+        for child in child_containers.get(cid, []):
+            max_x = max(max_x, child["x"] + child["w"])
+            max_y = max(max_y, child["y"] + child["h"])
+        for x, y, w, h in child_nodes.get(cid, []):
+            max_x = max(max_x, x + w)
+            max_y = max(max_y, y + h)
+        for th in child_headers.get(cid, []):
+            max_x = max(max_x, th["x"] + th["w"])
+            max_y = max(max_y, th["y"] + th["h"])
+
+        if max_x > 0:
+            cont["w"] = max(cont["w"], max_x + padding)
+        if max_y > 0:
+            cont["h"] = max(cont["h"], max_y + padding)
+
+
+def _collect_container_overflow_violations(
+    containers: List[Dict],
+    positions: Dict[str, Tuple[int, int, int, int]],
+    node_parents: Dict[str, str],
+    type_headers: Optional[List[Dict]] = None,
+) -> List[Dict[str, Any]]:
+    """Collect child elements that overflow their parent container bounds."""
+    by_id = {c["id"]: c for c in containers}
+    absolute = _container_absolute_positions(containers)
+    violations: List[Dict[str, Any]] = []
+
+    def _check(parent_id: str, item_id: str, x: int, y: int, w: int, h: int, kind: str) -> None:
+        parent_abs = absolute.get(parent_id)
+        parent = by_id.get(parent_id)
+        if not parent_abs or not parent:
+            return
+        px, py = parent_abs
+        pw, ph = parent["w"], parent["h"]
+        overflow = []
+        if x < px:
+            overflow.append("left")
+        if y < py:
+            overflow.append("top")
+        if x + w > px + pw:
+            overflow.append("right")
+        if y + h > py + ph:
+            overflow.append("bottom")
+        if overflow:
+            violations.append(
+                {
+                    "parentId": parent_id,
+                    "itemId": item_id,
+                    "itemKind": kind,
+                    "overflow": overflow,
+                }
+            )
+
+    for cont in containers:
+        parent_id = cont.get("parent")
+        if parent_id in by_id:
+            x, y = _absolute_child_position(cont["x"], cont["y"], parent_id, absolute)
+            _check(parent_id, cont["id"], x, y, cont["w"], cont["h"], "container")
+
+    for nid, (x, y, w, h) in positions.items():
+        parent_id = node_parents.get(nid, LAYER_RESOURCES)
+        if parent_id in by_id:
+            ax, ay = _absolute_child_position(x, y, parent_id, absolute)
+            _check(parent_id, nid, ax, ay, w, h, "node")
+
+    for th in type_headers or []:
+        parent_id = th.get("parent")
+        if parent_id in by_id:
+            ax, ay = _absolute_child_position(th["x"], th["y"], parent_id, absolute)
+            _check(parent_id, th["id"], ax, ay, th["w"], th["h"], "header")
+
+    return violations
+
+
+def _build_overlap_metrics(
+    edges: List[Dict],
+    absolute_rects: Dict[str, Tuple[int, int, int, int]],
+    bucket_size: int = 16,
+) -> Dict[str, Any]:
+    """Approximate edge congestion by bucketing source/target Y centers."""
+    source_buckets: Dict[int, Dict[str, Any]] = defaultdict(lambda: {"count": 0, "kinds": defaultdict(int)})
+    target_buckets: Dict[int, Dict[str, Any]] = defaultdict(lambda: {"count": 0, "kinds": defaultdict(int)})
+    tracked = 0
+
+    for edge in edges:
+        src_id = normalize_id(edge["source"])
+        tgt_id = normalize_id(edge["target"])
+        src_rect = absolute_rects.get(src_id)
+        tgt_rect = absolute_rects.get(tgt_id)
+        if not src_rect or not tgt_rect:
+            continue
+        tracked += 1
+
+        sx, sy, sw, sh = src_rect
+        tx, ty, tw, th = tgt_rect
+        src_y = int(round((sy + sh / 2) / bucket_size) * bucket_size)
+        tgt_y = int(round((ty + th / 2) / bucket_size) * bucket_size)
+
+        source_buckets[src_y]["count"] += 1
+        source_buckets[src_y]["kinds"][edge["kind"]] += 1
+        target_buckets[tgt_y]["count"] += 1
+        target_buckets[tgt_y]["kinds"][edge["kind"]] += 1
+
+    def _hotspots(buckets: Dict[int, Dict[str, Any]]) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
+        for y_lane, payload in buckets.items():
+            if payload["count"] < 2:
+                continue
+            rows.append(
+                {
+                    "y": y_lane,
+                    "count": payload["count"],
+                    "kinds": dict(sorted(payload["kinds"].items())),
+                }
+            )
+        rows.sort(key=lambda row: (-row["count"], row["y"]))
+        return rows
+
+    src_hot = _hotspots(source_buckets)
+    tgt_hot = _hotspots(target_buckets)
+    return {
+        "totalEdges": len(edges),
+        "trackedEdges": tracked,
+        "sourceYHotspots": src_hot,
+        "targetYHotspots": tgt_hot,
+        "maxSourceLaneCount": src_hot[0]["count"] if src_hot else 0,
+        "maxTargetLaneCount": tgt_hot[0]["count"] if tgt_hot else 0,
+    }
+
+
+def _write_overlap_metrics(cfg: Config, metrics: Dict[str, Any]) -> None:
+    cfg.out("overlap_metrics.json").write_text(json.dumps(metrics, indent=2, sort_keys=True))
+    if metrics.get("maxSourceLaneCount", 0) >= 3 or metrics.get("maxTargetLaneCount", 0) >= 3:
+        log.warning(
+            "Detected edge-lane congestion (source max=%s, target max=%s)",
+            metrics.get("maxSourceLaneCount", 0),
+            metrics.get("maxTargetLaneCount", 0),
+        )
 
 
 def _hub_role_map(nodes: List[Dict], edges: List[Dict]) -> Dict[str, str]:
@@ -600,6 +943,7 @@ _EDGE_LABELS: Dict[str, str] = {
     "flowLog->flow":                  "flow log",
     "flowLog->traffic":               "traffic",
     "activityLog->access":            "activity",
+    "resource->dependency":          "depends on",
     "rbac_assignment":                "RBAC",
 }
 
@@ -2730,6 +3074,9 @@ def _render_l2r_mode(
         group_by_tag=cfg.groupByTag, layout_magic=cfg.layoutMagic,
     )
 
+    _fit_nested_container_bounds(containers, positions, node_parents, type_headers)
+    callout_column = _new_left_callout_column(containers, positions, node_parents)
+
     icons_used: Dict[str, Any] = {"mapped": {}, "fallback": [], "unknown": []}
     mxfile, root = _build_mxfile_root(cfg)
     container_positions = _container_absolute_positions(containers)
@@ -2793,7 +3140,15 @@ def _render_l2r_mode(
             icons_used["mapped"][t] = icons_used["mapped"].get(t, 0) + 1
         _emit_resource_cell(root, render_node, sid, style, abs_x, abs_y, w, h, parent_id=LAYER_RESOURCES)
 
-    _emit_resource_metadata_boxes(root, nodes, node_id_map, positions, node_parents, container_positions)
+    _emit_resource_metadata_boxes(
+        root,
+        nodes,
+        node_id_map,
+        positions,
+        node_parents,
+        container_positions,
+        callout_column=callout_column,
+    )
 
     legend_anchor_x = max((c["x"] + c["w"] for c in containers if c.get("parent") == "1"), default=100) + 60
     legend_anchor_y = 60
@@ -2854,6 +3209,17 @@ def _render_l2r_mode(
         eg.set("relative", "1")
         eg.set("as", "geometry")
 
+    absolute_rects: Dict[str, Tuple[int, int, int, int]] = {}
+    for nid, (x, y, w, h) in positions.items():
+        parent_id = node_parents.get(nid, LAYER_RESOURCES)
+        abs_x, abs_y = _absolute_child_position(x, y, parent_id, container_positions)
+        absolute_rects[normalize_id(nid)] = (abs_x, abs_y, w, h)
+    overlap_metrics = _build_overlap_metrics(edges, absolute_rects)
+    overlap_metrics["containerOverflowViolations"] = _collect_container_overflow_violations(
+        containers, positions, node_parents, type_headers
+    )
+    _write_overlap_metrics(cfg, overlap_metrics)
+
     tree = ET.ElementTree(mxfile)
     ET.indent(tree, space="  ")
     out_path = cfg.out("diagram.drawio")
@@ -2862,6 +3228,7 @@ def _render_l2r_mode(
     log.info("Wrote %s (L2R mode)", out_path)
 
     cfg.out("icons_used.json").write_text(json.dumps(icons_used, indent=2, sort_keys=True))
+    _write_resource_catalog(cfg, nodes, visible_node_ids, icons_used)
     assets_dir = Path(__file__).parent.parent.parent / "assets"
     _rebuild_fallback_library(assets_dir, msft_icons or {})
     _try_export(cfg, out_path, "svg")
@@ -3529,6 +3896,7 @@ def generate_drawio(cfg: Config) -> None:
 
     # Write icons_used.json
     cfg.out("icons_used.json").write_text(json.dumps(icons_used, indent=2, sort_keys=True))
+    _write_resource_catalog(cfg, nodes, visible_node_ids, icons_used)
 
     # Regenerate fallback library whenever MSFT icons are present
     _rebuild_fallback_library(assets_dir, msft_icons)
@@ -3861,6 +4229,9 @@ def _render_msft_mode(
     positions, containers, type_headers, node_parents = layout_nodes_sub_rg_net(
         nodes, edges, spacing=sp, group_by_tag=cfg.groupByTag, layout_magic=cfg.layoutMagic,
     )
+    _fit_nested_container_bounds(containers, positions, node_parents, type_headers)
+    callout_column = _new_left_callout_column(containers, positions, node_parents)
+
     node_by_id: Dict[str, Dict] = {n["id"]: n for n in nodes}
     hub_roles = _hub_role_map(nodes, edges)
     container_positions = _container_absolute_positions(containers)
@@ -3926,16 +4297,24 @@ def _render_msft_mode(
             icons_used["mapped"][t] = icons_used["mapped"].get(t, 0) + 1
         _emit_resource_cell(root, render_node, sid, style, abs_x, abs_y, w, h, parent_id=LAYER_RESOURCES)
 
-    _emit_resource_metadata_boxes(root, nodes, node_id_map, positions, node_parents, container_positions)
+    _emit_resource_metadata_boxes(
+        root,
+        nodes,
+        node_id_map,
+        positions,
+        node_parents,
+        container_positions,
+        callout_column=callout_column,
+    )
 
     subnet_udr, _ = extract_route_summaries(nodes, edges)
-    panel_base_x = max((c["x"] + c["w"] for c in containers if c["parent"] == "1"), default=0) + 40
-    panel_cursor_y = MSFT_REGION_PAD
+    panel_cursor_y = callout_column["cursorY"]
     for subnet_id in sorted(subnet_udr.keys(), key=lambda s: ((node_by_id.get(s) or {}).get("name", ""), s)):
         summary = subnet_udr[subnet_id]
         panel_label = _format_udr_panel_label(summary)
         panel_id = "msft_udr_" + stable_id(subnet_id)
         panel_h = max(60, 18 * (panel_label.count("\n") + 1) + 16)
+        panel_x, panel_y = _next_callout_slot(callout_column, panel_h)
         pc = ET.SubElement(root, "mxCell")
         pc.set("id", panel_id)
         pc.set("value", panel_label)
@@ -3943,9 +4322,9 @@ def _render_msft_mode(
         pc.set("vertex", "1")
         pc.set("parent", LAYER_LABELS)
         pg = ET.SubElement(pc, "mxGeometry")
-        pg.set("x", str(panel_base_x))
-        pg.set("y", str(panel_cursor_y))
-        pg.set("width", str(220))
+        pg.set("x", str(panel_x))
+        pg.set("y", str(panel_y))
+        pg.set("width", str(callout_column["width"]))
         pg.set("height", str(panel_h))
         pg.set("as", "geometry")
         subnet_sid = node_id_map.get(subnet_id)
@@ -3961,11 +4340,10 @@ def _render_msft_mode(
             ueg = ET.SubElement(ue, "mxGeometry")
             ueg.set("relative", "1")
             ueg.set("as", "geometry")
-        panel_cursor_y += panel_h + 15
+        panel_cursor_y = callout_column["cursorY"]
 
     nsg_summaries = extract_nsg_summaries(nodes, edges)
-    nsg_panel_x = panel_base_x + 240
-    nsg_cursor_y = MSFT_REGION_PAD
+    nsg_cursor_y = panel_cursor_y
     for nsg_id in sorted(nsg_summaries.keys(), key=lambda s: ((node_by_id.get(s) or {}).get("name", ""), s)):
         summary = nsg_summaries[nsg_id]
         if not summary["rules"]:
@@ -3973,6 +4351,7 @@ def _render_msft_mode(
         panel_label = _format_nsg_panel_label(summary)
         panel_id = "msft_nsg_" + stable_id(nsg_id)
         panel_h = max(60, 18 * (panel_label.count("\n") + 1) + 16)
+        panel_x, panel_y = _next_callout_slot(callout_column, panel_h)
         pc = ET.SubElement(root, "mxCell")
         pc.set("id", panel_id)
         pc.set("value", panel_label)
@@ -3980,9 +4359,9 @@ def _render_msft_mode(
         pc.set("vertex", "1")
         pc.set("parent", LAYER_LABELS)
         pg = ET.SubElement(pc, "mxGeometry")
-        pg.set("x", str(nsg_panel_x))
-        pg.set("y", str(nsg_cursor_y))
-        pg.set("width", str(260))
+        pg.set("x", str(panel_x))
+        pg.set("y", str(panel_y))
+        pg.set("width", str(callout_column["width"]))
         pg.set("height", str(panel_h))
         pg.set("as", "geometry")
         nsg_sid = node_id_map.get(nsg_id)
@@ -3998,8 +4377,9 @@ def _render_msft_mode(
             neg = ET.SubElement(ne, "mxGeometry")
             neg.set("relative", "1")
             neg.set("as", "geometry")
-        nsg_cursor_y += panel_h + 15
+        nsg_cursor_y = callout_column["cursorY"]
 
+    panel_base_x = max((c["x"] + c["w"] for c in containers if c["parent"] == "1"), default=0) + 40
     panel_stack_y = max(panel_cursor_y, nsg_cursor_y) + 10
     inventory_lines = _diagram_inventory_lines(nodes, visible_node_ids)
     if inventory_lines:
@@ -4035,6 +4415,17 @@ def _render_msft_mode(
         eg.set("relative", "1")
         eg.set("as", "geometry")
 
+    absolute_rects: Dict[str, Tuple[int, int, int, int]] = {}
+    for nid, (x, y, w, h) in positions.items():
+        parent_id = node_parents.get(nid, LAYER_RESOURCES)
+        abs_x, abs_y = _absolute_child_position(x, y, parent_id, container_positions)
+        absolute_rects[normalize_id(nid)] = (abs_x, abs_y, w, h)
+    overlap_metrics = _build_overlap_metrics(edges, absolute_rects)
+    overlap_metrics["containerOverflowViolations"] = _collect_container_overflow_violations(
+        containers, positions, node_parents, type_headers
+    )
+    _write_overlap_metrics(cfg, overlap_metrics)
+
     tree = ET.ElementTree(mxfile)
     ET.indent(tree, space="  ")
     out_path = cfg.out("diagram.drawio")
@@ -4043,6 +4434,7 @@ def _render_msft_mode(
     log.info("Wrote %s (MSFT mode)", out_path)
 
     cfg.out("icons_used.json").write_text(json.dumps(icons_used, indent=2, sort_keys=True))
+    _write_resource_catalog(cfg, nodes, visible_node_ids, icons_used)
     assets_dir = Path(__file__).parent.parent.parent / "assets"
     _rebuild_fallback_library(assets_dir, msft_icons or {})
     _try_export(cfg, out_path, "svg")

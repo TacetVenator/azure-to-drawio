@@ -1,0 +1,209 @@
+[
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-eastus/providers/Microsoft.Network/virtualNetworks/vnet-app",
+    "name": "vnet-app",
+    "type": "Microsoft.Network/virtualNetworks",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-eastus",
+    "properties": {
+      "addressSpace": {
+        "addressPrefixes": [
+          "10.20.0.0/16"
+        ]
+      },
+      "subnets": [
+        {
+          "id": "/subscriptions/sub1/resourceGroups/rg-app-eastus/providers/Microsoft.Network/virtualNetworks/vnet-app/subnets/snet-web"
+        },
+        {
+          "id": "/subscriptions/sub1/resourceGroups/rg-app-eastus/providers/Microsoft.Network/virtualNetworks/vnet-app/subnets/snet-functions"
+        },
+        {
+          "id": "/subscriptions/sub1/resourceGroups/rg-app-eastus/providers/Microsoft.Network/virtualNetworks/vnet-app/subnets/snet-integration"
+        }
+      ]
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-eastus/providers/Microsoft.Network/virtualNetworks/vnet-app/subnets/snet-web",
+    "name": "snet-web",
+    "type": "Microsoft.Network/virtualNetworks/subnets",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-eastus",
+    "properties": {
+      "addressPrefix": "10.20.1.0/24"
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-eastus/providers/Microsoft.Network/virtualNetworks/vnet-app/subnets/snet-functions",
+    "name": "snet-functions",
+    "type": "Microsoft.Network/virtualNetworks/subnets",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-eastus",
+    "properties": {
+      "addressPrefix": "10.20.2.0/24"
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-eastus/providers/Microsoft.Network/virtualNetworks/vnet-app/subnets/snet-integration",
+    "name": "snet-integration",
+    "type": "Microsoft.Network/virtualNetworks/subnets",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-eastus",
+    "properties": {
+      "addressPrefix": "10.20.3.0/24"
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-eastus/providers/Microsoft.Web/serverfarms/asp-shared-eastus",
+    "name": "asp-shared-eastus",
+    "type": "Microsoft.Web/serverfarms",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-eastus",
+    "properties": {
+      "sku": {
+        "name": "P1v3",
+        "tier": "PremiumV3"
+      }
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-eastus/providers/Microsoft.Web/sites/web-api-prod",
+    "name": "web-api-prod",
+    "type": "Microsoft.Web/sites",
+    "kind": "app",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-eastus",
+    "properties": {
+      "serverFarmId": "/subscriptions/sub1/resourceGroups/rg-app-eastus/providers/Microsoft.Web/serverfarms/asp-shared-eastus",
+      "virtualNetworkSubnetId": "/subscriptions/sub1/resourceGroups/rg-app-eastus/providers/Microsoft.Network/virtualNetworks/vnet-app/subnets/snet-web"
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-eastus/providers/Microsoft.Web/sites/func-orders-prod",
+    "name": "func-orders-prod",
+    "type": "Microsoft.Web/sites",
+    "kind": "functionapp",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-eastus",
+    "properties": {
+      "serverFarmId": "/subscriptions/sub1/resourceGroups/rg-app-eastus/providers/Microsoft.Web/serverfarms/asp-shared-eastus",
+      "virtualNetworkSubnetId": "/subscriptions/sub1/resourceGroups/rg-app-eastus/providers/Microsoft.Network/virtualNetworks/vnet-app/subnets/snet-functions",
+      "siteConfig": {
+        "appSettings": [
+          {
+            "name": "AzureWebJobsStorage",
+            "value": "DefaultEndpointsProtocol=https;AccountName=stappdataeastus"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-eastus/providers/Microsoft.Logic/workflows/logic-orders-prod",
+    "name": "logic-orders-prod",
+    "type": "Microsoft.Logic/workflows",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-eastus",
+    "properties": {
+      "state": "Enabled",
+      "parameters": {
+        "$connections": {
+          "value": {
+            "servicebus": {
+              "connectionId": "/subscriptions/sub1/resourceGroups/rg-app-eastus/providers/Microsoft.Web/connections/sb-conn"
+            },
+            "azureblob": {
+              "connectionId": "/subscriptions/sub1/resourceGroups/rg-app-eastus/providers/Microsoft.Web/connections/blob-conn"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-eastus/providers/Microsoft.Web/connections/sb-conn",
+    "name": "sb-conn",
+    "type": "Microsoft.Web/connections",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-eastus",
+    "properties": {
+      "displayName": "servicebus"
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-eastus/providers/Microsoft.Web/connections/blob-conn",
+    "name": "blob-conn",
+    "type": "Microsoft.Web/connections",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-eastus",
+    "properties": {
+      "displayName": "azureblob"
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-eastus/providers/Microsoft.Storage/storageAccounts/stappdataeastus",
+    "name": "stappdataeastus",
+    "type": "Microsoft.Storage/storageAccounts",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-eastus",
+    "properties": {
+      "supportsHttpsTrafficOnly": true
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-eastus/providers/Microsoft.Sql/servers/sql-app-eastus",
+    "name": "sql-app-eastus",
+    "type": "Microsoft.Sql/servers",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-eastus",
+    "properties": {
+      "version": "12.0"
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-eastus/providers/Microsoft.Sql/servers/sql-app-eastus/databases/orders",
+    "name": "orders",
+    "type": "Microsoft.Sql/servers/databases",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-eastus",
+    "properties": {
+      "status": "Online"
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-eastus/providers/Microsoft.KeyVault/vaults/kv-app-eastus",
+    "name": "kv-app-eastus",
+    "type": "Microsoft.KeyVault/vaults",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-eastus",
+    "properties": {
+      "tenantId": "00000000-0000-0000-0000-000000000000"
+    }
+  },
+  {
+    "id": "/subscriptions/sub1/resourceGroups/rg-app-eastus/providers/Microsoft.ServiceBus/namespaces/sbns-app-eastus",
+    "name": "sbns-app-eastus",
+    "type": "Microsoft.ServiceBus/namespaces",
+    "location": "eastus",
+    "subscriptionId": "sub1",
+    "resourceGroup": "rg-app-eastus",
+    "properties": {
+      "status": "Active"
+    }
+  }
+]

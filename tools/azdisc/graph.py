@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .config import Config
-from .util import load_json_file, normalize_id, stable_id
+from .util import extract_arm_ids, load_json_file, normalize_id, stable_id
 
 log = logging.getLogger(__name__)
 
@@ -124,6 +124,7 @@ def extract_edges(nodes: List[Dict]) -> List[Dict]:
         nid = node["id"]
         t = node["type"]
         p = node["properties"]
+        edge_start = len(edges)
 
         if t == "microsoft.compute/virtualmachines":
             for ni in _get(p, "networkProfile", "networkInterfaces") or []:
@@ -204,6 +205,16 @@ def extract_edges(nodes: List[Dict]) -> List[Dict]:
             add_edge(nid, _get(p, "WorkspaceResourceId"), "appInsights->workspace")
 
         elif t == "microsoft.logic/workflows":
+            # Preferred extraction path: Logic Apps store API connection references
+            # under properties.parameters.$connections.value.*.connectionId.
+            connections = _get(p, "parameters", "$connections", "value")
+            if isinstance(connections, dict):
+                for conn in connections.values():
+                    if isinstance(conn, dict):
+                        add_edge(nid, _get(conn, "connectionId"), "logicApp->connection")
+
+            # Backward-compatible fallback for older fixtures that store raw IDs
+            # in string parameters.
             for param in (_get(p, "parameters") or {}).values():
                 if isinstance(param, dict) and param.get("type") == "string":
                     val = param.get("value", "")
@@ -216,6 +227,22 @@ def extract_edges(nodes: List[Dict]) -> List[Dict]:
             for pool in _get(p, "backendAddressPools") or []:
                 for addr in _get(pool, "properties", "backendAddresses") or []:
                     add_edge(nid, _get(addr, "fqdn"), "appGw->backend")
+
+        # Generic fallback extraction for any resource type:
+        # follow ARM ID references in properties so new Azure services
+        # can still be connected even without explicit per-type logic.
+        explicit_targets = {
+            e["target"]
+            for e in edges[edge_start:]
+            if e["source"] == nid
+        }
+        for ref_id in extract_arm_ids(p):
+            target_id = normalize_id(ref_id)
+            if target_id == nid:
+                continue
+            if target_id in explicit_targets:
+                continue
+            add_edge(nid, target_id, "resource->dependency")
 
     # Deduplicate edges
     seen = set()

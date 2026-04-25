@@ -91,6 +91,65 @@ def test_webapp_to_subnet_edge():
     assert len(wa_sub_edges) >= 1
 
 
+def test_functionapp_to_plan_edge():
+    inventory = load_fixture("app_app_services.json")
+    nodes = [build_node(r) for r in inventory]
+    edges = extract_edges(nodes)
+    func_plan_edges = [
+        e for e in edges
+        if e["kind"] == "webApp->appServicePlan" and "/sites/func-" in e["source"]
+    ]
+    assert len(func_plan_edges) >= 1
+
+
+def test_functionapp_to_subnet_edge():
+    inventory = load_fixture("app_app_services.json")
+    nodes = [build_node(r) for r in inventory]
+    edges = extract_edges(nodes)
+    func_subnet_edges = [
+        e for e in edges
+        if e["kind"] == "webApp->subnet" and "/sites/func-" in e["source"]
+    ]
+    assert len(func_subnet_edges) >= 1
+
+
+def test_logicapp_to_connection_edge():
+    inventory = load_fixture("app_app_services.json")
+    nodes = [build_node(r) for r in inventory]
+    edges = extract_edges(nodes)
+    logic_conn_edges = [e for e in edges if e["kind"] == "logicApp->connection"]
+    assert len(logic_conn_edges) >= 2
+
+
+def test_generic_dependency_edges_for_unknown_types():
+    inventory = [
+        {
+            "id": "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Custom/widgets/widget-a",
+            "name": "widget-a",
+            "type": "Microsoft.Custom/widgets",
+            "location": "eastus",
+            "subscriptionId": "sub1",
+            "resourceGroup": "rg1",
+            "properties": {
+                "backendId": "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/stdata"
+            },
+        },
+        {
+            "id": "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Storage/storageAccounts/stdata",
+            "name": "stdata",
+            "type": "Microsoft.Storage/storageAccounts",
+            "location": "eastus",
+            "subscriptionId": "sub1",
+            "resourceGroup": "rg1",
+            "properties": {},
+        },
+    ]
+    nodes = [build_node(r) for r in inventory]
+    edges = extract_edges(nodes)
+    generic_edges = [e for e in edges if e["kind"] == "resource->dependency"]
+    assert len(generic_edges) >= 1
+
+
 def test_private_endpoint_edges():
     inventory = load_fixture("inventory_small.json")
     nodes = [build_node(r) for r in inventory]

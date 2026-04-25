@@ -15,6 +15,8 @@ from tools.azdisc.drawio import (
     MSFT_REGION_STYLE,
     MSFT_SUB_STYLE,
     NSG_CALLOUT_STYLE,
+    _collect_container_overflow_violations,
+    _fit_nested_container_bounds,
     _NETWORK_TYPES,
     _edge_style,
     _inject_boundary_nodes,
@@ -189,6 +191,15 @@ class TestSubRgNetLayout:
         for c1, c2 in zip(cont1, cont2):
             assert c1 == c2
         assert np1 == np2
+
+    def test_no_container_overflow_after_bounds_fit(self):
+        nodes, edges = _build_graph_from_fixture()
+        positions, containers, type_headers, node_parents = layout_nodes_sub_rg_net(nodes, edges)
+        _fit_nested_container_bounds(containers, positions, node_parents, type_headers)
+        violations = _collect_container_overflow_violations(
+            containers, positions, node_parents, type_headers
+        )
+        assert not violations, f"Container overflow violations detected: {violations[:5]}"
 
     def test_subscription_containers_exist(self):
         nodes, edges = _build_graph_from_fixture()

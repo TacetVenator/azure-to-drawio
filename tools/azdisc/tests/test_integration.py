@@ -55,6 +55,12 @@ def _seed_output_files(tmp_path: Path) -> None:
     (tmp_path / "unresolved.json").write_text("[]")
 
 
+def _seed_fixture_output_files(tmp_path: Path, fixture_name: str) -> None:
+    fixture = FIXTURES / fixture_name
+    (tmp_path / "inventory.json").write_text(fixture.read_text())
+    (tmp_path / "unresolved.json").write_text("[]")
+
+
 def _seed_tagged_inventory(tmp_path: Path) -> None:
     inventory = [
         {
@@ -263,6 +269,28 @@ class TestDrawioGeneration:
         assert "mapped" in data
         assert "unknown" in data
 
+    def test_overlap_metrics_json_written(self, tmp_path):
+        self._generate(tmp_path)
+        metrics_path = tmp_path / "overlap_metrics.json"
+        assert metrics_path.exists()
+        data = json.loads(metrics_path.read_text())
+        assert "totalEdges" in data
+        assert "trackedEdges" in data
+        assert "sourceYHotspots" in data
+        assert "targetYHotspots" in data
+        assert "containerOverflowViolations" in data
+        violations = data.get("containerOverflowViolations") or []
+        assert len(violations) == 0, f"Expected no overflow violations, got {violations[:5]}"
+
+    def test_resource_catalog_json_written(self, tmp_path):
+        self._generate(tmp_path)
+        catalog_path = tmp_path / "resource_catalog.json"
+        assert catalog_path.exists()
+        data = json.loads(catalog_path.read_text())
+        assert "summary" in data
+        assert "types" in data
+        assert data["summary"].get("typeCount", 0) > 0
+
     def test_drawio_node_labels_present(self, tmp_path):
         self._generate(tmp_path)
         drawio_path = tmp_path / "diagram.drawio"
@@ -386,3 +414,66 @@ def test_drawio_includes_inventory_panel_and_tag_metadata_boxes(tmp_path, diagra
     assert "Tag: Environment=prod" in all_values
     assert "Tag: Owner=platform" in all_values
     assert "Tag: Tier=data" in all_values
+
+
+@pytest.mark.parametrize("diagram_mode", ["MSFT", "L2R"])
+def test_metadata_boxes_align_in_single_left_column(tmp_path, diagram_mode):
+    _seed_tagged_inventory(tmp_path)
+    cfg = Config(
+        app=f"tagged-{diagram_mode.lower()}",
+        subscriptions=["sub1"],
+        seedResourceGroups=["rg-app"],
+        outputDir=str(tmp_path),
+        diagramMode=diagram_mode,
+    )
+
+    build_graph(cfg)
+    generate_drawio(cfg)
+
+    tree = ET.parse(str(tmp_path / "diagram.drawio"))
+    metadata_boxes = [
+        cell for cell in tree.findall(".//mxCell[@vertex='1']")
+        if (cell.get("id") or "").startswith("attr_")
+    ]
+    assert len(metadata_boxes) >= 2
+
+    x_positions = {
+        int(cell.find("mxGeometry").get("x"))
+        for cell in metadata_boxes
+        if cell.find("mxGeometry") is not None
+    }
+    assert len(x_positions) == 1, f"Expected single left-column x, got {sorted(x_positions)}"
+
+
+def test_app_services_fixture_graph_edges_and_drawio(tmp_path):
+    _seed_fixture_output_files(tmp_path, "app_app_services.json")
+    cfg = Config(
+        app="app-services-integration",
+        subscriptions=["sub1"],
+        seedResourceGroups=["rg-app-eastus"],
+        outputDir=str(tmp_path),
+        diagramMode="MSFT",
+    )
+
+    graph = build_graph(cfg)
+    edges = graph["edges"]
+
+    logic_conn_edges = [e for e in edges if e["kind"] == "logicApp->connection"]
+    func_plan_edges = [
+        e for e in edges
+        if e["kind"] == "webApp->appServicePlan" and "/sites/func-" in e["source"]
+    ]
+    func_subnet_edges = [
+        e for e in edges
+        if e["kind"] == "webApp->subnet" and "/sites/func-" in e["source"]
+    ]
+
+    assert len(logic_conn_edges) >= 2
+    assert len(func_plan_edges) >= 1
+    assert len(func_subnet_edges) >= 1
+
+    generate_drawio(cfg)
+
+    drawio_path = tmp_path / "diagram.drawio"
+    assert drawio_path.exists()
+    assert_drawio_references_resolve(drawio_path)
