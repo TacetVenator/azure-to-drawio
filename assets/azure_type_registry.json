@@ -1,0 +1,1392 @@
+[
+  {
+    "type": "microsoft.aad/domainservices",
+    "category": "Identity",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.advisor/configurations",
+    "category": "Monitoring",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.alertsmanagement/smartdetectoralertrules",
+    "category": "Monitoring",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.analysisservices/servers",
+    "category": "Databases",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.apicenter/services",
+    "category": "Integration",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.apimanagement/service",
+    "category": "Integration",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.app/containerapps",
+    "category": "Containers",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.app/managedenvironments",
+    "category": "Containers",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.appconfiguration/configurationstores",
+    "category": "Management",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.appplatform/spring",
+    "category": "Containers",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.attestation/attestationproviders",
+    "category": "Attestation",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.authorization/policyassignments",
+    "category": "Security",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.authorization/policydefinitions",
+    "category": "Security",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.authorization/roleassignments",
+    "category": "Security",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.authorization/roledefinitions",
+    "category": "Security",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.automation/automationaccounts",
+    "category": "Management",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.avs/privateclouds",
+    "category": "Avs",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.azureactivedirectory/b2cdirectories",
+    "category": "Azureactivedirectory",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.azurestackhci/clusters",
+    "category": "Azurestackhci",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.batch/batchaccounts",
+    "category": "Compute",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.billingbenefits/savingsplanorders",
+    "category": "Billingbenefits",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.blueprint/blueprints",
+    "category": "Blueprint",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.botservice/botservices",
+    "category": "AI + Machine Learning",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.cache/redis",
+    "category": "Databases",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.cache/redisenterprise",
+    "category": "Databases",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.cdn/profiles",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.chaos/experiments",
+    "category": "Chaos",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.cloudshell/useraccounts",
+    "category": "Cloudshell",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.cognitiveservices/accounts",
+    "category": "AI + Machine Learning",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.communication/communicationservices",
+    "category": "Integration",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.compute/availabilitysets",
+    "category": "Compute",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.compute/bastionhosts",
+    "category": "Compute",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.compute/capacityreservationgroups",
+    "category": "Compute",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.compute/capacityreservationgroups/capacityreservations",
+    "category": "Compute",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.compute/cloudservices",
+    "category": "Compute",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.compute/diskencryptionsets",
+    "category": "Compute",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.compute/disks",
+    "category": "Compute",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.compute/fleets",
+    "category": "Compute",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.compute/galleries",
+    "category": "Compute",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.compute/galleries/images",
+    "category": "Compute",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.compute/galleries/images/versions",
+    "category": "Compute",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.compute/hostgroups",
+    "category": "Compute",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.compute/hostgroups/hosts",
+    "category": "Compute",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.compute/images",
+    "category": "Compute",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.compute/maintenanceconfigurations",
+    "category": "Compute",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.compute/proximityplacementgroups",
+    "category": "Compute",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.compute/restorepointcollections",
+    "category": "Compute",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.compute/snapshots",
+    "category": "Compute",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.compute/sshpublickeys",
+    "category": "Compute",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.compute/virtualmachines",
+    "category": "Compute",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.compute/virtualmachines/extensions",
+    "category": "Compute",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.compute/virtualmachines/runcommands",
+    "category": "Compute",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.compute/virtualmachinescalesets",
+    "category": "Compute",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.confidentialledger/ledgers",
+    "category": "Confidentialledger",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.connectedvmwarevsphere/virtualmachines",
+    "category": "Connectedvmwarevsphere",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.containerinstance/containergroups",
+    "category": "Containers",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.containerregistry/registries",
+    "category": "Containers",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.containerservice/fleets",
+    "category": "Containers",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.containerservice/fleets/members",
+    "category": "Containers",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.containerservice/managedclusters",
+    "category": "Containers",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.containerservice/managedclusters/agentpools",
+    "category": "Containers",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.costmanagement/exports",
+    "category": "Costmanagement",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.dashboard/grafana",
+    "category": "Dashboard",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.databasemigration/services",
+    "category": "Databasemigration",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.databox/jobs",
+    "category": "Storage",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.databoxedge/databoxedgedevices",
+    "category": "Storage",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.databricks/workspaces",
+    "category": "Databases",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.datacatalog/catalogs",
+    "category": "Databases",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.datafactory/factories",
+    "category": "Integration",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.datafactory/factories/datasets",
+    "category": "Integration",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.datafactory/factories/pipelines",
+    "category": "Integration",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.datafactory/factories/triggers",
+    "category": "Integration",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.datalakeanalytics/accounts",
+    "category": "Databases",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.datalakestore/accounts",
+    "category": "Storage",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.dataprotection/backupvaults",
+    "category": "Dataprotection",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.datashare/accounts",
+    "category": "Datashare",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.dbformariadb/servers",
+    "category": "Dbformariadb",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.dbformysql/flexibleservers",
+    "category": "Databases",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.dbformysql/flexibleservers/databases",
+    "category": "Databases",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.dbformysql/servers",
+    "category": "Databases",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.dbforpostgresql/flexibleservers",
+    "category": "Databases",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.dbforpostgresql/flexibleservers/databases",
+    "category": "Databases",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.dbforpostgresql/servergroups",
+    "category": "Databases",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.dbforpostgresql/servers",
+    "category": "Databases",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.desktopvirtualization/applicationgroups",
+    "category": "Desktopvirtualization",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.desktopvirtualization/hostpools",
+    "category": "Desktopvirtualization",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.desktopvirtualization/workspaces",
+    "category": "Desktopvirtualization",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.devcenter/devcenters",
+    "category": "Devcenter",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.devcenter/projects",
+    "category": "Devcenter",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.devices/iothubs",
+    "category": "IoT",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.devices/iothubs/eventhubendpoints/consumergroups",
+    "category": "IoT",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.devices/provisioningservices",
+    "category": "IoT",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.devops/pipelines",
+    "category": "DevOps",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.devtestlab/labs",
+    "category": "DevOps",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.digitaltwins/digitaltwinsinstances",
+    "category": "IoT",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.documentdb/databaseaccounts",
+    "category": "Databases",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.documentdb/databaseaccounts/sqlcontainers",
+    "category": "Databases",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.edgeorder/addresses",
+    "category": "Edgeorder",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.elasticsan/elasticsans",
+    "category": "Storage",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.eventgrid/domains",
+    "category": "Integration",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.eventgrid/eventsubscriptions",
+    "category": "Integration",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.eventgrid/partnertopics",
+    "category": "Integration",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.eventgrid/systemtopics",
+    "category": "Integration",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.eventgrid/topics",
+    "category": "Integration",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.eventhub/clusters",
+    "category": "Integration",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.eventhub/namespaces",
+    "category": "Integration",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.extendedlocation/customlocations",
+    "category": "Extendedlocation",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.guestconfiguration/guestconfigurationassignments",
+    "category": "Guestconfiguration",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.hardwaresecuritymodules/dedicatedhsms",
+    "category": "Hardwaresecuritymodules",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.hdinsight/clusters",
+    "category": "Databases",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.healthcareapis/services",
+    "category": "Healthcare",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.hybridcompute/machines",
+    "category": "Compute",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.importexport/jobs",
+    "category": "Storage",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.insights/actiongroups",
+    "category": "Monitoring",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.insights/activitylogalerts",
+    "category": "Monitoring",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.insights/components",
+    "category": "Monitoring",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.insights/datacollectionrules",
+    "category": "Monitoring",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.insights/diagnosticsettings",
+    "category": "Monitoring",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.insights/metricalerts",
+    "category": "Monitoring",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.insights/scheduledqueryrules",
+    "category": "Monitoring",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.insights/workbooks",
+    "category": "Monitoring",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.intune/tenants",
+    "category": "Intune",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.iotcentral/iotapps",
+    "category": "IoT",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.iotoperations/instances",
+    "category": "Iotoperations",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.keyvault/managedhsms",
+    "category": "Security",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.keyvault/vaults",
+    "category": "Security",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.keyvault/vaults/secrets",
+    "category": "Security",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.kubernetes/connectedclusters",
+    "category": "Kubernetes",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.kubernetes/fleetmemberships",
+    "category": "Kubernetes",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.kusto/clusters",
+    "category": "Databases",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.labservices/labaccounts",
+    "category": "Labservices",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.lighthouse/delegations",
+    "category": "Lighthouse",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.loadtestservice/loadtests",
+    "category": "Loadtestservice",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.logic/integrationaccounts",
+    "category": "Integration",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.logic/integrationserviceenvironments",
+    "category": "Integration",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.logic/workflows",
+    "category": "Integration",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.logic/workflows/runs",
+    "category": "Integration",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.logic/workflows/triggers",
+    "category": "Integration",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.machinelearningservices/workspaces",
+    "category": "AI + Machine Learning",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.maintenance/maintenanceconfigurations",
+    "category": "Maintenance",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.managedidentity/userassignedidentities",
+    "category": "Identity",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.managednetwork/managednetworks",
+    "category": "Managednetwork",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.managedservices/registrationassignments",
+    "category": "Managedservices",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.management/managementgroups",
+    "category": "Management",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.maps/accounts",
+    "category": "Location",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.media/mediaservices",
+    "category": "Media",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.migrate/assessmentprojects",
+    "category": "Migrate",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.migrate/migrateprojects",
+    "category": "Migrate",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.mixedreality/remoterenderingaccounts",
+    "category": "Mixedreality",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.mixedreality/spatialanchorsaccounts",
+    "category": "Mixedreality",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.mobilenetwork/mobilenetworks",
+    "category": "Mobilenetwork",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.monitor/accounts",
+    "category": "Monitoring",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.netapp/netappaccounts",
+    "category": "Storage",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.netapp/netappaccounts/capacitypools",
+    "category": "Storage",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.netapp/netappaccounts/capacitypools/volumes",
+    "category": "Storage",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/applicationgateways",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/applicationgatewaywebapplicationfirewallpolicies",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/applicationsecuritygroups",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/azurefirewalls",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/bastionhosts",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/connections",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/ddosprotectionplans",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/dnsresolvers",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/dnszones",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/expressroutecircuits",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/expressroutegateways",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/firewallpolicies",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/frontdoors",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/frontdoorwebapplicationfirewallpolicies",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/frontdoorwebapplicationfirewallpolicies/managed",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/ipaddressmanagers",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/ipgroups",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/loadbalancers",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/localnetworkgateways",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/natgateways",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/networkinterfaces",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/networkmanagers",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/networkmanagers/networkgroups",
+    "category": "Networking",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.network/networkprofiles",
+    "category": "Networking",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.network/networksecuritygroups",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/networksecurityperimeters",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/networkwatchers",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/privatednszones",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/privatednszones/virtualnetworklinks",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/privateendpoints",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/privatelinkscopes",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/privatelinkservices",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/publicipaddresses",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/publicipprefixes",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/routefilters",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/routetables",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/serviceendpointpolicies",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/trafficmanagerprofiles",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/virtualhubs",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/virtualnetworkgateways",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/virtualnetworks",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/virtualnetworks/subnets",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/virtualwans",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.network/vpngateways",
+    "category": "Networking",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.notificationhubs/namespaces",
+    "category": "Integration",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.openai/accounts",
+    "category": "Openai",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.operationalinsights/workspaces",
+    "category": "Monitoring",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.operationalinsights/workspaces/datasources",
+    "category": "Monitoring",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.operationsmanagement/managementconfigurations",
+    "category": "Monitoring",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.operationsmanagement/solutions",
+    "category": "Monitoring",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.oracle/cloudexadatainfrastructures",
+    "category": "Oracle",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.orbital/spacecrafts",
+    "category": "Orbital",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.peering/peerings",
+    "category": "Peering",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.peering/peeringservices",
+    "category": "Peering",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.policyinsights/remediations",
+    "category": "Policyinsights",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.portal/dashboards",
+    "category": "Management",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.powerbi/workspacecollections",
+    "category": "Analytics",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.powerbidedicated/capacities",
+    "category": "Powerbidedicated",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.purview/accounts",
+    "category": "Governance",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.recoveryservices/vaults",
+    "category": "Management",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.recoveryservices/vaults/backuppolicies",
+    "category": "Management",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.redhatopenshift/openshiftclusters",
+    "category": "Redhatopenshift",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.relay/namespaces",
+    "category": "Integration",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.reservations/reservationorders",
+    "category": "Reservations",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.resourceguard/resourceguards",
+    "category": "Resourceguard",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.resourcemover/movecollections",
+    "category": "Resourcemover",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.resources/deployments",
+    "category": "Management",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.resources/resourcegroups",
+    "category": "Management",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.resources/templatespecs",
+    "category": "Management",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.scheduler/jobcollections",
+    "category": "Scheduler",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.scvmm/virtualmachines",
+    "category": "Scvmm",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.search/searchservices",
+    "category": "AI + Machine Learning",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.security/assessments",
+    "category": "Security",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.security/locations/alerts",
+    "category": "Security",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.security/pricings",
+    "category": "Security",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.security/securityconnectors",
+    "category": "Security",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.security/settings",
+    "category": "Security",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.securityinsights/alertrules",
+    "category": "Securityinsights",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.servicebus/namespaces",
+    "category": "Integration",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.servicefabric/clusters",
+    "category": "Containers",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.servicefabric/managedclusters",
+    "category": "Containers",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.servicefabricmesh/applications",
+    "category": "Servicefabricmesh",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.signalrservice/signalr",
+    "category": "Integration",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.signalrservice/webpubsub",
+    "category": "Integration",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.solutions/applications",
+    "category": "Solutions",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.sphere/catalogs",
+    "category": "Sphere",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.sql/managedinstances",
+    "category": "Databases",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.sql/managedinstances/databases",
+    "category": "Databases",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.sql/servers",
+    "category": "Databases",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.sql/servers/databases",
+    "category": "Databases",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.sql/servers/elasticpools",
+    "category": "Databases",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.sql/servers/firewallrules",
+    "category": "Databases",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.sql/servers/jobagents",
+    "category": "Databases",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.sql/virtualclusters",
+    "category": "Databases",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.sqlvirtualmachine/sqlvirtualmachines",
+    "category": "Databases",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.storage/storageaccounts",
+    "category": "Storage",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.storage/storageaccounts/blobservices",
+    "category": "Storage",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.storage/storageaccounts/blobservices/containers",
+    "category": "Storage",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.storage/storageaccounts/fileservices",
+    "category": "Storage",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.storage/storageaccounts/queueservices",
+    "category": "Storage",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.storage/storageaccounts/tableservices",
+    "category": "Storage",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.storagemover/storagemovers",
+    "category": "Storagemover",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.storagepool/diskpools",
+    "category": "Storagepool",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.storagesync/storagesyncservices",
+    "category": "Storage",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.storsimple/managers",
+    "category": "Storage",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.streamanalytics/streamingjobs",
+    "category": "Analytics",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.subscription/subscriptions",
+    "category": "Management",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.synapse/workspaces",
+    "category": "Databases",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.timeseriesinsights/environments",
+    "category": "IoT",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.videoindexer/accounts",
+    "category": "Videoindexer",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.web/certificates",
+    "category": "Web",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.web/connections",
+    "category": "Web",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.web/customapis",
+    "category": "Web",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.web/functions",
+    "category": "Web",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.web/hostingenvironments",
+    "category": "Web",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.web/serverfarms",
+    "category": "Web",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.web/sites",
+    "category": "Web",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.web/sites/config",
+    "category": "Web",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.web/sites/hostnamebindings",
+    "category": "Web",
+    "hasExplicitIcon": false
+  },
+  {
+    "type": "microsoft.web/sites/slots",
+    "category": "Web",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.web/staticsites",
+    "category": "Web",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.workloads/monitors",
+    "category": "Compute",
+    "hasExplicitIcon": true
+  },
+  {
+    "type": "microsoft.workloads/sapvirtualinstances",
+    "category": "Compute",
+    "hasExplicitIcon": true
+  }
+]

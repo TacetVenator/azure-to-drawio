@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Azure Discovery UI</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Azure Discovery Web UI</h1>
+            <p class="subtitle">Configuration, Pipeline Management, and Artifact Browsing</p>
+        </header>
+
+        <nav class="tabs">
+            <button class="tab-button active" onclick="switchTab('config')">Config</button>
+            <button class="tab-button" onclick="switchTab('pipeline')">Pipeline</button>
+            <button class="tab-button" onclick="switchTab('artifacts')">Artifacts</button>
+            <button class="tab-button" onclick="switchTab('split')">Split Overview</button>
+            <button class="tab-button" onclick="switchTab('migration')">Migration</button>
+        </nav>
+
+        <!-- Config Tab -->
+        <div id="config" class="tab-content active">
+            <h2>Configuration Validator</h2>
+            <form id="configForm">
+                <div class="form-group">
+                    <label for="appName">Application Name *</label>
+                    <input type="text" id="appName" name="app" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="subscriptions">Subscriptions (comma-separated) *</label>
+                    <textarea id="subscriptions" name="subscriptions" rows="3" required></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label for="seedResourceGroups">Seed Resource Groups (comma-separated)</label>
+                    <textarea id="seedResourceGroups" name="seedResourceGroups" rows="3"></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label for="outputDir">Output Directory *</label>
+                    <input type="text" id="outputDir" name="outputDir" required>
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" name="seedEntireSubscriptions"> Seed Entire Subscriptions
+                    </label>
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" name="includeRbac"> Include RBAC
+                    </label>
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" name="includePolicy"> Include Policy
+                    </label>
+                </div>
+
+                <div class="section">
+                    <h3>Application Split (Optional)</h3>
+                    <label>
+                        <input type="checkbox" name="applicationSplitEnabled"> Enable Application Split
+                    </label>
+                </div>
+
+                <div class="section">
+                    <h3>Migration Planning (Optional)</h3>
+                    <label>
+                        <input type="checkbox" name="migrationPlanEnabled"> Enable Migration Planning
+                    </label>
+                </div>
+
+                <button type="button" class="btn-primary" onclick="validateConfig()">Validate Config</button>
+            </form>
+
+            <div id="validationResult" class="result-panel" style="display: none;">
+                <h3>Validation Result</h3>
+                <pre id="resultContent"></pre>
+            </div>
+        </div>
+
+        <!-- Pipeline Tab -->
+        <div id="pipeline" class="tab-content">
+            <h2>Pipeline Execution</h2>
+            
+            <div class="section">
+                <button class="btn-primary" onclick="startPipeline()">Start New Run</button>
+            </div>
+
+            <h3>Recent Runs</h3>
+            <div id="jobsList" class="jobs-list">
+                <p>No runs yet. Start a new pipeline to see it here.</p>
+            </div>
+
+            <div id="jobStatusPanel" class="result-panel" style="display: none;">
+                <h3>Run Status</h3>
+                <pre id="statusContent"></pre>
+            </div>
+        </div>
+
+        <!-- Artifacts Tab -->
+        <div id="artifacts" class="tab-content">
+            <h2>Artifact Browser</h2>
+            
+            <div class="section">
+                <label for="runIdSelect">Select Run:</label>
+                <select id="runIdSelect" onchange="loadArtifacts()">
+                    <option value="">-- Choose a run --</option>
+                </select>
+            </div>
+
+            <div id="artifactsBrowser" style="display: none;">
+                <h3>Files</h3>
+                <div id="artifactsList" class="artifacts-list">
+                    <!-- Populated by loadArtifacts() -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Split Overview Tab -->
+        <div id="split" class="tab-content">
+            <h2>Application Split Overview</h2>
+            <p class="placeholder">Select a run from Pipeline tab to view split results.</p>
+                <div class="section">
+                    <label for="splitRunIdSelect">Run</label>
+                    <select id="splitRunIdSelect" onchange="loadSplitAndCandidates()">
+                        <option value="">-- Choose a run --</option>
+                    </select>
+                </div>
+
+                <div class="section">
+                    <h3>Split Confidence Filters</h3>
+                    <div class="filter-grid">
+                        <div class="form-group">
+                            <label for="splitAmbiguityFilter">Ambiguity Level</label>
+                            <select id="splitAmbiguityFilter">
+                                <option value="">All</option>
+                                <option value="low">Low</option>
+                                <option value="medium">Medium</option>
+                                <option value="high">High</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="splitMinConfidence">Min Confidence (0-1)</label>
+                            <input type="text" id="splitMinConfidence" placeholder="0.0">
+                        </div>
+                    </div>
+                    <button class="btn-primary" type="button" onclick="applySplitFilters()">Apply Split Filters</button>
+                </div>
+
+                <div id="splitOverview"></div>
+
+                <div class="section">
+                    <h3>Related Candidate Filters</h3>
+                    <div class="filter-grid">
+                        <div class="form-group">
+                            <label for="candidateQuery">Keyword Query</label>
+                            <input type="text" id="candidateQuery" placeholder="erp, sap, workload, namespace...">
+                        </div>
+                        <div class="form-group">
+                            <label for="candidateTypeFilter">Resource Type</label>
+                            <select id="candidateTypeFilter">
+                                <option value="">All</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="candidateTermFilter">Matched Search Term</label>
+                            <select id="candidateTermFilter">
+                                <option value="">All</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="candidateEvidenceFieldFilter">Evidence Field</label>
+                            <select id="candidateEvidenceFieldFilter">
+                                <option value="">All</option>
+                            </select>
+                        </div>
+                    </div>
+                    <button class="btn-primary" type="button" onclick="applyCandidateFilters()">Apply Candidate Filters</button>
+                </div>
+
+                <div id="candidatesOverview"></div>
+        </div>
+
+        <!-- Migration Overview Tab -->
+        <div id="migration" class="tab-content">
+            <h2>Migration Planning Overview</h2>
+            <p class="placeholder">Select a run from Pipeline tab to view migration plans.</p>
+                <div class="section">
+                    <label for="migrationRunIdSelect">Run</label>
+                    <select id="migrationRunIdSelect" onchange="loadMigrationAndArm()">
+                        <option value="">-- Choose a run --</option>
+                    </select>
+                </div>
+
+                <div id="migrationOverview"></div>
+
+                <div class="section">
+                    <h3>ARM Deployment Exploration</h3>
+                    <div class="filter-grid">
+                        <div class="form-group">
+                            <label for="armKeywordSearch">Search Keywords (comma-separated)</label>
+                            <input type="text" id="armKeywordSearch" placeholder="sap, erp, oracle, template, vnet">
+                        </div>
+                    </div>
+                    <button class="btn-primary" type="button" onclick="searchArmDeployments()">Search Deployment History</button>
+                </div>
+
+                <div id="armDeployments"></div>
+                <div id="armSearchResults"></div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

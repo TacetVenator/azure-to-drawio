@@ -513,3 +513,149 @@ def load_config(path: str) -> Config:
         cfg.localAnalysis.enabled,
     )
     return cfg
+
+
+def load_config_from_dict(data: dict) -> Config:
+    """Load config from a dictionary (e.g., from Web UI form or JSON payload).
+    
+    Applies the same validation as load_config but skips file loading.
+    
+    Args:
+        data: Dictionary containing config keys and values
+        
+    Returns:
+        Validated Config instance
+        
+    Raises:
+        ValueError: If validation fails
+    """
+    required = {"app", "subscriptions", "outputDir"}
+    missing = required - data.keys()
+    if missing:
+        raise ValueError(f"Config missing required keys: {missing}")
+
+    seed_rgs = _validate_string_list("seedResourceGroups", data.get("seedResourceGroups", []))
+    seed_resource_ids = _validate_string_list("seedResourceIds", data.get("seedResourceIds", []))
+    seed_tags = _validate_seed_tags(data.get("seedTags", {}))
+    seed_tag_keys = _validate_string_list("seedTagKeys", data.get("seedTagKeys", []))
+    tag_fallback_to_rg = data.get("tagFallbackToResourceGroup", False)
+    if not isinstance(tag_fallback_to_rg, bool):
+        raise ValueError(
+            "tagFallbackToResourceGroup must be a boolean, "
+            f"got {tag_fallback_to_rg!r}"
+        )
+    seed_management_groups = _validate_string_list("seedManagementGroups", data.get("seedManagementGroups", []))
+    seed_entire_subscriptions = data.get("seedEntireSubscriptions", False)
+    if not isinstance(seed_entire_subscriptions, bool):
+        raise ValueError(
+            f"seedEntireSubscriptions must be a boolean, got {seed_entire_subscriptions!r}"
+        )
+    if not seed_rgs and not seed_resource_ids and not seed_tags and not seed_tag_keys and not seed_entire_subscriptions and not seed_management_groups:
+        raise ValueError(
+            "Config must include at least one of seedResourceGroups, seedResourceIds, seedTags, seedTagKeys, or seedEntireSubscriptions (or seedManagementGroups)"
+        )
+
+    layout = data.get("layout", "SUB>REGION>RG>NET")
+    if layout not in VALID_LAYOUTS:
+        raise ValueError(f"Unsupported layout: {layout!r}. Valid: {sorted(VALID_LAYOUTS)}")
+
+    diagram_mode = data.get("diagramMode", "MSFT")
+    if diagram_mode not in VALID_DIAGRAM_MODES:
+        raise ValueError(f"Unsupported diagramMode: {diagram_mode!r}. Valid: {sorted(VALID_DIAGRAM_MODES)}")
+
+    spacing = data.get("spacing", "compact")
+    if spacing not in VALID_SPACINGS:
+        raise ValueError(f"Unsupported spacing: {spacing!r}. Valid: {VALID_SPACINGS}")
+
+    expand_scope = data.get("expandScope", "related")
+    if expand_scope not in VALID_EXPAND_SCOPES:
+        raise ValueError(f"Unsupported expandScope: {expand_scope!r}. Valid: {VALID_EXPAND_SCOPES}")
+
+    inventory_group_by = data.get("inventoryGroupBy", "type")
+    if inventory_group_by not in VALID_INVENTORY_GROUP_BYS:
+        raise ValueError(
+            f"Unsupported inventoryGroupBy: {inventory_group_by!r}. Valid: {VALID_INVENTORY_GROUP_BYS}"
+        )
+
+    network_detail = data.get("networkDetail", "full")
+    if network_detail not in VALID_NETWORK_DETAILS:
+        raise ValueError(f"Unsupported networkDetail: {network_detail!r}. Valid: {VALID_NETWORK_DETAILS}")
+
+    group_by_tag = _validate_string_list("groupByTag", data.get("groupByTag", []))
+
+    layout_magic = data.get("layoutMagic", False)
+    if not isinstance(layout_magic, bool):
+        raise ValueError(f"layoutMagic must be a boolean, got {layout_magic!r}")
+
+    enable_telemetry = data.get("enableTelemetry", False)
+    if not isinstance(enable_telemetry, bool):
+        raise ValueError(f"enableTelemetry must be a boolean, got {enable_telemetry!r}")
+
+    include_rbac = data.get("includeRbac", False)
+    if not isinstance(include_rbac, bool):
+        raise ValueError(f"includeRbac must be a boolean, got {include_rbac!r}")
+
+    resolve_principal_names = data.get("resolvePrincipalNames", False)
+    if not isinstance(resolve_principal_names, bool):
+        raise ValueError(f"resolvePrincipalNames must be a boolean, got {resolve_principal_names!r}")
+
+    include_policy = data.get("includePolicy", False)
+    if not isinstance(include_policy, bool):
+        raise ValueError(f"includePolicy must be a boolean, got {include_policy!r}")
+
+    include_advisor = data.get("includeAdvisor", False)
+    if not isinstance(include_advisor, bool):
+        raise ValueError(f"includeAdvisor must be a boolean, got {include_advisor!r}")
+
+    include_quota = data.get("includeQuota", False)
+    if not isinstance(include_quota, bool):
+        raise ValueError(f"includeQuota must be a boolean, got {include_quota!r}")
+
+    include_vm_details = data.get("includeVmDetails", False)
+    if not isinstance(include_vm_details, bool):
+        raise ValueError(f"includeVmDetails must be a boolean, got {include_vm_details!r}")
+
+    lookback_days = data.get("telemetryLookbackDays", 7)
+    if not isinstance(lookback_days, int) or lookback_days < 1:
+        raise ValueError(f"telemetryLookbackDays must be a positive integer, got {lookback_days!r}")
+
+    deep_discovery = _load_deep_discovery(data.get("deepDiscovery"))
+    application_split = _load_application_split(data.get("applicationSplit"))
+    migration_plan = _load_migration_plan(data.get("migrationPlan"))
+    local_analysis = _load_local_analysis(data.get("localAnalysis"))
+
+    cfg = Config(
+        app=data["app"],
+        subscriptions=data["subscriptions"],
+        seedManagementGroups=seed_management_groups,
+        seedResourceGroups=seed_rgs,
+        outputDir=data["outputDir"],
+        seedResourceIds=seed_resource_ids,
+        seedTags=seed_tags,
+        seedTagKeys=seed_tag_keys,
+        tagFallbackToResourceGroup=tag_fallback_to_rg,
+        seedEntireSubscriptions=seed_entire_subscriptions,
+        includeRbac=include_rbac,
+        resolvePrincipalNames=resolve_principal_names,
+        includePolicy=include_policy,
+        includeAdvisor=include_advisor,
+        includeQuota=include_quota,
+        includeVmDetails=include_vm_details,
+        enableTelemetry=enable_telemetry,
+        telemetryLookbackDays=lookback_days,
+        layout=layout,
+        diagramMode=diagram_mode,
+        spacing=spacing,
+        expandScope=expand_scope,
+        inventoryGroupBy=inventory_group_by,
+        networkDetail=network_detail,
+        edgeLabels=data.get("edgeLabels", False),
+        subnetColors=data.get("subnetColors", False),
+        groupByTag=group_by_tag,
+        layoutMagic=layout_magic,
+        deepDiscovery=deep_discovery,
+        applicationSplit=application_split,
+        migrationPlan=migration_plan,
+        localAnalysis=local_analysis,
+    )
+    return cfg

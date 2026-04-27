@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .config import Config, VALID_DIAGRAM_MODES, VALID_LAYOUTS
+from .registry import enrich_catalog_with_registry, load_registry
 from .util import load_json_file, normalize_id, stable_id
 
 log = logging.getLogger(__name__)
@@ -98,6 +99,49 @@ _ASSOCIATION_EDGE_KINDS = {
 _PEERING_EDGE_KINDS = {
     "vnet->peeredVnet",
 }
+
+# Intent classification: maps every named edge kind to one of five buckets.
+# Any kind not listed defaults to "network-flow".
+_EDGE_INTENT_MAP: dict[str, str] = {
+    # Network flow — physical/virtual wiring
+    "vm->nic":                  "network-flow",
+    "nic->nsg":                 "network-flow",
+    "nic->asg":                 "network-flow",
+    "subnet->nsg":              "network-flow",
+    "subnet->routeTable":       "network-flow",
+    "subnet->vnet":             "network-flow",
+    "nsgRule->sourceAsg":       "network-flow",
+    "nsgRule->destAsg":         "network-flow",
+    "vnet->peeredVnet":         "network-flow",
+    "webApp->subnet":           "network-flow",
+    "containerEnv->subnet":     "network-flow",
+    "privateEndpoint->subnet":  "network-flow",
+    "appGw->subnet":            "network-flow",
+    "firewall->subnet":         "network-flow",
+    "bastion->subnet":          "network-flow",
+    "internet->publicIp":       "network-flow",
+    "onPrem->gateway":          "network-flow",
+    "loadBalancer->backendPool": "network-flow",
+    # Data flow — telemetry and analytics
+    "appInsights->dependency":  "data-flow",
+    "appInsights->workspace":   "data-flow",
+    "flowLog->flow":            "data-flow",
+    "flowLog->traffic":         "data-flow",
+    # Control plane — activity logs, RBAC, governance
+    "activityLog->access":      "control-plane",
+    "rbac_assignment":          "governance",
+    "udr_detail":               "control-plane",
+    "nsg_detail":               "control-plane",
+    # Integration — cross-service orchestration
+    "resource->dependency":     "integration",
+}
+
+
+def _edge_intent(kind: str) -> str:
+    """Return the intent bucket for an edge kind."""
+    return _EDGE_INTENT_MAP.get(kind, "network-flow")
+
+
 # All other edge kinds default to traffic/attachment style
 
 # Differentiated edge styles (all lines are at least 2pt wide)
@@ -127,6 +171,76 @@ MSFT_EDGE_STYLE_TELEMETRY_FLOW = (
     "strokeColor=#FF6600;strokeWidth=1;dashed=1;dashPattern=4 4;"
     "endArrow=open;endFill=0;"
 )
+
+# Intent-classified edge styles — 5 semantic buckets × 2 render modes
+# network-flow: Azure blue (#0078D4) — plain wiring / subnet membership
+EDGE_STYLE_INTENT_NETWORK_FLOW = (
+    "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;"
+    "strokeColor=#0078D4;strokeWidth=2;endArrow=block;endFill=1;"
+)
+MSFT_EDGE_STYLE_INTENT_NETWORK_FLOW = (
+    "edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;"
+    "strokeColor=#0078D4;strokeWidth=2;endArrow=block;endFill=1;"
+)
+# data-flow: green (#107C10) — telemetry, analytics, logs
+EDGE_STYLE_INTENT_DATA_FLOW = (
+    "edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;"
+    "strokeColor=#107C10;strokeWidth=1.5;dashed=1;dashPattern=6 3;"
+    "endArrow=open;endFill=0;"
+)
+MSFT_EDGE_STYLE_INTENT_DATA_FLOW = (
+    "edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;"
+    "strokeColor=#107C10;strokeWidth=1.5;dashed=1;dashPattern=6 3;"
+    "endArrow=open;endFill=0;"
+)
+# control-plane: grey (#666666) — UDR, NSG detail, activity log
+EDGE_STYLE_INTENT_CONTROL_PLANE = (
+    "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;"
+    "strokeColor=#666666;strokeWidth=1.5;dashed=1;dashPattern=4 4;"
+    "endArrow=open;endFill=0;"
+)
+MSFT_EDGE_STYLE_INTENT_CONTROL_PLANE = (
+    "edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;"
+    "strokeColor=#666666;strokeWidth=1.5;dashed=1;dashPattern=4 4;"
+    "endArrow=open;endFill=0;"
+)
+# governance: orange-red (#D83B01) — RBAC assignments
+EDGE_STYLE_INTENT_GOVERNANCE = (
+    "edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;"
+    "strokeColor=#D83B01;strokeWidth=1.5;dashed=1;dashPattern=8 3;"
+    "endArrow=ERmany;endFill=0;"
+)
+MSFT_EDGE_STYLE_INTENT_GOVERNANCE = (
+    "edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;"
+    "strokeColor=#D83B01;strokeWidth=1.5;dashed=1;dashPattern=8 3;"
+    "endArrow=ERmany;endFill=0;"
+)
+# integration: purple (#5C2D91) — cross-service dependencies, Logic App connections
+EDGE_STYLE_INTENT_INTEGRATION = (
+    "edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;"
+    "strokeColor=#5C2D91;strokeWidth=2;dashed=1;dashPattern=5 5;"
+    "endArrow=block;endFill=0;"
+)
+MSFT_EDGE_STYLE_INTENT_INTEGRATION = (
+    "edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;"
+    "strokeColor=#5C2D91;strokeWidth=2;dashed=1;dashPattern=5 5;"
+    "endArrow=block;endFill=0;"
+)
+
+_INTENT_STYLES = {
+    "network-flow":  (EDGE_STYLE_INTENT_NETWORK_FLOW,  MSFT_EDGE_STYLE_INTENT_NETWORK_FLOW),
+    "data-flow":     (EDGE_STYLE_INTENT_DATA_FLOW,      MSFT_EDGE_STYLE_INTENT_DATA_FLOW),
+    "control-plane": (EDGE_STYLE_INTENT_CONTROL_PLANE,  MSFT_EDGE_STYLE_INTENT_CONTROL_PLANE),
+    "governance":    (EDGE_STYLE_INTENT_GOVERNANCE,     MSFT_EDGE_STYLE_INTENT_GOVERNANCE),
+    "integration":   (EDGE_STYLE_INTENT_INTEGRATION,    MSFT_EDGE_STYLE_INTENT_INTEGRATION),
+}
+
+
+def _intent_style(intent: str, msft: bool) -> str:
+    pair = _INTENT_STYLES.get(intent, _INTENT_STYLES["network-flow"])
+    return pair[1] if msft else pair[0]
+
+
 MSFT_TYPE_HEADER_STYLE = "text;html=1;align=left;verticalAlign=top;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontSize=11;fontStyle=1;fontColor=#333333;"
 
 # ---------------------------------------------------------------------------
@@ -250,16 +364,25 @@ CALLOUT_COLUMN_MARGIN = 20
 
 
 def _edge_style(kind: str, msft: bool = False) -> str:
-    """Return the appropriate edge style based on edge kind and rendering mode."""
+    """Return the appropriate edge style based on edge kind and rendering mode.
+
+    Association and peering edges use their dedicated styles for backwards
+    compatibility with existing diagram snapshots.  All other kinds are
+    dispatched through the intent classification system so that the visual
+    weight and colour communicate the semantic bucket (network-flow, data-flow,
+    control-plane, governance, integration).
+    """
     if kind in _ASSOCIATION_EDGE_KINDS:
         return MSFT_EDGE_STYLE_ASSOCIATION if msft else EDGE_STYLE_ASSOCIATION
     if kind in _PEERING_EDGE_KINDS:
         return MSFT_EDGE_STYLE_PEERING if msft else EDGE_STYLE_PEERING
+    # Legacy telemetry special-cases kept for snapshot stability
     if kind == "appInsights->dependency":
         return MSFT_EDGE_STYLE_TELEMETRY_DEPENDENCY if msft else EDGE_STYLE_TELEMETRY_DEPENDENCY
     if kind == "flowLog->flow":
         return MSFT_EDGE_STYLE_TELEMETRY_FLOW if msft else EDGE_STYLE_TELEMETRY_FLOW
-    return MSFT_EDGE_STYLE_TRAFFIC if msft else EDGE_STYLE_TRAFFIC
+    # Fall through to intent-classified style
+    return _intent_style(_edge_intent(kind), msft)
 
 def _validate_render_surface(cfg: Config) -> None:
     if cfg.layout not in VALID_LAYOUTS:
@@ -358,6 +481,8 @@ def _write_resource_catalog(
     nodes: List[Dict],
     visible_node_ids: set[str],
     icons_used: Dict[str, Any],
+    icon_map: Optional[Dict[str, str]] = None,
+    edges: Optional[List[Dict]] = None,
 ) -> None:
     type_counts: Dict[str, int] = defaultdict(int)
     for node in nodes:
@@ -395,6 +520,14 @@ def _write_resource_catalog(
             "iconStatus": icon_status,
         })
 
+    # Edge intent statistics
+    edge_stats: Dict[str, int] = {}
+    if edges:
+        intent_counts: Dict[str, int] = defaultdict(int)
+        for e in edges:
+            intent_counts[_edge_intent(e.get("kind", ""))] += 1
+        edge_stats = dict(sorted(intent_counts.items()))
+
     payload = {
         "summary": {
             "resourceCount": sum(type_counts.values()),
@@ -402,9 +535,13 @@ def _write_resource_catalog(
             "mappedTypeCount": sum(1 for row in rows if row["iconStatus"] == "mapped"),
             "fallbackTypeCount": sum(1 for row in rows if row["iconStatus"] == "fallback"),
             "unknownTypeCount": sum(1 for row in rows if row["iconStatus"] == "unknown"),
+            "edgeStats": edge_stats,
         },
         "types": rows,
     }
+    assets_dir = Path(__file__).parent.parent.parent / "assets"
+    registry = load_registry(assets_dir)
+    payload = enrich_catalog_with_registry(payload, registry, icon_map)
     cfg.out("resource_catalog.json").write_text(json.dumps(payload, indent=2, sort_keys=True))
 
 
@@ -3228,7 +3365,7 @@ def _render_l2r_mode(
     log.info("Wrote %s (L2R mode)", out_path)
 
     cfg.out("icons_used.json").write_text(json.dumps(icons_used, indent=2, sort_keys=True))
-    _write_resource_catalog(cfg, nodes, visible_node_ids, icons_used)
+    _write_resource_catalog(cfg, nodes, visible_node_ids, icons_used, icon_map=icon_map, edges=edges)
     assets_dir = Path(__file__).parent.parent.parent / "assets"
     _rebuild_fallback_library(assets_dir, msft_icons or {})
     _try_export(cfg, out_path, "svg")
@@ -3896,7 +4033,7 @@ def generate_drawio(cfg: Config) -> None:
 
     # Write icons_used.json
     cfg.out("icons_used.json").write_text(json.dumps(icons_used, indent=2, sort_keys=True))
-    _write_resource_catalog(cfg, nodes, visible_node_ids, icons_used)
+    _write_resource_catalog(cfg, nodes, visible_node_ids, icons_used, icon_map=icon_map, edges=edges)
 
     # Regenerate fallback library whenever MSFT icons are present
     _rebuild_fallback_library(assets_dir, msft_icons)
@@ -4434,7 +4571,7 @@ def _render_msft_mode(
     log.info("Wrote %s (MSFT mode)", out_path)
 
     cfg.out("icons_used.json").write_text(json.dumps(icons_used, indent=2, sort_keys=True))
-    _write_resource_catalog(cfg, nodes, visible_node_ids, icons_used)
+    _write_resource_catalog(cfg, nodes, visible_node_ids, icons_used, icon_map=icon_map, edges=edges)
     assets_dir = Path(__file__).parent.parent.parent / "assets"
     _rebuild_fallback_library(assets_dir, msft_icons or {})
     _try_export(cfg, out_path, "svg")

@@ -178,6 +178,31 @@ def _resolve_split_values(
     return [discovered[key] for key in sorted(discovered)]
 
 
+def _collect_rg_application_values(
+    resources: List[Dict[str, Any]],
+    tag_keys: List[str],
+    rg_tag_lookup: Optional[Dict[Tuple[str, str], Dict[str, str]]] = None,
+) -> Dict[Tuple[str, str], Set[str]]:
+    rg_apps: Dict[Tuple[str, str], Set[str]] = defaultdict(set)
+    for resource in resources:
+        sub_id = str(resource.get("subscriptionId") or "").strip().lower()
+        rg_name = str(resource.get("resourceGroup") or "").strip().lower()
+        if not sub_id or not rg_name:
+            continue
+        app_value = _tag_value(resource, tag_keys, rg_tag_lookup)
+        if app_value:
+            rg_apps[(sub_id, rg_name)].add(app_value)
+    return rg_apps
+
+
+def _ambiguity_level(confidence: float) -> str:
+    if confidence < 0.5:
+        return "high"
+    if confidence < 0.8:
+        return "medium"
+    return "low"
+
+
 def build_split_preview(cfg: Config) -> str:
     split_cfg = cfg.applicationSplit
     tag_keys = split_cfg.tagKeys or _COMMON_APP_TAG_KEYS
@@ -367,6 +392,43 @@ def _project_slice(
     direct_count = sum(1 for resource in projected_inventory if _matches_application(resource, tag_keys, application_value, rg_tag_lookup))
     shared_count = sum(1 for resource in projected_inventory if not _matches_application(resource, tag_keys, application_value, rg_tag_lookup))
 
+    rg_app_values = _collect_rg_application_values(inventory, tag_keys, rg_tag_lookup)
+    ambiguous_rg_rows: List[Dict[str, Any]] = []
+    ambiguous_resource_count = 0
+    seen_rgs: Set[Tuple[str, str]] = set()
+    for resource in projected_inventory:
+        pair = (
+            str(resource.get("subscriptionId") or "").strip().lower(),
+            str(resource.get("resourceGroup") or "").strip().lower(),
+        )
+        if not pair[0] or not pair[1]:
+            continue
+        app_values = sorted(rg_app_values.get(pair, set()), key=str.lower)
+        if len(app_values) <= 1:
+            continue
+        ambiguous_resource_count += 1
+        if pair in seen_rgs:
+            continue
+        seen_rgs.add(pair)
+        ambiguous_rg_rows.append(
+            {
+                "subscriptionId": pair[0],
+                "resourceGroup": pair[1],
+                "apps": app_values,
+                "appCount": len(app_values),
+            }
+        )
+
+    total_owned = direct_count + shared_count
+    confidence = round(direct_count / total_owned, 3) if total_owned else 1.0
+    app_boundary = {
+        "confidence": confidence,
+        "ambiguityLevel": _ambiguity_level(confidence),
+        "ambiguousResourceGroupCount": len(ambiguous_rg_rows),
+        "ambiguousResourceCount": ambiguous_resource_count,
+        "ambiguousResourceGroups": ambiguous_rg_rows,
+    }
+
     return {
         "application": application_value,
         "graph": {"nodes": projected_nodes, "edges": projected_edges},
@@ -375,6 +437,7 @@ def _project_slice(
         "directCount": direct_count,
         "sharedCount": shared_count,
         "externalCount": len(projected_unresolved),
+        "appBoundary": app_boundary,
     }
 
 
@@ -465,6 +528,7 @@ def run_split(cfg: Config) -> List[Dict[str, Any]]:
             "directCount": projected["directCount"],
             "sharedCount": projected["sharedCount"],
             "externalCount": projected["externalCount"],
+            "appBoundary": projected["appBoundary"],
             "includeSharedDependencies": split_cfg.includeSharedDependencies,
         }
         (slice_dir / "slice.json").write_text(json.dumps(manifest, indent=2, sort_keys=True))
@@ -490,12 +554,16 @@ def run_split(cfg: Config) -> List[Dict[str, Any]]:
     ]
     if summaries:
         lines.extend([
-            "| application | direct | shared | external | path |",
-            "|-------------|--------|--------|----------|------|",
+            "| application | direct | shared | external | confidence | ambiguity | ambiguous RGs | path |",
+            "|-------------|--------|--------|----------|------------|-----------|---------------|------|",
         ])
         for summary in summaries:
+            boundary = summary.get("appBoundary") or {}
             lines.append(
-                f"| `{summary['application']}` | {summary['directCount']} | {summary['sharedCount']} | {summary['externalCount']} | `{summary['path']}` |"
+                "| "
+                f"`{summary['application']}` | {summary['directCount']} | {summary['sharedCount']} | {summary['externalCount']} | "
+                f"{boundary.get('confidence', 1.0)} | {boundary.get('ambiguityLevel', 'low')} | "
+                f"{boundary.get('ambiguousResourceGroupCount', 0)} | `{summary['path']}` |"
             )
     else:
         lines.append("No application slices were produced for the configured tag rules.")

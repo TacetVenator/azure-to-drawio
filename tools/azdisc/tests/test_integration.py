@@ -290,6 +290,7 @@ class TestDrawioGeneration:
         assert "summary" in data
         assert "types" in data
         assert data["summary"].get("typeCount", 0) > 0
+        assert "edgeStats" in data["summary"]
 
     def test_drawio_node_labels_present(self, tmp_path):
         self._generate(tmp_path)
@@ -477,3 +478,44 @@ def test_app_services_fixture_graph_edges_and_drawio(tmp_path):
     drawio_path = tmp_path / "diagram.drawio"
     assert drawio_path.exists()
     assert_drawio_references_resolve(drawio_path)
+
+
+class TestResourceCatalogThresholds:
+    """CI guardrails to prevent catalog coverage regressions."""
+
+    def _thresholds(self) -> dict:
+        thresholds_path = FIXTURES / "resource_catalog_thresholds.json"
+        return json.loads(thresholds_path.read_text())
+
+    def _summary(self, tmp_path) -> dict:
+        _seed_output_files(tmp_path)
+        cfg = _make_config(tmp_path)
+        build_graph(cfg)
+        generate_drawio(cfg)
+        catalog = json.loads((tmp_path / "resource_catalog.json").read_text())
+        return catalog.get("summary", {})
+
+    def test_unknown_type_count_does_not_increase(self, tmp_path):
+        thresholds = self._thresholds()
+        summary = self._summary(tmp_path)
+        assert summary.get("unknownTypeCount", 0) <= thresholds["unknownTypeCount_max"]
+
+    def test_mapped_type_count_meets_minimum(self, tmp_path):
+        thresholds = self._thresholds()
+        summary = self._summary(tmp_path)
+        assert summary.get("mappedTypeCount", 0) >= thresholds["mappedTypeCount_min"]
+
+    def test_icon_coverage_ratio_meets_minimum(self, tmp_path):
+        thresholds = self._thresholds()
+        summary = self._summary(tmp_path)
+        type_count = summary.get("typeCount", 0)
+        assert type_count > 0
+        coverage = summary.get("mappedTypeCount", 0) / type_count
+        assert coverage >= thresholds["iconCoveragePercent_min"]
+
+    def test_edge_stats_meet_minimums(self, tmp_path):
+        thresholds = self._thresholds()
+        summary = self._summary(tmp_path)
+        edge_stats = summary.get("edgeStats", {})
+        assert edge_stats.get("network-flow", 0) >= thresholds["edgeStats"]["network-flow_min"]
+        assert edge_stats.get("integration", 0) >= thresholds["edgeStats"]["integration_min"]

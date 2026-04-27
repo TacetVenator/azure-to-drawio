@@ -1,0 +1,357 @@
+/* Azure Discovery UI - Styles */
+
+:root {
+    --primary-color: #0078D4;
+    --primary-hover: #106EBE;
+    --border-color: #E1E1E1;
+    --text-color: #333;
+    --bg-light: #F5F5F5;
+    --success: #107C10;
+    --error: #D83B01;
+    --warning: #FFB900;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+    color: var(--text-color);
+    background-color: #FAFAFA;
+    line-height: 1.6;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+/* Header */
+header {
+    background: white;
+    border-bottom: 2px solid var(--primary-color);
+    padding: 20px 0;
+    margin-bottom: 30px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+header h1 {
+    font-size: 28px;
+    margin-bottom: 5px;
+    color: var(--primary-color);
+}
+
+header .subtitle {
+    color: #666;
+    font-size: 14px;
+}
+
+/* Tabs */
+.tabs {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+    border-bottom: 1px solid var(--border-color);
+    background: white;
+    padding: 0 20px;
+    border-radius: 4px 4px 0 0;
+}
+
+.tab-button {
+    background: none;
+    border: none;
+    padding: 12px 16px;
+    cursor: pointer;
+    color: #666;
+    font-size: 14px;
+    font-weight: 500;
+    border-bottom: 3px solid transparent;
+    transition: all 0.2s;
+}
+
+.tab-button:hover {
+    color: var(--primary-color);
+}
+
+.tab-button.active {
+    color: var(--primary-color);
+    border-bottom-color: var(--primary-color);
+}
+
+/* Tab Content */
+.tab-content {
+    display: none;
+    background: white;
+    padding: 20px;
+    border-radius: 4px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.tab-content.active {
+    display: block;
+}
+
+.tab-content h2 {
+    margin-bottom: 20px;
+    color: var(--primary-color);
+    font-size: 20px;
+}
+
+.tab-content h3 {
+    margin: 20px 0 10px 0;
+    font-size: 16px;
+}
+
+/* Forms */
+.form-group {
+    margin-bottom: 15px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: 500;
+    font-size: 14px;
+}
+
+.form-group input[type="text"],
+.form-group input[type="password"],
+.form-group textarea,
+.form-group select {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    font-size: 14px;
+    font-family: inherit;
+}
+
+.form-group input[type="text"]:focus,
+.form-group input[type="password"]:focus,
+.form-group textarea:focus,
+.form-group select:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(0, 120, 212, 0.1);
+}
+
+.form-group input[type="checkbox"] {
+    margin-right: 8px;
+}
+
+/* Buttons */
+.btn-primary {
+    background-color: var(--primary-color);
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    transition: background-color 0.2s;
+}
+
+.btn-primary:hover {
+    background-color: var(--primary-hover);
+}
+
+.btn-primary:active {
+    transform: scale(0.98);
+}
+
+/* Sections */
+.section {
+    margin: 20px 0;
+    padding: 15px;
+    background-color: var(--bg-light);
+    border-radius: 4px;
+    border-left: 3px solid var(--primary-color);
+}
+
+/* Result Panels */
+.result-panel {
+    margin-top: 20px;
+    background-color: var(--bg-light);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 15px;
+}
+
+.result-panel pre {
+    background: white;
+    padding: 10px;
+    border-radius: 3px;
+    overflow-x: auto;
+    font-size: 12px;
+    border: 1px solid var(--border-color);
+}
+
+/* Lists */
+.jobs-list,
+.artifacts-list {
+    background: var(--bg-light);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.jobs-list > div,
+.artifacts-list > div {
+    padding: 12px 15px;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.jobs-list > div:last-child,
+.artifacts-list > div:last-child {
+    border-bottom: none;
+}
+
+.job-badge {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 3px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.job-badge.running {
+    background-color: #E7F3FF;
+    color: var(--primary-color);
+}
+
+.job-badge.completed {
+    background-color: #E7F3E1;
+    color: var(--success);
+}
+
+.job-badge.failed {
+    background-color: #FFE7DC;
+    color: var(--error);
+}
+
+/* Placeholders */
+.placeholder {
+    color: #999;
+    font-style: italic;
+    padding: 20px;
+    text-align: center;
+}
+
+.filter-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+}
+
+.summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.summary-card {
+    background: var(--bg-light);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 10px;
+}
+
+.summary-card h4 {
+    margin-bottom: 4px;
+    font-size: 13px;
+    color: #666;
+}
+
+.summary-card p {
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.data-table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: #fff;
+}
+
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.data-table th,
+.data-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border-color);
+    text-align: left;
+    vertical-align: top;
+}
+
+.data-table th {
+    background: #f7f9fb;
+    font-weight: 600;
+}
+
+.chip {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    border: 1px solid var(--border-color);
+    background: #f4f7fb;
+    margin-right: 6px;
+}
+
+.chip.low {
+    border-color: #86c24b;
+    background: #eff8e5;
+    color: #2e6f00;
+}
+
+.chip.medium {
+    border-color: #e0b44b;
+    background: #fff6df;
+    color: #8b5c00;
+}
+
+.chip.high {
+    border-color: #d3807a;
+    background: #fdecea;
+    color: #9a2015;
+}
+
+/* Utility */
+.hidden {
+    display: none;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .container {
+        padding: 10px;
+    }
+
+    header h1 {
+        font-size: 20px;
+    }
+
+    .tabs {
+        flex-wrap: wrap;
+        padding: 0 10px;
+    }
+
+    .tab-button {
+        padding: 10px 12px;
+        font-size: 12px;
+    }
+}

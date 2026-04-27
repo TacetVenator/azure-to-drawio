@@ -43,7 +43,43 @@ The tool runs a seven-stage pipeline. Each stage reads the previous stage's outp
 
 ## Usage
 
-### Synopsis
+### Quick Start: CLI Only
+
+```bash
+python3 -m tools.azdisc run app/myapp/config.json
+```
+
+The entire tool is self-contained with no third-party dependencies beyond the standard library. Run the above command to discover Azure resources and generate diagrams.
+
+### Optional: Web UI (Phase 1 - Experimental)
+
+An optional FastAPI-based web interface is available for configuration validation, pipeline orchestration, and artifact browsing. The UI is fully optional and shares the same validation and pipeline logic as the CLI.
+
+**Prerequisites for UI:**
+- Install UI dependencies: `pip install -r tools/azdisc_ui/requirements.txt`
+
+**Start the UI server:**
+
+```bash
+python3 -m tools.azdisc_ui
+```
+
+Then open `http://localhost:8000` in your browser. The UI provides:
+- **Config Validator**: Validate configuration dictionaries before running pipelines
+- **Pipeline Dashboard**: Submit new runs and monitor their status
+- **Artifact Browser**: Browse and download generated diagrams, reports, and metadata
+- **Split Overview**: View application split summaries (if enabled)
+- **Migration Planning**: Review migration wave plans and confidence scores (if enabled)
+
+The UI runs pipelines in the background and polls for status. For long-running Azure discoveries, check back on the Pipeline dashboard to monitor progress and download artifacts when complete.
+
+**Note:** The CLI and UI share the same underlying discovery and transformation logic. You can use them interchangeably; the UI is purely a convenience wrapper for configuration, launching, and artifact browsing.
+
+---
+
+### CLI Usage
+
+#### Synopsis
 
 ```
 python3 -m tools.azdisc [-v] <command> <config.json>

@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Iterable
 
 from .config import load_config
@@ -18,6 +20,7 @@ from .insights import generate_vm_details_csv, run_advisor, run_quota
 from .inventory import generate_csv, generate_inventory_by_type_csv, generate_policy_csv, generate_policy_yaml, generate_yaml
 from .master_report import generate_master_report
 from .review import run_review_related
+from .registry import refresh_registry
 from .migration_plan import generate_migration_plan
 from .split import build_split_preview, run_split
 from .telemetry import run_telemetry_enrichment
@@ -132,6 +135,16 @@ def cmd_run(args) -> None:
     log.info("Pipeline complete for app=%s", cfg.app)
 
 
+def cmd_registry_refresh(args) -> None:
+    assets_dir = Path(args.assets_dir).expanduser().resolve()
+    subs = [s.strip() for s in (args.subscriptions or "").split(",") if s.strip()]
+    summary = refresh_registry(
+        assets_dir=assets_dir,
+        subscription_ids=subs or None,
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+
+
 def _iter_command_specs() -> Iterable[CommandSpec]:
     return [
         CommandSpec("run", cmd_run, "Run the full pipeline", supports_software_inventory=True),
@@ -164,6 +177,7 @@ def _iter_command_specs() -> Iterable[CommandSpec]:
         CommandSpec("render-all", _run_with_config(run_render_all), "Generate all layout x mode variants from an existing graph"),
         CommandSpec("report-all", _run_with_config(run_report_all), "Generate a Markdown report of all layout x mode x spacing variants"),
         CommandSpec("master-report", _run_with_config(generate_master_report), "Generate a consolidated master architecture report"),
+        CommandSpec("registry-refresh", cmd_registry_refresh, "Refresh assets/azure_type_registry.json from icon map + ARG type inventory", needs_config=False),
     ]
 
 
@@ -200,6 +214,17 @@ def build_parser() -> argparse.ArgumentParser:
             p.add_argument("--pack", help="Analyze only one pack slug such as root or an application name")
             p.add_argument("--rebuild-index", action="store_true", help="Rebuild the local chunk index before analysis")
             p.add_argument("--model", help="Override the configured localAnalysis.model for this run")
+        if spec.name == "registry-refresh":
+            default_assets = Path(__file__).parent.parent.parent / "assets"
+            p.add_argument(
+                "--assets-dir",
+                default=str(default_assets),
+                help="Path to assets directory containing azure_icon_map.json",
+            )
+            p.add_argument(
+                "--subscriptions",
+                help="Comma-separated subscription IDs for ARG discovery (optional)",
+            )
         p.set_defaults(func=spec.handler)
 
     p_test_all = sub.add_parser("test-all", help="Generate all layout x mode combinations from fixtures")

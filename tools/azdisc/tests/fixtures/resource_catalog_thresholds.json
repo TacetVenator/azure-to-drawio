@@ -1,0 +1,9 @@
+{
+  "unknownTypeCount_max": 0,
+  "mappedTypeCount_min": 13,
+  "iconCoveragePercent_min": 1.0,
+  "edgeStats": {
+    "network-flow_min": 21,
+    "integration_min": 9
+  }
+}

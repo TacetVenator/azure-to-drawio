@@ -96,6 +96,7 @@ def _build_pack_summary(
     unresolved: List[str],
     policy_rows: List[Dict[str, Any]],
     rbac_rows: List[Dict[str, Any]],
+    slice_manifest: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     nodes = graph.get("nodes", [])
     edges = graph.get("edges", [])
@@ -105,6 +106,25 @@ def _build_pack_summary(
     shared_targets = _shared_targets(nodes, edges)
     telemetry_edges = len(graph.get("telemetryEdges") or [])
     non_compliant_policies = policy_summary.get("NonCompliant", 0)
+    app_boundary = {
+        "available": False,
+        "confidence": 1.0,
+        "ambiguityLevel": "low",
+        "ambiguousResourceGroupCount": 0,
+        "ambiguousResourceCount": 0,
+        "ambiguousResourceGroups": [],
+    }
+    if isinstance(slice_manifest, dict) and isinstance(slice_manifest.get("appBoundary"), dict):
+        boundary = slice_manifest["appBoundary"]
+        app_boundary = {
+            "available": True,
+            "confidence": float(boundary.get("confidence", 1.0)),
+            "ambiguityLevel": str(boundary.get("ambiguityLevel", "low")),
+            "ambiguousResourceGroupCount": int(boundary.get("ambiguousResourceGroupCount", 0)),
+            "ambiguousResourceCount": int(boundary.get("ambiguousResourceCount", 0)),
+            "ambiguousResourceGroups": list(boundary.get("ambiguousResourceGroups") or []),
+        }
+
     return {
         "pack": pack_name,
         "resources": len(inventory) or len(nodes),
@@ -129,6 +149,7 @@ def _build_pack_summary(
         "nonCompliantPolicies": non_compliant_policies,
         "hasSharedDependencies": bool(shared_targets),
         "hasUnresolvedReferences": bool(unresolved),
+        "appBoundaryAnalysis": app_boundary,
     }
 
 
@@ -197,6 +218,17 @@ def _render_migration_plan(cfg: Config, summary: Dict[str, Any], is_root: bool) 
     if not blocker_lines:
         blocker_lines.append("No high-confidence blockers were inferred from the current artifacts alone.")
     lines.extend(f"- {line}" for line in blocker_lines)
+    app_boundary = summary.get("appBoundaryAnalysis") or {}
+    if app_boundary.get("available"):
+        lines += [
+            "",
+            "## Application Boundary Confidence",
+            "",
+            f"- Boundary confidence: {app_boundary.get('confidence', 1.0)}",
+            f"- Ambiguity level: {app_boundary.get('ambiguityLevel', 'low')}",
+            f"- Ambiguous resource groups: {app_boundary.get('ambiguousResourceGroupCount', 0)}",
+            f"- Resources in ambiguous groups: {app_boundary.get('ambiguousResourceCount', 0)}",
+        ]
     return lines
 
 
@@ -566,6 +598,13 @@ def _load_pack_inputs(base_dir: Path) -> Tuple[Dict[str, Any], List[Dict[str, An
     return graph, inventory, unresolved, policy_rows, rbac_rows
 
 
+def _load_slice_manifest(base_dir: Path) -> Dict[str, Any] | None:
+    manifest = _load_optional(base_dir / "slice.json", expected_type=dict)
+    if isinstance(manifest, dict):
+        return manifest
+    return None
+
+
 def _pack_targets(cfg: Config) -> List[Tuple[str, Path, Path, bool]]:
     output_root = _migration_output_root(cfg)
     targets: List[Tuple[str, Path, Path, bool]] = []
@@ -589,7 +628,8 @@ def generate_migration_plan(cfg: Config) -> None:
 
     for pack_name, base_dir, pack_dir, is_root in targets:
         graph, inventory, unresolved, policy_rows, rbac_rows = _load_pack_inputs(base_dir)
-        summary = _build_pack_summary(pack_name, graph, inventory, unresolved, policy_rows, rbac_rows)
+        slice_manifest = _load_slice_manifest(base_dir)
+        summary = _build_pack_summary(pack_name, graph, inventory, unresolved, policy_rows, rbac_rows, slice_manifest)
         pack_dir.mkdir(parents=True, exist_ok=True)
 
         _write_markdown(pack_dir / "migration-plan.md", _render_migration_plan(cfg, summary, is_root))

@@ -115,6 +115,27 @@ def test_generate_migration_plan_writes_split_packs(tmp_path):
     app_dir = tmp_path / "applications" / "sap"
     app_dir.mkdir(parents=True)
     _write_pack_inputs(app_dir)
+    (app_dir / "slice.json").write_text(
+        json.dumps(
+            {
+                "application": "SAP",
+                "appBoundary": {
+                    "confidence": 0.62,
+                    "ambiguityLevel": "medium",
+                    "ambiguousResourceGroupCount": 1,
+                    "ambiguousResourceCount": 2,
+                    "ambiguousResourceGroups": [
+                        {
+                            "subscriptionId": "sub1",
+                            "resourceGroup": "rg-shared",
+                            "apps": ["SAP", "CRM"],
+                            "appCount": 2,
+                        }
+                    ],
+                },
+            }
+        )
+    )
 
     cfg = Config(
         app="contoso",
@@ -132,6 +153,13 @@ def test_generate_migration_plan_writes_split_packs(tmp_path):
     assert (pack_dir / "migration-plan.md").exists()
     assert (pack_dir / "stakeholder-pack.md").exists()
     assert not (pack_dir / "copilot-prompts.md").exists()
+    content = (pack_dir / "migration-plan.md").read_text()
+    assert "## Application Boundary Confidence" in content
+    assert "Boundary confidence: 0.62" in content
+
+    summary = json.loads((pack_dir / "migration-plan.json").read_text())
+    assert summary["appBoundaryAnalysis"]["available"] is True
+    assert summary["appBoundaryAnalysis"]["ambiguityLevel"] == "medium"
 
 
 def test_master_report_links_migration_plan_when_present(tmp_path):

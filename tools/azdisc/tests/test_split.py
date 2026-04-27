@@ -398,6 +398,9 @@ def test_run_split_generates_per_application_outputs_with_shared_context(tmp_pat
     assert sap_manifest["directCount"] == 1
     assert sap_manifest["sharedCount"] == 1
     assert sap_manifest["externalCount"] == 1
+    assert sap_manifest["appBoundary"]["confidence"] == 0.5
+    assert sap_manifest["appBoundary"]["ambiguityLevel"] == "medium"
+    assert sap_manifest["appBoundary"]["ambiguousResourceGroupCount"] == 1
 
     sap_policy = json.loads((tmp_path / "applications" / "sap" / "policy.json").read_text())
     assert {row["policyAssignmentName"] for row in sap_policy} == {"sap-guardrail", "shared-plan-guardrail"}
@@ -407,6 +410,7 @@ def test_run_split_generates_per_application_outputs_with_shared_context(tmp_pat
     applications_report = (tmp_path / "applications.md").read_text()
     assert "`SAP`" in applications_report
     assert "`applications/sap`" in applications_report
+    assert "confidence" in applications_report
 
 
 def test_run_split_uses_rg_tag_fallback_for_direct_count(monkeypatch, tmp_path):
