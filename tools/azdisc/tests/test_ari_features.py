@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from tools.azdisc.config import load_config, Config
+from tools.azdisc import docs
 from tools.azdisc.docs import generate_docs
 from tools.azdisc.insights import generate_vm_details_csv
 from tools.azdisc.inventory import generate_inventory_by_type_csv
@@ -94,3 +95,53 @@ def test_generate_docs_writes_ari_style_reports(tmp_path):
     assert (tmp_path / "index.md").exists()
     assert (tmp_path / "inventory_by_type" / "manifest.json").exists()
     assert "Organization summary" in (tmp_path / "index.md").read_text()
+
+
+def test_catalog_includes_registry_only_resource_types(tmp_path, monkeypatch):
+    graph = {
+        "nodes": [
+            {
+                "id": "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Compute/virtualMachines/vm1",
+                "name": "vm1",
+                "type": "microsoft.compute/virtualmachines",
+                "location": "eastus",
+                "resourceGroup": "rg1",
+                "subscriptionId": "sub1",
+                "properties": {},
+                "attributes": [],
+            }
+        ],
+        "edges": [],
+    }
+    (tmp_path / "graph.json").write_text(json.dumps(graph))
+    (tmp_path / "unresolved.json").write_text("[]")
+
+    monkeypatch.setattr(
+        docs,
+        "load_registry",
+        lambda _assets_dir: {
+            "microsoft.compute/virtualmachines": {
+                "type": "microsoft.compute/virtualmachines",
+                "category": "Compute",
+                "hasExplicitIcon": True,
+            },
+            "microsoft.storage/storageaccounts": {
+                "type": "microsoft.storage/storageaccounts",
+                "category": "Storage",
+                "hasExplicitIcon": True,
+            },
+        },
+    )
+
+    cfg = Config(
+        app="catalog-all-types",
+        subscriptions=["sub1"],
+        seedResourceGroups=["rg1"],
+        outputDir=str(tmp_path),
+    )
+
+    generate_docs(cfg)
+
+    content = (tmp_path / "catalog.md").read_text()
+    assert "| `microsoft.compute/virtualmachines` | 1 |" in content
+    assert "| `microsoft.storage/storageaccounts` | 0 |" in content

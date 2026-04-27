@@ -1240,7 +1240,7 @@ Reports which Azure icon styles were used, for auditing and extending icon cover
 **Produced by:** `docs` stage
 **Format:** Markdown
 
-A resource catalog table listing every resource type discovered, with columns for count, regions, resource groups, and subscriptions. Titled with the app name from config.
+A resource catalog table listing all known resource types from `assets/azure_type_registry.json` (plus any discovered types not present in the registry yet), with columns for count, regions, resource groups, and subscriptions. Registry-only types appear with count `0`. Titled with the app name from config.
 
 Example output:
 

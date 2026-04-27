@@ -42,6 +42,18 @@ def create_app() -> FastAPI:
     templates_dir = Path(__file__).parent / "templates"
     templates_dir.mkdir(exist_ok=True)
     templates = Jinja2Templates(directory=str(templates_dir))
+
+    def render_template(name: str, request: Request, context: dict | None = None):
+        """Render templates across Starlette versions with differing signatures."""
+        ctx = dict(context or {})
+        ctx.setdefault("request", request)
+
+        try:
+            # Starlette 0.37+ expects request/name/context keyword arguments.
+            return templates.TemplateResponse(request=request, name=name, context=ctx)
+        except TypeError:
+            # Backward compatibility for older Starlette versions.
+            return templates.TemplateResponse(name, ctx)
     
     # Health check endpoint
     @app.get("/health", tags=["system"])
@@ -53,7 +65,7 @@ def create_app() -> FastAPI:
     @app.get("/", tags=["ui"])
     async def index(request: Request):
         """Serve index page."""
-        return templates.TemplateResponse("index.html", {"request": request})
+        return render_template("index.html", request)
     
     # ============================================================================
     # Config API Routes (Phase 1B, 2)

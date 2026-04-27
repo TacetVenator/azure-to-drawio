@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Set, Tuple
 from .config import Config
 from .governance import normalize_compliance_state, simplify_rbac_rows, summarize_policy_rows, summarize_resource_access
 from .inventory import generate_inventory_by_type_csv
+from .registry import load_registry
 from .util import load_json_file, normalize_id
 
 log = logging.getLogger(__name__)
@@ -94,6 +95,9 @@ def generate_docs(cfg: Config) -> None:
 
 
 def _write_catalog(cfg: Config, nodes: List[Dict]) -> None:
+    assets_dir = Path(__file__).resolve().parents[2] / "assets"
+    registry = load_registry(assets_dir)
+
     # type -> {count, regions, rgs, subs}
     stats: Dict[str, Dict] = {}
     for n in nodes:
@@ -108,6 +112,11 @@ def _write_catalog(cfg: Config, nodes: List[Dict]) -> None:
             s["rgs"].add(n["resourceGroup"])
         if n.get("subscriptionId"):
             s["subs"].add(n["subscriptionId"])
+
+    # Include all known registry types so catalog.md covers the full resource catalog,
+    # even when a type has zero instances in the current graph.
+    for resource_type in registry:
+        stats.setdefault(resource_type, {"count": 0, "regions": set(), "rgs": set(), "subs": set()})
 
     lines = [
         f"# Resource Catalog — {cfg.app}\n",
