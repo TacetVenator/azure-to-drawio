@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from dataclasses import asdict
 
 from tools.azdisc.config import load_config_from_dict
 
@@ -20,25 +20,7 @@ def validate_config_payload(data: dict) -> tuple[bool, list[str], dict | None]:
     """
     try:
         cfg = load_config_from_dict(data)
-        preview = {
-            "app": cfg.app,
-            "subscriptions": cfg.subscriptions,
-            "seedResourceGroups": cfg.seedResourceGroups,
-            "outputDir": cfg.outputDir,
-            "deepDiscovery": {
-                "enabled": cfg.deepDiscovery.enabled,
-                "searchStrings": cfg.deepDiscovery.searchStrings,
-            },
-            "applicationSplit": {
-                "enabled": cfg.applicationSplit.enabled,
-                "tagKeys": cfg.applicationSplit.tagKeys,
-                "values": cfg.applicationSplit.values,
-            },
-            "migrationPlan": {
-                "enabled": cfg.migrationPlan.enabled,
-                "audience": cfg.migrationPlan.audience,
-            },
-        }
+        preview = asdict(cfg)
         return True, [], preview
     except ValueError as e:
         log.warning("Config validation failed: %s", e)

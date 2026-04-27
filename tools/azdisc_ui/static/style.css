@@ -111,11 +111,54 @@ header .subtitle {
     margin-bottom: 15px;
 }
 
+.form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 12px;
+}
+
+.form-group-full {
+    grid-column: 1 / -1;
+}
+
 .form-group label {
     display: block;
     margin-bottom: 5px;
     font-weight: 500;
     font-size: 14px;
+}
+
+.label-with-help {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 10px 0;
+    font-size: 14px;
+}
+
+.checkbox-label span {
+    line-height: 1.2;
+}
+
+.info-tip {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #dbeeff;
+    color: #005a9e;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: help;
+    border: 1px solid #b5d8f5;
 }
 
 .form-group input[type="text"],
@@ -171,6 +214,14 @@ header .subtitle {
     background-color: var(--bg-light);
     border-radius: 4px;
     border-left: 3px solid var(--primary-color);
+}
+
+.form-toolbar {
+    margin: 16px 0;
+    padding: 10px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: #f7f9fb;
 }
 
 /* Result Panels */

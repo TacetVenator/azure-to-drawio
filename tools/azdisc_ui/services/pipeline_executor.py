@@ -3,15 +3,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
-from pathlib import Path
 
 from tools.azdisc.config import Config
 from tools.azdisc.discover import run_seed, run_expand, run_policy, run_rbac
 from tools.azdisc.graph import build_graph
 from tools.azdisc.drawio import generate_drawio
 from tools.azdisc.docs import generate_docs
+from tools.azdisc.insights import run_advisor, run_quota, generate_vm_details_csv
 from tools.azdisc.migration_plan import generate_migration_plan
+from tools.azdisc.vm_report import generate_vm_report_packs
 from tools.azdisc.split import run_split
 from tools.azdisc.telemetry import run_telemetry_enrichment
 from tools.azdisc.master_report import generate_master_report
@@ -50,7 +50,12 @@ class PipelineExecutor:
             ("rbac", lambda: run_rbac(config) if config.includeRbac else None),
             ("policy", lambda: run_policy(config) if config.includePolicy else None),
             ("graph", lambda: build_graph(config)),
+            ("telemetry", lambda: run_telemetry_enrichment(config) if config.enableTelemetry else None),
             ("drawio", lambda: generate_drawio(config)),
+            ("advisor", lambda: run_advisor(config) if config.includeAdvisor else None),
+            ("quota", lambda: run_quota(config) if config.includeQuota else None),
+            ("vm-details", lambda: generate_vm_details_csv(config) if config.includeVmDetails else None),
+            ("vm-report", lambda: generate_vm_report_packs(config)),
             ("docs", lambda: generate_docs(config)),
         ]
         
@@ -60,9 +65,6 @@ class PipelineExecutor:
         
         if config.migrationPlan.enabled:
             stages.append(("migration-plan", lambda: generate_migration_plan(config)))
-        
-        if config.enableTelemetry:
-            stages.append(("telemetry", lambda: run_telemetry_enrichment(config)))
         
         # Master report (always last)
         stages.append(("master-report", lambda: generate_master_report(config)))

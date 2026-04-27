@@ -25,55 +25,393 @@
         <div id="config" class="tab-content active">
             <h2>Configuration Validator</h2>
             <form id="configForm">
-                <div class="form-group">
-                    <label for="appName">Application Name *</label>
-                    <input type="text" id="appName" name="app" required>
-                </div>
-
-                <div class="form-group">
-                    <label for="subscriptions">Subscriptions (comma-separated) *</label>
-                    <textarea id="subscriptions" name="subscriptions" rows="3" required></textarea>
-                </div>
-
-                <div class="form-group">
-                    <label for="seedResourceGroups">Seed Resource Groups (comma-separated)</label>
-                    <textarea id="seedResourceGroups" name="seedResourceGroups" rows="3"></textarea>
-                </div>
-
-                <div class="form-group">
-                    <label for="outputDir">Output Directory *</label>
-                    <input type="text" id="outputDir" name="outputDir" required>
-                </div>
-
-                <div class="form-group">
-                    <label>
-                        <input type="checkbox" name="seedEntireSubscriptions"> Seed Entire Subscriptions
-                    </label>
-                </div>
-
-                <div class="form-group">
-                    <label>
-                        <input type="checkbox" name="includeRbac"> Include RBAC
-                    </label>
-                </div>
-
-                <div class="form-group">
-                    <label>
-                        <input type="checkbox" name="includePolicy"> Include Policy
-                    </label>
-                </div>
-
                 <div class="section">
-                    <h3>Application Split (Optional)</h3>
-                    <label>
-                        <input type="checkbox" name="applicationSplitEnabled"> Enable Application Split
+                    <h3>Required</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="appName" class="label-with-help">Application Name * <span class="info-tip" title="Unique app/workload identifier used in report naming.">i</span></label>
+                            <input type="text" id="appName" name="app" required>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="outputDir" class="label-with-help">Output Directory * <span class="info-tip" title="Directory where all generated artifacts are written.">i</span></label>
+                            <input type="text" id="outputDir" name="outputDir" required>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="subscriptions" class="label-with-help">Subscriptions (comma-separated) * <span class="info-tip" title="Azure subscription IDs used for ARG queries and discovery.">i</span></label>
+                        <textarea id="subscriptions" name="subscriptions" rows="2" required></textarea>
+                    </div>
+                </div>
+
+                <div class="form-toolbar">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="showAdvancedConfig" onchange="toggleAdvancedConfig(this.checked)">
+                        <span>Show Advanced Options</span>
+                        <span class="info-tip" title="Compact mode shows only required values. Enable advanced to configure all options.">i</span>
                     </label>
                 </div>
 
-                <div class="section">
-                    <h3>Migration Planning (Optional)</h3>
-                    <label>
-                        <input type="checkbox" name="migrationPlanEnabled"> Enable Migration Planning
+                <div class="section advanced-section hidden">
+                    <h3>Seed Scope</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="seedManagementGroups" class="label-with-help">Seed Management Groups <span class="info-tip" title="Management groups to expand into subscriptions for discovery.">i</span></label>
+                            <textarea id="seedManagementGroups" name="seedManagementGroups" rows="2" placeholder="mg-platform,mg-apps"></textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="seedResourceGroups" class="label-with-help">Seed Resource Groups <span class="info-tip" title="Resource groups used as direct seed scope.">i</span></label>
+                            <textarea id="seedResourceGroups" name="seedResourceGroups" rows="2" placeholder="rg-app-dev,rg-app-prod"></textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="seedResourceIds" class="label-with-help">Seed Resource IDs (newline/comma) <span class="info-tip" title="Exact ARM IDs to seed discovery with deterministic scope.">i</span></label>
+                            <textarea id="seedResourceIds" name="seedResourceIds" rows="3" placeholder="/subscriptions/.../resourceGroups/.../providers/.../resourceName"></textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="seedTagKeys" class="label-with-help">Seed Tag Keys <span class="info-tip" title="Seed resources that contain any of these tag keys.">i</span></label>
+                            <input type="text" id="seedTagKeys" name="seedTagKeys" placeholder="Application,Workload,Service">
+                        </div>
+
+                        <div class="form-group form-group-full">
+                            <label for="seedTags" class="label-with-help">Seed Tags (key=value per line or comma) <span class="info-tip" title="Seed by exact tag key/value matches.">i</span></label>
+                            <textarea id="seedTags" name="seedTags" rows="3" placeholder="Application=ERP"></textarea>
+                        </div>
+                    </div>
+
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="tagFallbackToResourceGroup">
+                        <span>Tag Fallback To Resource Group</span>
+                        <span class="info-tip" title="When enabled, RG tags are used when resource-level tags are missing.">i</span>
+                    </label>
+
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="seedEntireSubscriptions">
+                        <span>Seed Entire Subscriptions</span>
+                        <span class="info-tip" title="Treat all resources in configured subscriptions as initial seed scope.">i</span>
+                    </label>
+                </div>
+
+                <div class="section advanced-section hidden">
+                    <h3>Governance And Insights</h3>
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="includeRbac">
+                        <span>Include RBAC</span>
+                        <span class="info-tip" title="Collect role assignments for discovered resources.">i</span>
+                    </label>
+
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="resolvePrincipalNames">
+                        <span>Resolve Principal Names</span>
+                        <span class="info-tip" title="Best-effort lookup of Entra principal display names in RBAC artifacts.">i</span>
+                    </label>
+
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="includePolicy">
+                        <span>Include Policy</span>
+                        <span class="info-tip" title="Collect Azure Policy latest state scoped to discovered inventory.">i</span>
+                    </label>
+
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="includeAdvisor">
+                        <span>Include Advisor</span>
+                        <span class="info-tip" title="Collect Azure Advisor recommendations tied to discovered scope.">i</span>
+                    </label>
+
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="includeQuota">
+                        <span>Include Quota</span>
+                        <span class="info-tip" title="Collect regional quota snapshots for capacity planning.">i</span>
+                    </label>
+
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="includeVmDetails">
+                        <span>Include VM Details CSV</span>
+                        <span class="info-tip" title="Generate VM detail exports from discovered compute resources.">i</span>
+                    </label>
+                </div>
+
+                <div class="section advanced-section hidden">
+                    <h3>Telemetry</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="telemetryLookbackDays" class="label-with-help">Telemetry Lookback Days <span class="info-tip" title="Lookback window for telemetry enrichment queries.">i</span></label>
+                            <input type="text" id="telemetryLookbackDays" name="telemetryLookbackDays" value="7">
+                        </div>
+                    </div>
+
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="enableTelemetry">
+                        <span>Enable Telemetry Enrichment</span>
+                        <span class="info-tip" title="Adds runtime evidence from supported telemetry sources into the graph.">i</span>
+                    </label>
+                </div>
+
+                <div class="section advanced-section hidden">
+                    <h3>Render And Topology</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="layout" class="label-with-help">Layout <span class="info-tip" title="Graph layout strategy used by draw.io generation.">i</span></label>
+                            <select id="layout" name="layout">
+                                <option value="SUB>REGION>RG>NET" selected>SUB&gt;REGION&gt;RG&gt;NET</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="diagramMode" class="label-with-help">Diagram Mode <span class="info-tip" title="MSFT uses Azure icon visuals; L2R uses linear left-to-right style.">i</span></label>
+                            <select id="diagramMode" name="diagramMode">
+                                <option value="MSFT" selected>MSFT</option>
+                                <option value="L2R">L2R</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="spacing" class="label-with-help">Spacing <span class="info-tip" title="Controls node spacing density in generated diagrams.">i</span></label>
+                            <select id="spacing" name="spacing">
+                                <option value="compact" selected>compact</option>
+                                <option value="spacious">spacious</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="expandScope" class="label-with-help">Expand Scope <span class="info-tip" title="related keeps focused expansion; all allows broader transitive expansion.">i</span></label>
+                            <select id="expandScope" name="expandScope">
+                                <option value="related" selected>related</option>
+                                <option value="all">all</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="inventoryGroupBy" class="label-with-help">Inventory Group By <span class="info-tip" title="Grouping strategy used by inventory report exports.">i</span></label>
+                            <select id="inventoryGroupBy" name="inventoryGroupBy">
+                                <option value="type" selected>type</option>
+                                <option value="rg">rg</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="networkDetail" class="label-with-help">Network Detail <span class="info-tip" title="Controls network section verbosity in generated outputs.">i</span></label>
+                            <select id="networkDetail" name="networkDetail">
+                                <option value="full" selected>full</option>
+                                <option value="compact">compact</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group form-group-full">
+                            <label for="groupByTag" class="label-with-help">Group By Tag <span class="info-tip" title="Comma-separated tags to group report and display sections by.">i</span></label>
+                            <input type="text" id="groupByTag" name="groupByTag" placeholder="Application">
+                        </div>
+                    </div>
+
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="edgeLabels">
+                        <span>Edge Labels</span>
+                        <span class="info-tip" title="Display relationship labels on graph edges when available.">i</span>
+                    </label>
+
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="subnetColors">
+                        <span>Subnet Colors</span>
+                        <span class="info-tip" title="Apply distinct subnet coloring in diagram containers.">i</span>
+                    </label>
+
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="layoutMagic">
+                        <span>Layout Magic</span>
+                        <span class="info-tip" title="Enable additional layout heuristics for improved readability.">i</span>
+                    </label>
+                </div>
+
+                <div class="section advanced-section hidden">
+                    <h3>Deep Discovery</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="deepDiscoverySearchStrings" class="label-with-help">Search Strings (newline/comma) <span class="info-tip" title="Keywords used to discover related candidate resources.">i</span></label>
+                            <textarea id="deepDiscoverySearchStrings" name="deepDiscoverySearchStrings" rows="2" placeholder="sap,erp,workload"></textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="deepDiscoveryCandidateFile" class="label-with-help">Candidate File <span class="info-tip" title="Filename for discovered deep candidates.">i</span></label>
+                            <input type="text" id="deepDiscoveryCandidateFile" name="deepDiscoveryCandidateFile" value="related_candidates.json">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="deepDiscoveryPromotedFile" class="label-with-help">Promoted File <span class="info-tip" title="Filename for curated promoted candidates.">i</span></label>
+                            <input type="text" id="deepDiscoveryPromotedFile" name="deepDiscoveryPromotedFile" value="related_promoted.json">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="deepDiscoveryOutputDirName" class="label-with-help">Output Directory Name <span class="info-tip" title="Subdirectory for deep-discovery artifacts under outputDir.">i</span></label>
+                            <input type="text" id="deepDiscoveryOutputDirName" name="deepDiscoveryOutputDirName" value="deep-discovery">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="deepDiscoveryExtendedOutputDirName" class="label-with-help">Extended Output Directory Name <span class="info-tip" title="Subdirectory used by related-extend style outputs.">i</span></label>
+                            <input type="text" id="deepDiscoveryExtendedOutputDirName" name="deepDiscoveryExtendedOutputDirName" value="extended">
+                        </div>
+                    </div>
+
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="deepDiscoveryEnabled">
+                        <span>Enable Deep Discovery</span>
+                        <span class="info-tip" title="Turns on candidate discovery workflow for related resources.">i</span>
+                    </label>
+                </div>
+
+                <div class="section advanced-section hidden">
+                    <h3>Application Split</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="applicationSplitMode" class="label-with-help">Split Mode <span class="info-tip" title="Current split strategy implementation.">i</span></label>
+                            <select id="applicationSplitMode" name="applicationSplitMode">
+                                <option value="tag-value" selected>tag-value</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="applicationSplitTagKeys" class="label-with-help">Tag Keys <span class="info-tip" title="Tag keys considered for assigning resources to applications.">i</span></label>
+                            <input type="text" id="applicationSplitTagKeys" name="applicationSplitTagKeys" value="Application,App,Workload,Service">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="applicationSplitValues" class="label-with-help">Values <span class="info-tip" title="Comma-separated application values; use * for auto-detect.">i</span></label>
+                            <input type="text" id="applicationSplitValues" name="applicationSplitValues" value="*">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="applicationSplitOutputLayout" class="label-with-help">Output Layout <span class="info-tip" title="How split outputs are organized on disk.">i</span></label>
+                            <select id="applicationSplitOutputLayout" name="applicationSplitOutputLayout">
+                                <option value="subdirs" selected>subdirs</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="applicationSplitEnabled">
+                        <span>Enable Application Split</span>
+                        <span class="info-tip" title="Generate per-application split packs and summary reports.">i</span>
+                    </label>
+
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="applicationSplitIncludeSharedDependencies" checked>
+                        <span>Include Shared Dependencies</span>
+                        <span class="info-tip" title="Keep shared infrastructure dependencies referenced by split apps.">i</span>
+                    </label>
+                </div>
+
+                <div class="section advanced-section hidden">
+                    <h3>Migration Plan</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="migrationPlanOutputDir" class="label-with-help">Output Directory (optional override) <span class="info-tip" title="Write migration artifacts to this directory instead of default output location.">i</span></label>
+                            <input type="text" id="migrationPlanOutputDir" name="migrationPlanOutputDir">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="migrationPlanAudience" class="label-with-help">Audience <span class="info-tip" title="Controls tone and detail level in migration documentation.">i</span></label>
+                            <select id="migrationPlanAudience" name="migrationPlanAudience">
+                                <option value="mixed" selected>mixed</option>
+                                <option value="technical">technical</option>
+                                <option value="executive">executive</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="migrationPlanApplicationScope" class="label-with-help">Application Scope <span class="info-tip" title="Choose whether migration packs target root, split apps, or both.">i</span></label>
+                            <select id="migrationPlanApplicationScope" name="migrationPlanApplicationScope">
+                                <option value="both" selected>both</option>
+                                <option value="root">root</option>
+                                <option value="split">split</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="migrationPlanEnabled">
+                        <span>Enable Migration Planning</span>
+                        <span class="info-tip" title="Generate migration wave plans and advisory packs.">i</span>
+                    </label>
+
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="migrationPlanIncludeCopilotPrompts" checked>
+                        <span>Include Copilot Prompts</span>
+                        <span class="info-tip" title="Include Copilot-ready follow-up prompts in migration artifacts.">i</span>
+                    </label>
+                </div>
+
+                <div class="section advanced-section hidden">
+                    <h3>Local Analysis</h3>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="localAnalysisProvider" class="label-with-help">Provider <span class="info-tip" title="Local analysis provider (currently ollama).">i</span></label>
+                            <select id="localAnalysisProvider" name="localAnalysisProvider">
+                                <option value="ollama" selected>ollama</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="localAnalysisModel" class="label-with-help">Model <span class="info-tip" title="Required when local analysis is enabled.">i</span></label>
+                            <input type="text" id="localAnalysisModel" name="localAnalysisModel" placeholder="gemma3:latest">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="localAnalysisOutputDir" class="label-with-help">Output Directory <span class="info-tip" title="Directory name for local analysis output artifacts.">i</span></label>
+                            <input type="text" id="localAnalysisOutputDir" name="localAnalysisOutputDir" value="local-analysis">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="localAnalysisIntents" class="label-with-help">Intents (newline/comma) <span class="info-tip" title="Intents to execute; * runs all available intents.">i</span></label>
+                            <textarea id="localAnalysisIntents" name="localAnalysisIntents" rows="2">*</textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="localAnalysisPackScope" class="label-with-help">Pack Scope <span class="info-tip" title="Choose whether analysis targets root, split packs, or both.">i</span></label>
+                            <select id="localAnalysisPackScope" name="localAnalysisPackScope">
+                                <option value="both" selected>both</option>
+                                <option value="root">root</option>
+                                <option value="split">split</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group form-group-full">
+                            <label for="localAnalysisIncludeArtifacts" class="label-with-help">Include Artifacts <span class="info-tip" title="Comma-separated artifacts to include in local analysis context.">i</span></label>
+                            <input type="text" id="localAnalysisIncludeArtifacts" name="localAnalysisIncludeArtifacts" value="migration-plan,graph,unresolved,policy,rbac">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="localAnalysisMaxContextTokens" class="label-with-help">Max Context Tokens <span class="info-tip" title="Upper bound for context assembly token budget.">i</span></label>
+                            <input type="text" id="localAnalysisMaxContextTokens" name="localAnalysisMaxContextTokens" value="24000">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="localAnalysisMaxChunkTokens" class="label-with-help">Max Chunk Tokens <span class="info-tip" title="Maximum tokens per chunk during analysis preparation.">i</span></label>
+                            <input type="text" id="localAnalysisMaxChunkTokens" name="localAnalysisMaxChunkTokens" value="1200">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="localAnalysisTopK" class="label-with-help">Top K <span class="info-tip" title="Top-k retrieval chunks used by local analysis prompts.">i</span></label>
+                            <input type="text" id="localAnalysisTopK" name="localAnalysisTopK" value="8">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="localAnalysisTemperature" class="label-with-help">Temperature <span class="info-tip" title="Sampling temperature for local analysis model responses.">i</span></label>
+                            <input type="text" id="localAnalysisTemperature" name="localAnalysisTemperature" value="0.1">
+                        </div>
+                    </div>
+
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="localAnalysisEnabled">
+                        <span>Enable Local Analysis</span>
+                        <span class="info-tip" title="Run consultant-style local analysis workflow after discovery.">i</span>
+                    </label>
+
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="localAnalysisKeepIntermediate" checked>
+                        <span>Keep Intermediate Files</span>
+                        <span class="info-tip" title="Retain intermediate analysis chunks and indexes for troubleshooting.">i</span>
                     </label>
                 </div>
 

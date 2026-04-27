@@ -4,6 +4,139 @@
 
 let splitOverviewCache = null;
 
+function parseCsv(raw) {
+    return String(raw || '')
+        .split(',')
+        .map(v => v.trim())
+        .filter(Boolean);
+}
+
+function parseDelimitedList(raw) {
+    return String(raw || '')
+        .split(/[\n,]/)
+        .map(v => v.trim())
+        .filter(Boolean);
+}
+
+function parseSeedTags(raw) {
+    const pairs = String(raw || '')
+        .split(/[\n,]/)
+        .map(v => v.trim())
+        .filter(Boolean);
+    const tags = {};
+
+    pairs.forEach(pair => {
+        const separator = pair.indexOf('=');
+        if (separator <= 0) {
+            return;
+        }
+        const key = pair.slice(0, separator).trim();
+        const value = pair.slice(separator + 1).trim();
+        if (key && value) {
+            tags[key] = value;
+        }
+    });
+
+    return tags;
+}
+
+function parseOptionalInt(raw) {
+    const value = String(raw || '').trim();
+    if (!value) {
+        return null;
+    }
+    const parsed = Number.parseInt(value, 10);
+    return Number.isNaN(parsed) ? null : parsed;
+}
+
+function parseOptionalFloat(raw) {
+    const value = String(raw || '').trim();
+    if (!value) {
+        return null;
+    }
+    const parsed = Number.parseFloat(value);
+    return Number.isNaN(parsed) ? null : parsed;
+}
+
+function setIfNotNull(target, key, value) {
+    if (value !== null && value !== undefined) {
+        target[key] = value;
+    }
+}
+
+function buildConfigFromForm(formData) {
+    const config = {
+        app: String(formData.get('app') || '').trim(),
+        subscriptions: parseCsv(formData.get('subscriptions')),
+        outputDir: String(formData.get('outputDir') || '').trim(),
+        seedManagementGroups: parseCsv(formData.get('seedManagementGroups')),
+        seedResourceGroups: parseCsv(formData.get('seedResourceGroups')),
+        seedResourceIds: parseDelimitedList(formData.get('seedResourceIds')),
+        seedTags: parseSeedTags(formData.get('seedTags')),
+        seedTagKeys: parseCsv(formData.get('seedTagKeys')),
+        tagFallbackToResourceGroup: formData.get('tagFallbackToResourceGroup') === 'on',
+        seedEntireSubscriptions: formData.get('seedEntireSubscriptions') === 'on',
+        includeRbac: formData.get('includeRbac') === 'on',
+        resolvePrincipalNames: formData.get('resolvePrincipalNames') === 'on',
+        includePolicy: formData.get('includePolicy') === 'on',
+        includeAdvisor: formData.get('includeAdvisor') === 'on',
+        includeQuota: formData.get('includeQuota') === 'on',
+        includeVmDetails: formData.get('includeVmDetails') === 'on',
+        enableTelemetry: formData.get('enableTelemetry') === 'on',
+        layout: String(formData.get('layout') || 'SUB>REGION>RG>NET'),
+        diagramMode: String(formData.get('diagramMode') || 'MSFT'),
+        spacing: String(formData.get('spacing') || 'compact'),
+        expandScope: String(formData.get('expandScope') || 'related'),
+        inventoryGroupBy: String(formData.get('inventoryGroupBy') || 'type'),
+        networkDetail: String(formData.get('networkDetail') || 'full'),
+        edgeLabels: formData.get('edgeLabels') === 'on',
+        subnetColors: formData.get('subnetColors') === 'on',
+        groupByTag: parseCsv(formData.get('groupByTag')),
+        layoutMagic: formData.get('layoutMagic') === 'on',
+        deepDiscovery: {
+            enabled: formData.get('deepDiscoveryEnabled') === 'on',
+            searchStrings: parseDelimitedList(formData.get('deepDiscoverySearchStrings')),
+            candidateFile: String(formData.get('deepDiscoveryCandidateFile') || '').trim(),
+            promotedFile: String(formData.get('deepDiscoveryPromotedFile') || '').trim(),
+            outputDirName: String(formData.get('deepDiscoveryOutputDirName') || '').trim(),
+            extendedOutputDirName: String(formData.get('deepDiscoveryExtendedOutputDirName') || '').trim(),
+        },
+        applicationSplit: {
+            enabled: formData.get('applicationSplitEnabled') === 'on',
+            mode: String(formData.get('applicationSplitMode') || 'tag-value'),
+            tagKeys: parseCsv(formData.get('applicationSplitTagKeys')),
+            values: parseCsv(formData.get('applicationSplitValues')),
+            includeSharedDependencies: formData.get('applicationSplitIncludeSharedDependencies') === 'on',
+            outputLayout: String(formData.get('applicationSplitOutputLayout') || 'subdirs'),
+        },
+        migrationPlan: {
+            enabled: formData.get('migrationPlanEnabled') === 'on',
+            outputDir: String(formData.get('migrationPlanOutputDir') || '').trim(),
+            audience: String(formData.get('migrationPlanAudience') || 'mixed'),
+            applicationScope: String(formData.get('migrationPlanApplicationScope') || 'both'),
+            includeCopilotPrompts: formData.get('migrationPlanIncludeCopilotPrompts') === 'on',
+        },
+        localAnalysis: {
+            enabled: formData.get('localAnalysisEnabled') === 'on',
+            provider: String(formData.get('localAnalysisProvider') || 'ollama'),
+            model: String(formData.get('localAnalysisModel') || '').trim(),
+            outputDir: String(formData.get('localAnalysisOutputDir') || '').trim(),
+            intents: parseDelimitedList(formData.get('localAnalysisIntents')),
+            packScope: String(formData.get('localAnalysisPackScope') || 'both'),
+            includeArtifacts: parseCsv(formData.get('localAnalysisIncludeArtifacts')),
+            keepIntermediate: formData.get('localAnalysisKeepIntermediate') === 'on',
+        },
+    };
+
+    setIfNotNull(config, 'telemetryLookbackDays', parseOptionalInt(formData.get('telemetryLookbackDays')));
+    setIfNotNull(config.localAnalysis, 'maxContextTokens', parseOptionalInt(formData.get('localAnalysisMaxContextTokens')));
+    setIfNotNull(config.localAnalysis, 'maxChunkTokens', parseOptionalInt(formData.get('localAnalysisMaxChunkTokens')));
+    setIfNotNull(config.localAnalysis, 'topK', parseOptionalInt(formData.get('localAnalysisTopK')));
+    setIfNotNull(config.localAnalysis, 'temperature', parseOptionalFloat(formData.get('localAnalysisTemperature')));
+
+    return config;
+}
+
 // Tab switching
 function switchTab(eventOrName, maybeTabName) {
     const tabName = typeof eventOrName === 'string' ? eventOrName : maybeTabName;
@@ -37,32 +170,7 @@ function switchTab(eventOrName, maybeTabName) {
 async function validateConfig() {
     const form = document.getElementById('configForm');
     const formData = new FormData(form);
-    
-    // Convert form data to config object
-    const config = {
-        app: formData.get('app'),
-        subscriptions: formData.get('subscriptions')
-            .split(',')
-            .map(s => s.trim())
-            .filter(s => s),
-        outputDir: formData.get('outputDir'),
-        seedResourceGroups: formData.get('seedResourceGroups')
-            .split(',')
-            .map(s => s.trim())
-            .filter(s => s),
-        seedEntireSubscriptions: formData.get('seedEntireSubscriptions') === 'on',
-        includeRbac: formData.get('includeRbac') === 'on',
-        includePolicy: formData.get('includePolicy') === 'on',
-    };
-    
-    // Add optional features
-    if (formData.get('applicationSplitEnabled') === 'on') {
-        config.applicationSplit = { enabled: true };
-    }
-    
-    if (formData.get('migrationPlanEnabled') === 'on') {
-        config.migrationPlan = { enabled: true };
-    }
+    const config = buildConfigFromForm(formData);
     
     try {
         const response = await fetch('/api/config/validate', {
@@ -98,31 +206,7 @@ function displayValidationResult(result) {
 async function startPipeline() {
     const form = document.getElementById('configForm');
     const formData = new FormData(form);
-    
-    // Convert form data to config object
-    const config = {
-        app: formData.get('app'),
-        subscriptions: formData.get('subscriptions')
-            .split(',')
-            .map(s => s.trim())
-            .filter(s => s),
-        outputDir: formData.get('outputDir'),
-        seedResourceGroups: formData.get('seedResourceGroups')
-            .split(',')
-            .map(s => s.trim())
-            .filter(s => s),
-        seedEntireSubscriptions: formData.get('seedEntireSubscriptions') === 'on',
-        includeRbac: formData.get('includeRbac') === 'on',
-        includePolicy: formData.get('includePolicy') === 'on',
-    };
-
-    if (formData.get('applicationSplitEnabled') === 'on') {
-        config.applicationSplit = { enabled: true };
-    }
-
-    if (formData.get('migrationPlanEnabled') === 'on') {
-        config.migrationPlan = { enabled: true };
-    }
+    const config = buildConfigFromForm(formData);
     
     try {
         const response = await fetch('/api/pipeline/run', {
@@ -661,8 +745,21 @@ function switchToTab(tabName) {
     }
 }
 
+function toggleAdvancedConfig(showAdvanced) {
+    const sections = document.querySelectorAll('.advanced-section');
+    sections.forEach(section => {
+        if (showAdvanced) {
+            section.classList.remove('hidden');
+        } else {
+            section.classList.add('hidden');
+        }
+    });
+}
+
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
     console.log('Azure Discovery UI initialized');
+    const toggle = document.getElementById('showAdvancedConfig');
+    toggleAdvancedConfig(Boolean(toggle && toggle.checked));
     loadJobs();
 });
