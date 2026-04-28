@@ -430,10 +430,25 @@
             
             <div class="section">
                 <h3>Execution Mode</h3>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="authMode">Auth Mode</label>
+                        <select id="authMode">
+                            <option value="auto" selected>Auto (Token first, CLI fallback)</option>
+                            <option value="token">Token only</option>
+                            <option value="cli">CLI only</option>
+                        </select>
+                    </div>
+                </div>
                 <label class="checkbox-label">
                     <input type="checkbox" id="continueOnError">
                     <span>Continue On Error</span>
                     <span class="info-tip" title="Off by default for CLI parity. Enable only when you explicitly want partial outputs after a failed stage.">i</span>
+                </label>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="allowAuthorizationFallback">
+                    <span>Allow CLI fallback on authorization errors (403)</span>
+                    <span class="info-tip" title="By default, authorization failures stop the run so missing roles remain visible.">i</span>
                 </label>
                 <button class="btn-primary" onclick="startPipeline()">Start New Run</button>
             </div>

@@ -122,10 +122,20 @@ def create_app() -> FastAPI:
         try:
             # Support either raw config body or wrapped payload: {"config_data": {...}}
             if isinstance(config_data, dict) and "config_data" in config_data and isinstance(config_data["config_data"], dict):
-                continue_on_error = bool(config_data.get("execution_options", {}).get("continueOnError", False))
+                execution_options = config_data.get("execution_options", {})
+                continue_on_error = bool(execution_options.get("continueOnError", False))
+                auth_mode = str(execution_options.get("authMode", "auto")).strip().lower() or "auto"
+                allow_authorization_fallback = bool(execution_options.get("allowAuthorizationFallback", False))
+                token_available = bool(execution_options.get("tokenAvailable", False))
                 config_data = config_data["config_data"]
             else:
                 continue_on_error = False
+                auth_mode = "auto"
+                allow_authorization_fallback = False
+                token_available = False
+
+            if auth_mode not in {"auto", "token", "cli"}:
+                raise ValueError("execution_options.authMode must be one of: auto, token, cli")
 
             # Load config from data or file
             if config_data:
@@ -136,7 +146,14 @@ def create_app() -> FastAPI:
                 raise ValueError("Must provide either config_data or config_path")
             
             # Start pipeline in background
-            job = await runner.start_run(run_id, cfg, continue_on_error=continue_on_error)
+            job = await runner.start_run(
+                run_id,
+                cfg,
+                continue_on_error=continue_on_error,
+                auth_mode_requested=auth_mode,
+                allow_authorization_fallback=allow_authorization_fallback,
+                token_available=token_available,
+            )
             
             return {
                 "run_id": run_id,
@@ -147,6 +164,16 @@ def create_app() -> FastAPI:
                 },
                 "execution": {
                     "continueOnError": continue_on_error,
+                    "authMode": auth_mode,
+                    "allowAuthorizationFallback": allow_authorization_fallback,
+                    "tokenAvailable": token_available,
+                },
+                "auth": {
+                    "auth_mode_requested": job.get("auth_mode_requested", auth_mode),
+                    "auth_mode_effective": job.get("auth_mode_effective", "cli"),
+                    "fallback_triggered": job.get("fallback_triggered", False),
+                    "fallback_reason": job.get("fallback_reason"),
+                    "fallback_stage": job.get("fallback_stage"),
                 },
             }
         except Exception as e:
@@ -222,6 +249,9 @@ def create_app() -> FastAPI:
                     "app": job["config"].app,
                     "source_mode": job.get("source_mode", "pipeline"),
                     "continue_on_error": job.get("continue_on_error", False),
+                    "auth_mode_requested": job.get("auth_mode_requested", "auto"),
+                    "auth_mode_effective": job.get("auth_mode_effective", "cli"),
+                    "fallback_triggered": job.get("fallback_triggered", False),
                     "created_at": job["created_at"],
                     "completed_at": job.get("completed_at"),
                 }
@@ -249,6 +279,12 @@ def create_app() -> FastAPI:
             "source_mode": job.get("source_mode", "pipeline"),
             "continue_on_error": job.get("continue_on_error", False),
             "imported_artifacts": job.get("imported_artifacts", []),
+            "auth_mode_requested": job.get("auth_mode_requested", "auto"),
+            "auth_mode_effective": job.get("auth_mode_effective", "cli"),
+            "allow_authorization_fallback": job.get("allow_authorization_fallback", False),
+            "fallback_triggered": job.get("fallback_triggered", False),
+            "fallback_reason": job.get("fallback_reason"),
+            "fallback_stage": job.get("fallback_stage"),
             "stages": job.get("stages", []),
         }
     

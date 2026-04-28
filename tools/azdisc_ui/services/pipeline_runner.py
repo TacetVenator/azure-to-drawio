@@ -41,6 +41,12 @@ class PipelineRunner:
             "continue_on_error": bool(job.get("continue_on_error", False)),
             "source_mode": str(job.get("source_mode", "pipeline")),
             "imported_artifacts": list(job.get("imported_artifacts", [])),
+            "auth_mode_requested": str(job.get("auth_mode_requested", "auto")),
+            "auth_mode_effective": str(job.get("auth_mode_effective", "cli")),
+            "allow_authorization_fallback": bool(job.get("allow_authorization_fallback", False)),
+            "fallback_triggered": bool(job.get("fallback_triggered", False)),
+            "fallback_reason": job.get("fallback_reason"),
+            "fallback_stage": job.get("fallback_stage"),
         }
 
     def _save_state(self) -> None:
@@ -101,6 +107,12 @@ class PipelineRunner:
                 "continue_on_error": bool(entry.get("continue_on_error", False)),
                 "source_mode": source_mode,
                 "imported_artifacts": list(entry.get("imported_artifacts", [])),
+                "auth_mode_requested": str(entry.get("auth_mode_requested", "auto")),
+                "auth_mode_effective": str(entry.get("auth_mode_effective", "cli")),
+                "allow_authorization_fallback": bool(entry.get("allow_authorization_fallback", False)),
+                "fallback_triggered": bool(entry.get("fallback_triggered", False)),
+                "fallback_reason": entry.get("fallback_reason"),
+                "fallback_stage": entry.get("fallback_stage"),
             }
             loaded += 1
 
@@ -116,6 +128,9 @@ class PipelineRunner:
         continue_on_error: bool = False,
         source_mode: str = "pipeline",
         imported_artifacts: Optional[list[str]] = None,
+        auth_mode_requested: str = "auto",
+        allow_authorization_fallback: bool = False,
+        token_available: bool = False,
     ) -> Dict[str, Any]:
         """Start a new pipeline run in the background.
         
@@ -142,6 +157,12 @@ class PipelineRunner:
             "continue_on_error": continue_on_error,
             "source_mode": source_mode,
             "imported_artifacts": list(imported_artifacts or []),
+            "auth_mode_requested": auth_mode_requested,
+            "auth_mode_effective": "token" if auth_mode_requested == "token" and token_available else "cli",
+            "allow_authorization_fallback": allow_authorization_fallback,
+            "fallback_triggered": False,
+            "fallback_reason": None,
+            "fallback_stage": None,
         }
         
         self.jobs[run_id] = job
@@ -151,11 +172,29 @@ class PipelineRunner:
         if executor:
             asyncio.create_task(self._execute_custom(run_id, executor))
         else:
-            asyncio.create_task(self._execute_real_pipeline(run_id, config, continue_on_error))
+            asyncio.create_task(
+                self._execute_real_pipeline(
+                    run_id,
+                    config,
+                    continue_on_error,
+                    auth_mode_requested=auth_mode_requested,
+                    allow_authorization_fallback=allow_authorization_fallback,
+                    token_available=token_available,
+                )
+            )
         
         return job
     
-    async def _execute_real_pipeline(self, run_id: str, config: Config, continue_on_error: bool) -> None:
+    async def _execute_real_pipeline(
+        self,
+        run_id: str,
+        config: Config,
+        continue_on_error: bool,
+        *,
+        auth_mode_requested: str,
+        allow_authorization_fallback: bool,
+        token_available: bool,
+    ) -> None:
         """Execute real azdisc pipeline and update job status.
         
         Args:
@@ -187,11 +226,18 @@ class PipelineRunner:
                 config,
                 stage_status_callback,
                 continue_on_error=continue_on_error,
+                auth_mode=auth_mode_requested,
+                allow_authorization_fallback=allow_authorization_fallback,
+                token_available=token_available,
             )
             
             job["status"] = result["status"]
             job["stages"] = result.get("stages", job["stages"])
             job["error"] = result.get("error")
+            job["auth_mode_effective"] = result.get("auth_mode_effective", job.get("auth_mode_effective"))
+            job["fallback_triggered"] = bool(result.get("fallback_triggered", False))
+            job["fallback_reason"] = result.get("fallback_reason")
+            job["fallback_stage"] = result.get("fallback_stage")
             job["completed_at"] = datetime.utcnow().isoformat()
             self._save_state()
             
@@ -226,6 +272,12 @@ class PipelineRunner:
             "continue_on_error": False,
             "source_mode": "imported",
             "imported_artifacts": list(imported_artifacts),
+            "auth_mode_requested": "cli",
+            "auth_mode_effective": "cli",
+            "allow_authorization_fallback": False,
+            "fallback_triggered": False,
+            "fallback_reason": None,
+            "fallback_stage": None,
         }
         self.jobs[run_id] = job
         self._save_state()

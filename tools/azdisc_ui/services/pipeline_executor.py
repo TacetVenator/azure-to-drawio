@@ -24,6 +24,9 @@ class PipelineExecutor:
         config: Config,
         status_callback: Optional[Callable[[str, str], Awaitable[None]]] = None,
         continue_on_error: bool = False,
+        auth_mode: str = "auto",
+        allow_authorization_fallback: bool = False,
+        token_available: bool = False,
     ) -> dict:
         """Execute full pipeline from seed through docs and optional outputs.
         
@@ -40,6 +43,45 @@ class PipelineExecutor:
         completed_stages = []
         pipeline_failed = False
         pipeline_error = None
+        fallback_triggered = False
+        fallback_reason = None
+        fallback_stage = None
+
+        requested_mode = str(auth_mode or "auto").strip().lower()
+        if requested_mode not in {"auto", "token", "cli"}:
+            requested_mode = "auto"
+
+        effective_mode = "cli"
+        if requested_mode == "token":
+            if not token_available:
+                return {
+                    "status": "failed",
+                    "stages": completed_stages,
+                    "error": "Token auth requested but token is not available",
+                    "auth_mode_effective": "token",
+                    "fallback_triggered": False,
+                    "fallback_reason": None,
+                    "fallback_stage": None,
+                }
+            effective_mode = "token"
+        elif requested_mode == "auto":
+            if token_available:
+                effective_mode = "token"
+            else:
+                effective_mode = "cli"
+                fallback_triggered = True
+                fallback_reason = "Token unavailable at run start"
+                fallback_stage = "pipeline-start"
+
+        def _is_auth_error(err: Exception) -> bool:
+            message = str(err).lower()
+            markers = ["401", "unauthorized", "token", "credential", "expired", "refresh"]
+            return any(marker in message for marker in markers)
+
+        def _is_authorization_error(err: Exception) -> bool:
+            message = str(err).lower()
+            markers = ["403", "forbidden", "insufficient", "not authorized", "permission", "denied"]
+            return any(marker in message for marker in markers)
         
         try:
             config.ensure_output_dir()
@@ -77,13 +119,32 @@ class PipelineExecutor:
                     if status_callback:
                         await status_callback(stage.name, "failed")
 
-                    if not continue_on_error:
+                    switched_to_cli = False
+                    if effective_mode == "token" and not fallback_triggered:
+                        can_fallback = _is_auth_error(e) or (allow_authorization_fallback and _is_authorization_error(e))
+                        if can_fallback:
+                            effective_mode = "cli"
+                            fallback_triggered = True
+                            fallback_reason = str(e)
+                            fallback_stage = stage.name
+                            switched_to_cli = True
+                            log.warning(
+                                "Switching run to CLI fallback after token-mode failure at stage %s: %s",
+                                stage.name,
+                                e,
+                            )
+
+                    if not continue_on_error and not switched_to_cli:
                         break
 
             return {
                 "status": "completed-with-errors" if pipeline_failed and continue_on_error else ("failed" if pipeline_failed else "success"),
                 "stages": completed_stages,
                 "error": pipeline_error,
+                "auth_mode_effective": effective_mode,
+                "fallback_triggered": fallback_triggered,
+                "fallback_reason": fallback_reason,
+                "fallback_stage": fallback_stage,
             }
         except Exception as e:
             log.error("Pipeline failed with exception: %s", e)
@@ -91,6 +152,10 @@ class PipelineExecutor:
                 "status": "failed",
                 "stages": completed_stages,
                 "error": str(e),
+                "auth_mode_effective": effective_mode,
+                "fallback_triggered": fallback_triggered,
+                "fallback_reason": fallback_reason,
+                "fallback_stage": fallback_stage,
             }
     
     async def execute_split_only(self, config: Config) -> dict:

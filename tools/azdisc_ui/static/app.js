@@ -213,6 +213,9 @@ async function startPipeline() {
     const formData = new FormData(form);
     const config = buildConfigFromForm(formData);
     const continueOnError = Boolean(document.getElementById('continueOnError')?.checked);
+    const authMode = String(document.getElementById('authMode')?.value || 'auto').toLowerCase();
+    const allowAuthorizationFallback = Boolean(document.getElementById('allowAuthorizationFallback')?.checked);
+    const tokenAvailable = authMode === 'token';
     
     try {
         const response = await fetch('/api/pipeline/run', {
@@ -222,6 +225,9 @@ async function startPipeline() {
                 config_data: config,
                 execution_options: {
                     continueOnError,
+                    authMode,
+                    allowAuthorizationFallback,
+                    tokenAvailable,
                 },
             }),
         });
@@ -313,13 +319,13 @@ async function loadJobs() {
         }
 
         updateRunSelectors(result.jobs);
-        
+
         jobsList.innerHTML = result.jobs.map(job => `
             <div class="job-item">
                 <div>
                     <strong>${job.run_id}</strong> - ${job.app}
                     <span class="job-badge ${job.status}">${job.status}</span>
-                    <span class="job-meta">${escapeHtml(job.source_mode || 'pipeline')}${job.continue_on_error ? ' | continue-on-error' : ''}</span>
+                    <span class="job-meta">${escapeHtml(job.source_mode || 'pipeline')}${job.continue_on_error ? ' | continue-on-error' : ''}${job.auth_mode_effective ? ` | auth:${escapeHtml(job.auth_mode_effective)}` : ''}${job.fallback_triggered ? ' | cli-fallback' : ''}</span>
                 </div>
                 <small>${job.created_at}</small>
                 <button onclick="viewJobStatus('${job.run_id}')" style="margin-left: 10px;">Details</button>

@@ -39,6 +39,7 @@ def test_runner_persists_imported_run_and_recovers_it(tmp_path: Path, monkeypatc
     assert job["source_mode"] == "imported"
     assert job["status"] == "completed"
     assert job["imported_artifacts"] == ["seed.json"]
+    assert job["auth_mode_effective"] == "cli"
 
 
 def test_runner_marks_inflight_runs_as_failed_on_recovery(tmp_path: Path, monkeypatch) -> None:
@@ -62,6 +63,12 @@ def test_runner_marks_inflight_runs_as_failed_on_recovery(tmp_path: Path, monkey
                 "continue_on_error": False,
                 "source_mode": "pipeline",
                 "imported_artifacts": [],
+                "auth_mode_requested": "auto",
+                "auth_mode_effective": "cli",
+                "allow_authorization_fallback": False,
+                "fallback_triggered": True,
+                "fallback_reason": "Token unavailable at run start",
+                "fallback_stage": "pipeline-start",
             }
         ]
     }
@@ -73,3 +80,5 @@ def test_runner_marks_inflight_runs_as_failed_on_recovery(tmp_path: Path, monkey
     assert job is not None
     assert job["status"] == "failed"
     assert "Recovered after process restart" in str(job["error"])
+    assert job["fallback_triggered"] is True
+    assert job["fallback_stage"] == "pipeline-start"
