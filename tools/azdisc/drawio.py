@@ -13,7 +13,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from .config import Config, VALID_DIAGRAM_MODES, VALID_LAYOUTS
+from .config import Config, DiagramFocusConfig, VALID_DIAGRAM_MODES, VALID_LAYOUTS
 from .registry import enrich_catalog_with_registry, load_registry
 from .util import load_json_file, normalize_id, stable_id
 
@@ -3589,6 +3589,155 @@ def layout_nodes_hub_spoke(
     return positions, containers
 
 
+# ---------------------------------------------------------------------------
+# Diagram focus filtering
+# ---------------------------------------------------------------------------
+
+# Built-in presets: anchor types for each named focus mode.
+_FOCUS_PRESET_ANCHORS: Dict[str, set] = {
+    "vm-dependencies": {
+        "microsoft.compute/virtualmachines",
+    },
+    "vm-logicapp-integration": {
+        "microsoft.compute/virtualmachines",
+        "microsoft.logic/workflows",
+    },
+}
+
+# Preset-specific BFS depth overrides (if not specified by the config).
+_FOCUS_PRESET_DEPTH: Dict[str, int] = {
+    "vm-dependencies": 2,          # VM → NIC → subnet/NSG/VNet chain
+    "vm-logicapp-integration": 1,  # one hop: connections and NICs
+}
+
+
+def _filter_graph_by_focus(
+    nodes: List[Dict],
+    edges: List[Dict],
+    focus: DiagramFocusConfig,
+) -> Tuple[List[Dict], List[Dict]]:
+    """Return a filtered (nodes, edges) subset according to *focus*.
+
+    When ``focus.preset`` is ``"full"`` (or no anchor types are available),
+    the original lists are returned unchanged.
+
+    Otherwise:
+    1. Identify *anchor* nodes whose ARM type matches the preset/custom list.
+    2. If ``includeDependencies`` is True, BFS-expand anchor nodes via undirected
+       graph edges up to ``dependencyDepth`` hops.
+    3. Return only the nodes and edges that fall within the resulting set.
+    """
+    if focus.preset == "full":
+        return nodes, edges
+
+    # Resolve anchor types
+    if focus.preset == "custom":
+        anchor_types = {t.lower() for t in focus.resourceTypes}
+        depth = focus.dependencyDepth
+    else:
+        anchor_types = _FOCUS_PRESET_ANCHORS.get(focus.preset, set())
+        preset_depth = _FOCUS_PRESET_DEPTH.get(focus.preset, focus.dependencyDepth)
+        # Keep preset defaults for legacy behavior, but let users explicitly
+        # increase/decrease depth from the UI/config.
+        depth = preset_depth if focus.dependencyDepth == 1 else focus.dependencyDepth
+
+    if not anchor_types:
+        # Safety: unknown preset with no anchors → pass through
+        return nodes, edges
+
+    # Seed: nodes whose type matches an anchor type
+    included_ids: set = {
+        n["id"]
+        for n in nodes
+        if n.get("type", "").lower() in anchor_types
+    }
+    anchor_ids = set(included_ids)
+
+    if focus.includeDependencies and depth > 0:
+        # Build undirected adjacency from edges for BFS
+        adj: Dict[str, set] = defaultdict(set)
+        for e in edges:
+            adj[e["source"]].add(e["target"])
+            adj[e["target"]].add(e["source"])
+
+        frontier = set(included_ids)
+        for _ in range(depth):
+            next_frontier: set = set()
+            for nid in frontier:
+                for neighbor in adj.get(nid, set()):
+                    if neighbor not in included_ids:
+                        included_ids.add(neighbor)
+                        next_frontier.add(neighbor)
+            frontier = next_frontier
+            if not frontier:
+                break
+
+    filtered_nodes = [n for n in nodes if n["id"] in included_ids]
+    filtered_edges = [
+        e for e in edges
+        if e["source"] in included_ids and e["target"] in included_ids
+    ]
+
+    # Optional hard trim for VM-centric network context. This removes noisy
+    # fanout and keeps only the immediate VM network chain:
+    # VM -> NIC -> Subnet -> VNet.
+    if focus.networkScope == "immediate-vm-network":
+        vm_ids = {
+            n["id"] for n in filtered_nodes
+            if n.get("type", "").lower() == "microsoft.compute/virtualmachines"
+        }
+        if vm_ids:
+            keep_edges = []
+            keep_ids = set(vm_ids)
+
+            vm_to_nic = [
+                e for e in filtered_edges
+                if e.get("kind") == "vm->nic" and e["source"] in vm_ids
+            ]
+            keep_edges.extend(vm_to_nic)
+            nic_ids = {e["target"] for e in vm_to_nic}
+            keep_ids |= nic_ids
+
+            nic_to_subnet = [
+                e for e in filtered_edges
+                if e.get("kind") == "nic->subnet" and e["source"] in nic_ids
+            ]
+            keep_edges.extend(nic_to_subnet)
+            subnet_ids = {e["target"] for e in nic_to_subnet}
+            keep_ids |= subnet_ids
+
+            subnet_to_vnet = [
+                e for e in filtered_edges
+                if e.get("kind") == "subnet->vnet" and e["source"] in subnet_ids
+            ]
+            keep_edges.extend(subnet_to_vnet)
+            keep_ids |= {e["target"] for e in subnet_to_vnet}
+
+            filtered_edges = keep_edges
+            filtered_nodes = [n for n in filtered_nodes if n["id"] in keep_ids]
+
+    # Optional semantic edge filtering for high-level diagram types.
+    if focus.diagramType != "balanced":
+        if focus.diagramType == "network":
+            allowed_intents = {"network-flow"}
+        else:
+            # application mode focuses on app/service interactions
+            allowed_intents = {"integration", "data-flow"}
+
+        filtered_edges = [
+            e for e in filtered_edges
+            if _edge_intent(e.get("kind", "")) in allowed_intents
+        ]
+
+        # Keep node endpoints that still participate in allowed edges,
+        # and preserve anchors for context even if isolated.
+        edge_node_ids = {e["source"] for e in filtered_edges} | {e["target"] for e in filtered_edges}
+        keep_ids = edge_node_ids | anchor_ids
+        filtered_nodes = [n for n in filtered_nodes if n["id"] in keep_ids]
+
+    return filtered_nodes, filtered_edges
+
+
 def generate_drawio(cfg: Config) -> None:
     _validate_render_surface(cfg)
     graph_path = cfg.out("graph.json")
@@ -3602,6 +3751,10 @@ def generate_drawio(cfg: Config) -> None:
     )
     nodes: List[Dict] = graph["nodes"]
     edges: List[Dict] = graph["edges"]
+
+    # Apply diagram focus filter before layout (reduces graph to the requested
+    # resource types and their transitive dependencies).
+    nodes, edges = _filter_graph_by_focus(nodes, edges, cfg.diagramFocus)
 
     # Inject Internet / On-Premises boundary nodes
     nodes, edges = _inject_boundary_nodes(nodes, edges)

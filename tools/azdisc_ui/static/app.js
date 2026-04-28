@@ -131,6 +131,14 @@ function buildConfigFromForm(formData) {
             includeArtifacts: parseCsv(formData.get('localAnalysisIncludeArtifacts')),
             keepIntermediate: formData.get('localAnalysisKeepIntermediate') === 'on',
         },
+        diagramFocus: {
+            preset: String(formData.get('diagramFocusPreset') || 'full'),
+            resourceTypes: parseDelimitedList(formData.get('diagramFocusResourceTypes')),
+            includeDependencies: formData.get('diagramFocusIncludeDeps') === 'on',
+            dependencyDepth: parseInt(formData.get('diagramFocusDependencyDepth') || '1', 10),
+            networkScope: String(formData.get('diagramFocusNetworkScope') || 'full'),
+            diagramType: String(formData.get('diagramFocusDiagramType') || 'balanced'),
+        },
     };
 
     setIfNotNull(config, 'telemetryLookbackDays', parseOptionalInt(formData.get('telemetryLookbackDays')));
@@ -989,4 +997,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const toggle = document.getElementById('showAdvancedConfig');
     toggleAdvancedConfig(Boolean(toggle && toggle.checked));
     loadJobs();
+
+    // Diagram Focus: show/hide custom types textarea based on preset selection
+    const focusPreset = document.getElementById('diagramFocusPreset');
+    const focusCustomTypes = document.getElementById('diagramFocusCustomTypes');
+    if (focusPreset && focusCustomTypes) {
+        const updateFocusVisibility = () => {
+            focusCustomTypes.style.display = focusPreset.value === 'custom' ? '' : 'none';
+        };
+        focusPreset.addEventListener('change', updateFocusVisibility);
+        updateFocusVisibility();
+    }
 });

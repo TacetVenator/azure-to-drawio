@@ -23,6 +23,45 @@ VALID_MIGRATION_PLAN_APPLICATION_SCOPES = {"root", "split", "both"}
 VALID_LOCAL_ANALYSIS_PROVIDERS = {"ollama"}
 VALID_LOCAL_ANALYSIS_PACK_SCOPES = {"root", "split", "both"}
 APPLICATION_SPLIT_DEFAULT_TAG_KEYS = ["Application", "App", "Workload", "Service"]
+VALID_DIAGRAM_FOCUS_PRESETS = {"full", "vm-dependencies", "vm-logicapp-integration", "custom"}
+VALID_DIAGRAM_FOCUS_NETWORK_SCOPES = {"full", "immediate-vm-network"}
+VALID_DIAGRAM_FOCUS_DIAGRAM_TYPES = {"balanced", "network", "application"}
+
+
+@dataclass
+class DiagramFocusConfig:
+    """Controls which resources appear in the generated diagram.
+
+    preset:
+      - "full": include all resources (default — no filtering).
+      - "vm-dependencies": anchor on VMs and expand via edges to pull in
+        NICs, disks, NSGs, subnets, VNets, and other directly-attached infra.
+      - "vm-logicapp-integration": anchor on VMs and Logic Apps; include
+        their direct connections (useful for cross-subscription integration views).
+      - "custom": use resourceTypes list as anchors.
+    resourceTypes:
+      ARM resource types to anchor when preset=="custom" (e.g.
+      ["microsoft.compute/virtualmachines"]).
+    includeDependencies:
+      If True (default), BFS-expand anchor nodes via graph edges up to
+      dependencyDepth hops to pull in related resources.
+    dependencyDepth:
+      Number of edge-hops to follow when expanding anchor nodes (default 1).
+        networkScope:
+    - "full": keep currently selected dependency expansion.
+    - "immediate-vm-network": keep only immediate VM network chain
+        (VM -> NIC -> Subnet -> VNet), reducing noisy subnet fanout.
+diagramType:
+    - "balanced": keep all intents (default).
+    - "network": keep only network-flow edges.
+    - "application": keep integration/data-flow edges.
+    """
+    preset: str = "full"
+    resourceTypes: List[str] = field(default_factory=list)
+    includeDependencies: bool = True
+    dependencyDepth: int = 1
+    networkScope: str = "full"
+    diagramType: str = "balanced"
 
 
 @dataclass
@@ -112,6 +151,7 @@ class Config:
     applicationSplit: ApplicationSplitConfig = field(default_factory=ApplicationSplitConfig)
     migrationPlan: MigrationPlanConfig = field(default_factory=MigrationPlanConfig)
     localAnalysis: LocalAnalysisConfig = field(default_factory=LocalAnalysisConfig)
+    diagramFocus: DiagramFocusConfig = field(default_factory=DiagramFocusConfig)
 
     def out(self, filename: str) -> Path:
         return Path(self.outputDir) / filename
@@ -349,6 +389,67 @@ def _load_local_analysis(data: object) -> LocalAnalysisConfig:
     )
 
 
+def _load_diagram_focus(data: object) -> DiagramFocusConfig:
+    if data is None:
+        return DiagramFocusConfig()
+    if not isinstance(data, dict):
+        raise ValueError(f"diagramFocus must be an object, got {data!r}")
+
+    preset = data.get("preset", "full")
+    if preset not in VALID_DIAGRAM_FOCUS_PRESETS:
+        raise ValueError(
+            f"Unsupported diagramFocus.preset: {preset!r}. "
+            f"Valid: {sorted(VALID_DIAGRAM_FOCUS_PRESETS)}"
+        )
+
+    resource_types = data.get("resourceTypes", [])
+    if not isinstance(resource_types, list) or any(not isinstance(v, str) for v in resource_types):
+        raise ValueError(
+            f"diagramFocus.resourceTypes must be a list of strings, got {resource_types!r}"
+        )
+    resource_types = [t.strip().lower() for t in resource_types if t.strip()]
+
+    include_deps = data.get("includeDependencies", True)
+    if not isinstance(include_deps, bool):
+        raise ValueError(
+            f"diagramFocus.includeDependencies must be a boolean, got {include_deps!r}"
+        )
+
+    depth = data.get("dependencyDepth", 1)
+    if not isinstance(depth, int) or depth < 1 or depth > 5:
+        raise ValueError(
+            f"diagramFocus.dependencyDepth must be an integer between 1 and 5, got {depth!r}"
+        )
+
+    network_scope = data.get("networkScope", "full")
+    if network_scope not in VALID_DIAGRAM_FOCUS_NETWORK_SCOPES:
+        raise ValueError(
+            f"Unsupported diagramFocus.networkScope: {network_scope!r}. "
+            f"Valid: {sorted(VALID_DIAGRAM_FOCUS_NETWORK_SCOPES)}"
+        )
+
+    diagram_type = data.get("diagramType", "balanced")
+    if diagram_type not in VALID_DIAGRAM_FOCUS_DIAGRAM_TYPES:
+        raise ValueError(
+            f"Unsupported diagramFocus.diagramType: {diagram_type!r}. "
+            f"Valid: {sorted(VALID_DIAGRAM_FOCUS_DIAGRAM_TYPES)}"
+        )
+
+    if preset == "custom" and include_deps and not resource_types:
+        raise ValueError(
+            "diagramFocus.resourceTypes must be non-empty when preset=='custom' and includeDependencies is true"
+        )
+
+    return DiagramFocusConfig(
+        preset=preset,
+        resourceTypes=resource_types,
+        includeDependencies=include_deps,
+        dependencyDepth=depth,
+        networkScope=network_scope,
+        diagramType=diagram_type,
+    )
+
+
 def load_config(path: str) -> Config:
     p = Path(path)
     if not p.exists():
@@ -455,6 +556,7 @@ def load_config(path: str) -> Config:
     application_split = _load_application_split(data.get("applicationSplit"))
     migration_plan = _load_migration_plan(data.get("migrationPlan"))
     local_analysis = _load_local_analysis(data.get("localAnalysis"))
+    diagram_focus = _load_diagram_focus(data.get("diagramFocus"))
 
     cfg = Config(
         app=data["app"],
@@ -489,6 +591,7 @@ def load_config(path: str) -> Config:
         applicationSplit=application_split,
         migrationPlan=migration_plan,
         localAnalysis=local_analysis,
+        diagramFocus=diagram_focus,
     )
     log.info(
         "Loaded config for app=%s, subs=%d, seedMGs=%d, seedRGs=%d, seedResourceIds=%d, seedTags=%d, seedTagKeys=%d, tagFallbackToRG=%s, seedAllSubs=%s, includeRbac=%s, resolvePrincipalNames=%s, includePolicy=%s, includeAdvisor=%s, includeQuota=%s, includeVmDetails=%s, deepDiscovery=%s, appSplit=%s, migrationPlan=%s, localAnalysis=%s",
@@ -623,6 +726,7 @@ def load_config_from_dict(data: dict) -> Config:
     application_split = _load_application_split(data.get("applicationSplit"))
     migration_plan = _load_migration_plan(data.get("migrationPlan"))
     local_analysis = _load_local_analysis(data.get("localAnalysis"))
+    diagram_focus = _load_diagram_focus(data.get("diagramFocus"))
 
     cfg = Config(
         app=data["app"],
@@ -657,5 +761,6 @@ def load_config_from_dict(data: dict) -> Config:
         applicationSplit=application_split,
         migrationPlan=migration_plan,
         localAnalysis=local_analysis,
+        diagramFocus=diagram_focus,
     )
     return cfg

@@ -223,6 +223,70 @@
                         <span>Layout Magic</span>
                         <span class="info-tip" title="Enable additional layout heuristics for improved readability.">i</span>
                     </label>
+
+                    <h3 class="section-subtitle">Diagram Focus</h3>
+                    <p class="section-hint">Filter which resources appear in the diagram. Use a preset or specify custom ARM types.</p>
+                    <div class="form-grid">
+                        <div class="form-group form-group-full">
+                            <label for="diagramFocusPreset" class="label-with-help">Focus Preset
+                                <span class="info-tip" title="Choose a named diagram focus. 'All Resources' shows everything. 'VM + Dependencies' anchors on VMs and pulls in NICs, disks, NSGs, subnets, and VNets. 'VM + Logic App Interactions' shows VMs and Logic Apps with their direct connections (great for cross-subscription views). 'Custom' lets you enter ARM types manually.">i</span>
+                            </label>
+                            <select id="diagramFocusPreset" name="diagramFocusPreset">
+                                <option value="full" selected>All Resources (no filter)</option>
+                                <option value="vm-dependencies">VM + Dependencies</option>
+                                <option value="vm-logicapp-integration">VM + Logic App Interactions</option>
+                                <option value="custom">Custom</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group form-group-full" id="diagramFocusCustomTypes" style="display:none">
+                            <label for="diagramFocusResourceTypes" class="label-with-help">Resource Types (one per line)
+                                <span class="info-tip" title="ARM resource types to use as anchors, e.g. microsoft.compute/virtualmachines. One per line or comma-separated.">i</span>
+                            </label>
+                            <textarea id="diagramFocusResourceTypes" name="diagramFocusResourceTypes" rows="3"
+                                placeholder="microsoft.compute/virtualmachines&#10;microsoft.logic/workflows"></textarea>
+                        </div>
+
+                        <div class="form-group" id="diagramFocusDepsGroup">
+                            <label class="checkbox-label" style="margin-top:4px">
+                                <input type="checkbox" id="diagramFocusIncludeDeps" name="diagramFocusIncludeDeps" checked>
+                                <span>Expand Dependencies</span>
+                                <span class="info-tip" title="BFS-expand anchor nodes via graph edges to include related resources (NICs, subnets, NSGs, connections, etc.).">i</span>
+                            </label>
+                        </div>
+
+                        <div class="form-group" id="diagramFocusDepthGroup">
+                            <label for="diagramFocusDependencyDepth" class="label-with-help">Dependency Depth
+                                <span class="info-tip" title="Number of edge-hops to follow when expanding anchor nodes. 1 = direct connections only. 2 = includes resources connected to direct connections.">i</span>
+                            </label>
+                            <select id="diagramFocusDependencyDepth" name="diagramFocusDependencyDepth">
+                                <option value="1" selected>1 – Direct connections</option>
+                                <option value="2">2 – Two hops</option>
+                                <option value="3">3 – Three hops</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group" id="diagramFocusNetworkScopeGroup">
+                            <label for="diagramFocusNetworkScope" class="label-with-help">Network Scope
+                                <span class="info-tip" title="Use 'Immediate VM Network' to keep only VM→NIC→Subnet→VNet and reduce overlapping subnet fanout.">i</span>
+                            </label>
+                            <select id="diagramFocusNetworkScope" name="diagramFocusNetworkScope">
+                                <option value="full" selected>Full</option>
+                                <option value="immediate-vm-network">Immediate VM Network (VM→NIC→Subnet→VNet)</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group" id="diagramFocusDiagramTypeGroup">
+                            <label for="diagramFocusDiagramType" class="label-with-help">Diagram Type
+                                <span class="info-tip" title="Balanced keeps all edge intents. Network keeps network-flow edges. Application keeps integration and data-flow edges.">i</span>
+                            </label>
+                            <select id="diagramFocusDiagramType" name="diagramFocusDiagramType">
+                                <option value="balanced" selected>Balanced</option>
+                                <option value="network">Network</option>
+                                <option value="application">Application</option>
+                            </select>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="section advanced-section hidden">
