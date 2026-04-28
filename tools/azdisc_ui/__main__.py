@@ -363,7 +363,12 @@ def create_app() -> FastAPI:
 
     @app.get("/api/artifacts/preview/{run_id}/{file_path:path}", tags=["artifacts"])
     async def preview_artifact(run_id: str, file_path: str, limit: int = 50) -> dict:
-        """Preview JSON artifacts with sample rows and summary metadata."""
+        """Preview supported artifacts.
+
+        Supported preview types:
+        - JSON: sampled structural preview
+        - .drawio/.xml: raw XML text snippet preview
+        """
         from tools.azdisc_ui.services.json_preview import preview_json_artifact
         from tools.azdisc_ui.services.pipeline_runner import get_runner
 
@@ -379,19 +384,44 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=403, detail="Access denied")
         if not target.exists() or not target.is_file():
             raise HTTPException(status_code=404, detail="File not found")
-        if target.suffix.lower() != ".json":
-            raise HTTPException(status_code=400, detail="Preview is only supported for JSON artifacts")
+        suffix = target.suffix.lower()
 
-        try:
-            preview = preview_json_artifact(target, sample_limit=max(1, min(limit, 200)))
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+        if suffix == ".json":
+            try:
+                preview = preview_json_artifact(target, sample_limit=max(1, min(limit, 200)))
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
 
-        return {
-            "path": str(target.relative_to(root)),
-            "fileSize": target.stat().st_size,
-            **preview,
-        }
+            return {
+                "kind": "json",
+                "path": str(target.relative_to(root)),
+                "fileSize": target.stat().st_size,
+                **preview,
+            }
+
+        if suffix in {".drawio", ".xml", ".mxlibrary"}:
+            max_lines = max(20, min(limit * 4, 400))
+            text = target.read_text(encoding="utf-8", errors="replace")
+            lines = text.splitlines()
+            preview_lines = lines[:max_lines]
+            truncated = len(lines) > len(preview_lines)
+            preview_text = "\n".join(preview_lines)
+            if truncated:
+                preview_text += "\n... (truncated)"
+
+            return {
+                "kind": "xml",
+                "path": str(target.relative_to(root)),
+                "fileSize": target.stat().st_size,
+                "lineCount": len(lines),
+                "previewText": preview_text,
+                "truncated": truncated,
+            }
+
+        raise HTTPException(
+            status_code=400,
+            detail="Preview is supported for .json, .drawio, .xml, and .mxlibrary artifacts",
+        )
 
     @app.get("/api/inventory/explore/{run_id}", tags=["artifacts"])
     async def explore_inventory(
@@ -576,7 +606,79 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="keywords must be a list of strings")
 
         return search_deployments(job["output_dir"], keywords, limit=int(limit))
-    
+
+    # ============================================================================
+    # Deterministic Scenario Generation (Beta-Dumb-AI)
+    # ============================================================================
+
+    @app.post("/api/scenario/generate", tags=["scenario"])
+    async def scenario_generate(payload: dict) -> dict:
+        """Parse a controlled scenario prompt and return a deterministic graph payload.
+
+        Accepts:
+            text (str): the scenario description text.
+            template (str, optional): builtin template name to use instead of raw text.
+
+        Returns:
+            graph payload (nodes, edges, title, scenario, layout_rules)
+            plus a parsed_summary of counts.
+        """
+        from tools.azdisc.scenario_spec import (
+            parse_scenario_spec,
+            scenario_spec_to_graph,
+            BUILTIN_TEMPLATES,
+        )
+
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="payload must be a JSON object")
+
+        template_name = str(payload.get("template", "")).strip()
+        text = str(payload.get("text", "")).strip()
+
+        if template_name:
+            if template_name not in BUILTIN_TEMPLATES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown template '{template_name}'. Available: {sorted(BUILTIN_TEMPLATES)}",
+                )
+            text = BUILTIN_TEMPLATES[template_name]
+        elif not text:
+            raise HTTPException(
+                status_code=400,
+                detail="Must provide either 'text' or a valid 'template' name",
+            )
+
+        spec = parse_scenario_spec(text)
+        graph = scenario_spec_to_graph(spec)
+
+        return {
+            "graph": graph,
+            "parsed_summary": {
+                "resources": len(spec.resources),
+                "connections": len(spec.connections),
+                "layout_rules": len(spec.layout_rules),
+                "actor_nodes": sum(
+                    1 for n in graph["nodes"] if n["type"] == "scenario/actor"
+                ),
+                "total_nodes": len(graph["nodes"]),
+                "total_edges": len(graph["edges"]),
+            },
+            "available_templates": sorted(BUILTIN_TEMPLATES),
+        }
+
+    @app.get("/api/scenario/templates", tags=["scenario"])
+    async def scenario_templates() -> dict:
+        """List available builtin scenario templates."""
+        from tools.azdisc.scenario_spec import BUILTIN_TEMPLATES
+
+        return {
+            "templates": [
+                {"name": name, "text": text}
+                for name, text in sorted(BUILTIN_TEMPLATES.items())
+            ],
+            "total": len(BUILTIN_TEMPLATES),
+        }
+
     return app
 
 

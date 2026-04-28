@@ -219,3 +219,63 @@ Validation
 Use the mxfile.xsd schema to validate the XML structure of generated files. The schema covers the element hierarchy and attribute types. For style string validation (which properties and values are valid), refer to the Style Reference.
 
 The style reference also includes a validation checklist covering the most common issues in AI-generated diagrams.
+
+---
+
+## Azure-to-drawio: Deterministic "Beta-Dumb-AI" Notes
+
+Goal: Reproduce useful architecture diagrams from extracted data with deterministic transforms (no model inference at runtime).
+
+### Deterministic Actions
+
+1. Canonicalize inputs:
+  - Normalize resource IDs, type casing, and connection direction.
+  - Deduplicate edges by `(source, target, kind)`.
+2. Apply scenario templates:
+  - `vm-network-immediate`
+  - `vm-application-interactions`
+  - `full-balanced`
+3. Enforce allowed edge intents by diagram type:
+  - `network` => `network-flow`
+  - `application` => `integration`, `data-flow`
+  - `balanced` => all intents
+4. Enforce network scope rules:
+  - `immediate-vm-network` => keep only `vm->nic`, `nic->subnet`, `subnet->vnet`
+5. Emit deterministic artifacts:
+  - `scenario_spec.json`
+  - `scenario_rules_applied.json`
+  - `diagram.drawio` (+ optional `diagram.svg`, `diagram.png`)
+
+### UI Preview Status (Implemented)
+
+Artifact preview in the UI now supports:
+
+- `.json` sampled preview
+- `.drawio`, `.xml`, `.mxlibrary` XML snippet preview
+- `.png`, `.svg` inline visual preview
+
+Relevant files:
+
+- `tools/azdisc_ui/__main__.py` (preview API)
+- `tools/azdisc_ui/static/app.js` (preview rendering)
+- `tools/azdisc_ui/templates/index.html` (preview panel)
+- `tools/azdisc_ui/static/style.css` (image preview styling)
+
+### Next Deterministic Milestones
+
+1. [Done] Add `ScenarioSpec` schema and parser for controlled scenario text.
+2. [Done] Add `ScenarioSpec -> graph` adapter.
+3. Add template selector in UI to run deterministic scenario transforms.
+4. Add regression fixtures with fixed expected node/edge outputs.
+
+### ScenarioSpec Implementation (Current)
+
+Added deterministic parsing and adapter scaffolding:
+
+- `tools/azdisc/scenario_spec.py`
+  - `ScenarioSpec`, `ScenarioResource`, `ScenarioConnection` dataclasses.
+  - `parse_scenario_spec(text)` for section-based prompt parsing.
+  - `scenario_spec_to_graph(spec)` for deterministic graph payload generation.
+- `tools/azdisc/tests/test_scenario_spec.py`
+  - parser section extraction coverage.
+  - graph adapter coverage including synthesized actor nodes.

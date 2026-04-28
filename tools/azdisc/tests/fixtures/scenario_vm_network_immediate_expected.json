@@ -1,0 +1,9 @@
+{
+  "_comment": "Fixture: expected parse output for vm-network-immediate builtin template. Regenerate with: python3 -c \"from tools.azdisc.scenario_spec import parse_scenario_spec, BUILTIN_TEMPLATES, scenario_spec_to_graph; import json; spec=parse_scenario_spec(BUILTIN_TEMPLATES['vm-network-immediate']); g=scenario_spec_to_graph(spec); print(json.dumps({'title': spec.title, 'resource_count': len(spec.resources), 'connection_count': len(spec.connections), 'layout_rule_count': len(spec.layout_rules), 'total_nodes': len(g['nodes']), 'total_edges': len(g['edges'])}, indent=2))\"",
+  "title": "VM Immediate Network Context",
+  "resource_count": 5,
+  "connection_count": 2,
+  "layout_rule_count": 2,
+  "total_nodes": 5,
+  "total_edges": 4
+}

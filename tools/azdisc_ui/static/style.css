@@ -224,6 +224,52 @@ header .subtitle {
     background: #f7f9fb;
 }
 
+.section-subtitle {
+    margin-top: 16px;
+    margin-bottom: 6px;
+}
+
+.section-hint {
+    margin: 0 0 10px 0;
+    color: #5f6b77;
+    font-size: 13px;
+}
+
+.quick-preset-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.quick-preset-label {
+    font-size: 13px;
+    color: #5f6b77;
+    margin-right: 4px;
+}
+
+.quick-preset-btn {
+    border: 1px solid #bcd7f2;
+    background: #edf5fd;
+    color: #005a9e;
+    border-radius: 999px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.quick-preset-btn:hover {
+    background: #dbeeff;
+}
+
+.quick-preset-btn.active {
+    background: #0078d4;
+    border-color: #0078d4;
+    color: #fff;
+}
+
 /* Result Panels */
 .result-panel {
     margin-top: 20px;
@@ -240,6 +286,18 @@ header .subtitle {
     overflow-x: auto;
     font-size: 12px;
     border: 1px solid var(--border-color);
+}
+
+#artifactPreviewMedia {
+    margin-bottom: 10px;
+}
+
+#artifactPreviewMedia img {
+    max-width: 100%;
+    height: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: #fff;
 }
 
 /* Lists */

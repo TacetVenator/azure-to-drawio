@@ -9,6 +9,30 @@ let inventoryExplorerState = {
     lastRunId: '',
 };
 
+const QUICK_DIAGRAM_FOCUS_PRESETS = {
+    'full-balanced': {
+        preset: 'full',
+        includeDependencies: true,
+        dependencyDepth: '1',
+        networkScope: 'full',
+        diagramType: 'balanced',
+    },
+    'vm-network-immediate': {
+        preset: 'vm-dependencies',
+        includeDependencies: true,
+        dependencyDepth: '2',
+        networkScope: 'immediate-vm-network',
+        diagramType: 'network',
+    },
+    'vm-application-interactions': {
+        preset: 'vm-logicapp-integration',
+        includeDependencies: true,
+        dependencyDepth: '1',
+        networkScope: 'full',
+        diagramType: 'application',
+    },
+};
+
 function parseCsv(raw) {
     return String(raw || '')
         .split(',')
@@ -172,7 +196,10 @@ function switchTab(eventOrName, maybeTabName) {
     if (eventOrName && eventOrName.target) {
         eventOrName.target.classList.add('active');
     } else {
-        const button = Array.from(document.querySelectorAll('.tab-button')).find(btn => btn.textContent.toLowerCase().includes(tabName.toLowerCase()));
+        const needle = `switchTab('${tabName}')`;
+        const button = Array.from(document.querySelectorAll('.tab-button')).find(btn =>
+            String(btn.getAttribute('onclick') || '').includes(needle)
+        );
         if (button) {
             button.classList.add('active');
         }
@@ -374,7 +401,16 @@ async function loadArtifacts() {
         
         const artifactsList = document.getElementById('artifactsList');
         const previewPanel = document.getElementById('artifactPreviewPanel');
+        const previewMedia = document.getElementById('artifactPreviewMedia');
+        const previewContent = document.getElementById('artifactPreviewContent');
         previewPanel.style.display = 'none';
+        if (previewMedia) {
+            previewMedia.style.display = 'none';
+            previewMedia.innerHTML = '';
+        }
+        if (previewContent) {
+            previewContent.textContent = '';
+        }
         
         if (result.artifacts.length === 0) {
             artifactsList.innerHTML = '<p>No artifacts available.</p>';
@@ -389,11 +425,11 @@ async function loadArtifacts() {
                     ${artifact.type === 'file' ? `
                         <div class="artifact-actions">
                     ` : ''}
-                    ${artifact.type === 'file' && artifact.name.toLowerCase().endsWith('.json') ? `
-                        <button type="button" onclick="previewArtifact('${runId}', '${escapeHtml(artifact.path)}')">Preview</button>
+                    ${artifact.type === 'file' && getPreviewKind(artifact.name) ? `
+                        <button type="button" onclick="previewArtifact('${escapeHtml(runId)}', '${encodeArtifactPath(artifact.path)}')">Preview</button>
                     ` : ''}
                     ${artifact.type === 'file' ? `
-                        <a href="/api/artifacts/download/${runId}/${artifact.path}" target="_blank">
+                        <a href="/api/artifacts/download/${escapeHtml(runId)}/${encodeArtifactPath(artifact.path)}" target="_blank">
                             Download
                         </a>
                         </div>
@@ -539,17 +575,49 @@ function renderInventoryResults(result) {
     `;
 }
 
-async function previewArtifact(runId, artifactPath) {
+async function previewArtifact(runId, encodedArtifactPath) {
     try {
-        const response = await fetch(`/api/artifacts/preview/${runId}/${artifactPath}?limit=50`);
+        const artifactPath = decodeArtifactPath(encodedArtifactPath);
+        const kind = getPreviewKind(artifactPath);
+        const panel = document.getElementById('artifactPreviewPanel');
+        const media = document.getElementById('artifactPreviewMedia');
+        const content = document.getElementById('artifactPreviewContent');
+
+        if (media) {
+            media.style.display = 'none';
+            media.innerHTML = '';
+        }
+
+        if (kind === 'image' && media && content) {
+            const imgSrc = `/api/artifacts/download/${encodeURIComponent(runId)}/${encodedArtifactPath}`;
+            media.innerHTML = `<img src="${imgSrc}" alt="Artifact preview">`;
+            media.style.display = 'block';
+            content.textContent = `Image preview: ${artifactPath}`;
+            panel.style.display = 'block';
+            return;
+        }
+
+        const response = await fetch(`/api/artifacts/preview/${encodeURIComponent(runId)}/${encodedArtifactPath}?limit=50`);
         const result = await response.json();
         if (!response.ok) {
             throw new Error(result.detail || 'Preview failed');
         }
 
-        const panel = document.getElementById('artifactPreviewPanel');
-        const content = document.getElementById('artifactPreviewContent');
-        content.textContent = JSON.stringify(result, null, 2);
+        if (!content) {
+            panel.style.display = 'block';
+            return;
+        }
+
+        if (result.kind === 'xml') {
+            const downloadUrl = `/api/artifacts/download/${encodeURIComponent(runId)}/${encodedArtifactPath}`;
+            content.textContent =
+                `XML preview (${result.lineCount || 0} lines, ${formatBytes(result.fileSize || 0)})\n` +
+                `Download full file: ${downloadUrl}\n\n` +
+                `${result.previewText || ''}`;
+        } else {
+            content.textContent = JSON.stringify(result, null, 2);
+        }
+
         panel.style.display = 'block';
     } catch (error) {
         alert('Failed to preview artifact: ' + error.message);
@@ -960,6 +1028,28 @@ function escapeHtml(value) {
         .replace(/'/g, '&#39;');
 }
 
+function getPreviewKind(fileName) {
+    const lower = String(fileName || '').toLowerCase();
+    if (lower.endsWith('.json')) return 'json';
+    if (lower.endsWith('.svg') || lower.endsWith('.png')) return 'image';
+    if (lower.endsWith('.drawio') || lower.endsWith('.xml') || lower.endsWith('.mxlibrary')) return 'xml';
+    return '';
+}
+
+function encodeArtifactPath(path) {
+    return String(path || '')
+        .split('/')
+        .map(segment => encodeURIComponent(segment))
+        .join('/');
+}
+
+function decodeArtifactPath(path) {
+    return String(path || '')
+        .split('/')
+        .map(segment => decodeURIComponent(segment))
+        .join('/');
+}
+
 // Utility
 function formatBytes(bytes) {
     if (bytes === 0) return '0 Bytes';
@@ -991,21 +1081,212 @@ function toggleAdvancedConfig(showAdvanced) {
     });
 }
 
+function updateDiagramFocusVisibility() {
+    const focusPreset = document.getElementById('diagramFocusPreset');
+    const focusCustomTypes = document.getElementById('diagramFocusCustomTypes');
+    if (!focusPreset || !focusCustomTypes) {
+        return;
+    }
+    focusCustomTypes.style.display = focusPreset.value === 'custom' ? '' : 'none';
+}
+
+function setActiveQuickPresetButton(activeKey) {
+    const presetButtons = document.querySelectorAll('.quick-preset-btn[data-preset-key]');
+    presetButtons.forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.presetKey === activeKey);
+    });
+}
+
+function applyQuickDiagramFocusPreset(key) {
+    const presetValues = QUICK_DIAGRAM_FOCUS_PRESETS[key];
+    if (!presetValues) {
+        return;
+    }
+
+    const presetEl = document.getElementById('diagramFocusPreset');
+    const includeDepsEl = document.getElementById('diagramFocusIncludeDeps');
+    const depthEl = document.getElementById('diagramFocusDependencyDepth');
+    const scopeEl = document.getElementById('diagramFocusNetworkScope');
+    const diagramTypeEl = document.getElementById('diagramFocusDiagramType');
+
+    if (presetEl) presetEl.value = presetValues.preset;
+    if (includeDepsEl) includeDepsEl.checked = Boolean(presetValues.includeDependencies);
+    if (depthEl) depthEl.value = String(presetValues.dependencyDepth);
+    if (scopeEl) scopeEl.value = presetValues.networkScope;
+    if (diagramTypeEl) diagramTypeEl.value = presetValues.diagramType;
+
+    updateDiagramFocusVisibility();
+    setActiveQuickPresetButton(key);
+}
+
+// ============================================================================
+// Scenario Generation (Beta-Dumb-AI)
+// ============================================================================
+
+const scenarioTemplateTextByName = {};
+
+function prettifyScenarioTemplateName(name) {
+    return String(name || '')
+        .split('-')
+        .filter(Boolean)
+        .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(' ');
+}
+
+async function hydrateScenarioTemplates() {
+    const select = document.getElementById('scenarioTemplateSelect');
+    if (!select) return;
+
+    try {
+        const resp = await fetch('/api/scenario/templates');
+        if (!resp.ok) {
+            return;
+        }
+        const data = await resp.json();
+        const templates = Array.isArray(data.templates) ? data.templates : [];
+
+        // Preserve the custom option while rebuilding dynamic template entries.
+        select.querySelectorAll('option[data-scenario-template="1"]').forEach(opt => opt.remove());
+
+        templates.forEach(item => {
+            if (!item || typeof item.name !== 'string') return;
+            const name = item.name.trim();
+            if (!name) return;
+            const text = typeof item.text === 'string' ? item.text : '';
+            scenarioTemplateTextByName[name] = text;
+
+            const option = document.createElement('option');
+            option.value = name;
+            option.dataset.scenarioTemplate = '1';
+            option.textContent = prettifyScenarioTemplateName(name);
+            select.appendChild(option);
+        });
+    } catch (e) {
+        console.warn('Unable to hydrate scenario templates:', e);
+    }
+}
+
+async function loadScenarioTemplate() {
+    const select = document.getElementById('scenarioTemplateSelect');
+    const textarea = document.getElementById('scenarioText');
+    if (!select || !textarea) return;
+
+    const templateName = select.value;
+    if (!templateName) {
+        return;
+    }
+
+    if (!scenarioTemplateTextByName[templateName]) {
+        await hydrateScenarioTemplates();
+    }
+
+    const templateText = scenarioTemplateTextByName[templateName];
+    if (templateText) {
+        textarea.value = templateText;
+    }
+
+    const errEl = document.getElementById('scenarioError');
+    if (errEl) {
+        errEl.style.display = 'none';
+        errEl.textContent = '';
+    }
+
+    const section = document.getElementById('scenarioResultSection');
+    if (section) {
+        section.style.display = 'none';
+    }
+}
+
+async function runScenarioGenerate() {
+    const textarea = document.getElementById('scenarioText');
+    const select = document.getElementById('scenarioTemplateSelect');
+    if (!textarea) return;
+
+    const text = textarea.value.trim();
+    const templateName = select ? select.value : '';
+
+    if (!text && !templateName) {
+        showScenarioError('Please enter a scenario description or pick a template.');
+        return;
+    }
+
+    const payload = text ? { text } : { template: templateName };
+
+    try {
+        const resp = await fetch('/api/scenario/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (resp.ok) {
+            showScenarioResult(await resp.json());
+        } else {
+            const err = await resp.json().catch(() => ({}));
+            showScenarioError(err.detail || 'Generation failed');
+        }
+    } catch (e) {
+        showScenarioError('Network error: ' + e.message);
+    }
+}
+
+function showScenarioResult(data) {
+    const section = document.getElementById('scenarioResultSection');
+    const summary = document.getElementById('scenarioParsedSummary');
+    const pre = document.getElementById('scenarioGraphJson');
+    const errEl = document.getElementById('scenarioError');
+
+    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+
+    if (summary) {
+        const s = data.parsed_summary || {};
+        summary.textContent =
+            `${s.total_nodes ?? '?'} nodes | ` +
+            `${s.total_edges ?? '?'} edges | ` +
+            `${s.actor_nodes ?? '?'} synthetic actors | ` +
+            `${s.connections ?? '?'} connection chains`;
+    }
+
+    if (pre) {
+        pre.textContent = JSON.stringify(data.graph || data, null, 2);
+    }
+
+    if (section) { section.style.display = ''; }
+}
+
+function showScenarioError(message) {
+    const errEl = document.getElementById('scenarioError');
+    const section = document.getElementById('scenarioResultSection');
+    if (section) { section.style.display = 'none'; }
+    if (errEl) {
+        errEl.textContent = message;
+        errEl.style.display = '';
+    }
+}
+
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
     console.log('Azure Discovery UI initialized');
     const toggle = document.getElementById('showAdvancedConfig');
     toggleAdvancedConfig(Boolean(toggle && toggle.checked));
     loadJobs();
+    hydrateScenarioTemplates();
 
-    // Diagram Focus: show/hide custom types textarea based on preset selection
+    // Diagram Focus: custom type visibility and quick one-click presets
     const focusPreset = document.getElementById('diagramFocusPreset');
-    const focusCustomTypes = document.getElementById('diagramFocusCustomTypes');
-    if (focusPreset && focusCustomTypes) {
-        const updateFocusVisibility = () => {
-            focusCustomTypes.style.display = focusPreset.value === 'custom' ? '' : 'none';
-        };
-        focusPreset.addEventListener('change', updateFocusVisibility);
-        updateFocusVisibility();
+    if (focusPreset) {
+        focusPreset.addEventListener('change', () => {
+            updateDiagramFocusVisibility();
+            // Manual dropdown changes move away from one-click preset state.
+            setActiveQuickPresetButton('');
+        });
     }
+
+    const quickPresetButtons = document.querySelectorAll('.quick-preset-btn[data-preset-key]');
+    quickPresetButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            applyQuickDiagramFocusPreset(btn.dataset.presetKey || '');
+        });
+    });
+
+    updateDiagramFocusVisibility();
 });

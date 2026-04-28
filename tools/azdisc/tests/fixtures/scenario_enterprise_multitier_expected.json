@@ -1,0 +1,25 @@
+{
+  "_comment": "Fixture: expected parse output for enterprise-multitier-web builtin template. Verified via smoke run: 25 res, 26 nodes, 11 edges.",
+  "title": "Enterprise Multi-Tier Web App Architecture",
+  "resource_count": 25,
+  "connection_count": 8,
+  "layout_rule_count": 3,
+  "expected_arm_types": [
+    "microsoft.network/virtualnetworks",
+    "microsoft.network/virtualnetworks/subnets",
+    "microsoft.network/azurefirewalls",
+    "microsoft.network/networksecuritygroups",
+    "microsoft.cdn/profiles",
+    "microsoft.network/applicationgateways",
+    "microsoft.web/serverfarms",
+    "microsoft.web/sites",
+    "microsoft.servicebus/namespaces",
+    "microsoft.sql/servers",
+    "microsoft.sql/servers/databases",
+    "microsoft.storage/storageaccounts",
+    "microsoft.keyvault/vaults",
+    "microsoft.network/privateendpoints",
+    "microsoft.operationalinsights/workspaces",
+    "microsoft.insights/components"
+  ]
+}
