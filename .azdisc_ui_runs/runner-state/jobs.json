@@ -1,0 +1,94 @@
+{
+  "jobs": [
+    {
+      "completed_at": "2026-04-27T21:48:18.005314",
+      "config": {
+        "app": "imported-demo",
+        "applicationSplit": {
+          "enabled": false,
+          "includeSharedDependencies": true,
+          "mode": "tag-value",
+          "outputLayout": "subdirs",
+          "tagKeys": [],
+          "values": []
+        },
+        "deepDiscovery": {
+          "candidateFile": "related_candidates.json",
+          "enabled": false,
+          "extendedOutputDirName": "extended",
+          "outputDirName": "deep-discovery",
+          "promotedFile": "related_promoted.json",
+          "searchStrings": []
+        },
+        "diagramMode": "MSFT",
+        "edgeLabels": false,
+        "enableTelemetry": false,
+        "expandScope": "related",
+        "groupByTag": [],
+        "includeAdvisor": false,
+        "includePolicy": false,
+        "includeQuota": false,
+        "includeRbac": false,
+        "includeVmDetails": false,
+        "inventoryGroupBy": "type",
+        "layout": "SUB>REGION>RG>NET",
+        "layoutMagic": false,
+        "localAnalysis": {
+          "enabled": false,
+          "includeArtifacts": [
+            "migration-plan",
+            "graph",
+            "unresolved",
+            "policy",
+            "rbac"
+          ],
+          "intents": [
+            "*"
+          ],
+          "keepIntermediate": true,
+          "maxChunkTokens": 1200,
+          "maxContextTokens": 24000,
+          "model": "",
+          "outputDir": "local-analysis",
+          "packScope": "both",
+          "provider": "ollama",
+          "temperature": 0.1,
+          "topK": 8
+        },
+        "migrationPlan": {
+          "applicationScope": "both",
+          "audience": "mixed",
+          "enabled": false,
+          "includeCopilotPrompts": true,
+          "outputDir": ""
+        },
+        "networkDetail": "full",
+        "outputDir": "/private/var/folders/fm/j19b06fj4f5flrkmm876bnj40000gq/T/pytest-of-notadmin/pytest-21/test_import_artifacts_register0/import123",
+        "resolvePrincipalNames": false,
+        "seedEntireSubscriptions": false,
+        "seedManagementGroups": [],
+        "seedResourceGroups": [],
+        "seedResourceIds": [],
+        "seedTagKeys": [],
+        "seedTags": {},
+        "spacing": "compact",
+        "subnetColors": false,
+        "subscriptions": [],
+        "tagFallbackToResourceGroup": false,
+        "telemetryLookbackDays": 7
+      },
+      "continue_on_error": false,
+      "created_at": "2026-04-27T21:48:18.005310",
+      "error": null,
+      "id": "import123",
+      "imported_artifacts": [
+        "seed.json"
+      ],
+      "output_dir": "/private/var/folders/fm/j19b06fj4f5flrkmm876bnj40000gq/T/pytest-of-notadmin/pytest-21/test_import_artifacts_register0/import123",
+      "source_mode": "imported",
+      "stages": [],
+      "status": "completed"
+    }
+  ],
+  "saved_at": "2026-04-27T21:48:18.005496"
+}

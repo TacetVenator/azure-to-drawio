@@ -3,6 +3,11 @@
  */
 
 let splitOverviewCache = null;
+let inventoryExplorerState = {
+    offset: 0,
+    limit: 100,
+    lastRunId: '',
+};
 
 function parseCsv(raw) {
     return String(raw || '')
@@ -207,12 +212,18 @@ async function startPipeline() {
     const form = document.getElementById('configForm');
     const formData = new FormData(form);
     const config = buildConfigFromForm(formData);
+    const continueOnError = Boolean(document.getElementById('continueOnError')?.checked);
     
     try {
         const response = await fetch('/api/pipeline/run', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ config_data: config }),
+            body: JSON.stringify({
+                config_data: config,
+                execution_options: {
+                    continueOnError,
+                },
+            }),
         });
         
         const result = await response.json();
@@ -232,6 +243,58 @@ async function startPipeline() {
     } catch (error) {
         console.error('Pipeline start error:', error);
         alert('Failed to start pipeline: ' + error.message);
+    }
+}
+
+async function importArtifacts() {
+    const app = document.getElementById('importAppName').value.trim() || 'imported-run';
+    const subscriptions = parseCsv(document.getElementById('importSubscriptions').value);
+    const outputDir = document.getElementById('importOutputDir').value.trim();
+    const seedPath = document.getElementById('importSeedPath').value.trim();
+    const inventoryPath = document.getElementById('importInventoryPath').value.trim();
+
+    const sourceFiles = [];
+    if (seedPath) {
+        sourceFiles.push({ artifactType: 'seed', path: seedPath });
+    }
+    if (inventoryPath) {
+        sourceFiles.push({ artifactType: 'inventory', path: inventoryPath });
+    }
+
+    if (sourceFiles.length === 0) {
+        alert('Provide at least one local artifact path.');
+        return;
+    }
+
+    const payload = {
+        app,
+        subscriptions,
+        outputDir,
+        sourceFiles,
+    };
+
+    try {
+        const response = await fetch('/api/import/run', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(result.detail || 'Import failed');
+        }
+
+        const panel = document.getElementById('importResult');
+        const content = document.getElementById('importResultContent');
+        content.textContent = JSON.stringify(result, null, 2);
+        panel.style.display = 'block';
+
+        updateRunSelectors([{ run_id: result.run_id, app, status: result.status, source_mode: 'imported' }], true);
+        switchToTab('artifacts');
+        loadJobs();
+    } catch (error) {
+        alert('Failed to import artifacts: ' + error.message);
     }
 }
 
@@ -256,6 +319,7 @@ async function loadJobs() {
                 <div>
                     <strong>${job.run_id}</strong> - ${job.app}
                     <span class="job-badge ${job.status}">${job.status}</span>
+                    <span class="job-meta">${escapeHtml(job.source_mode || 'pipeline')}${job.continue_on_error ? ' | continue-on-error' : ''}</span>
                 </div>
                 <small>${job.created_at}</small>
                 <button onclick="viewJobStatus('${job.run_id}')" style="margin-left: 10px;">Details</button>
@@ -295,6 +359,8 @@ async function loadArtifacts() {
         const result = await response.json();
         
         const artifactsList = document.getElementById('artifactsList');
+        const previewPanel = document.getElementById('artifactPreviewPanel');
+        previewPanel.style.display = 'none';
         
         if (result.artifacts.length === 0) {
             artifactsList.innerHTML = '<p>No artifacts available.</p>';
@@ -307,17 +373,172 @@ async function loadArtifacts() {
                         ${artifact.size ? ` (${formatBytes(artifact.size)})` : ''}
                     </span>
                     ${artifact.type === 'file' ? `
+                        <div class="artifact-actions">
+                    ` : ''}
+                    ${artifact.type === 'file' && artifact.name.toLowerCase().endsWith('.json') ? `
+                        <button type="button" onclick="previewArtifact('${runId}', '${escapeHtml(artifact.path)}')">Preview</button>
+                    ` : ''}
+                    ${artifact.type === 'file' ? `
                         <a href="/api/artifacts/download/${runId}/${artifact.path}" target="_blank">
                             Download
                         </a>
+                        </div>
                     ` : ''}
                 </div>
             `).join('');
         }
         
         document.getElementById('artifactsBrowser').style.display = 'block';
+        inventoryExplorerState.lastRunId = runId;
+        inventoryExplorerState.offset = 0;
+        await loadInventoryFacets();
+        runInventorySearch(true);
     } catch (error) {
         alert('Failed to load artifacts: ' + error.message);
+    }
+}
+
+function onInventoryArtifactChanged() {
+    inventoryExplorerState.offset = 0;
+    loadInventoryFacets().then(() => runInventorySearch(true));
+}
+
+async function loadInventoryFacets() {
+    const runId = document.getElementById('runIdSelect').value;
+    if (!runId) {
+        return;
+    }
+
+    const artifact = document.getElementById('inventoryArtifactType').value;
+    try {
+        const response = await fetch(`/api/inventory/facets/${runId}?artifact=${encodeURIComponent(artifact)}`);
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.detail || 'Failed to load inventory facets');
+        }
+
+        populateInventoryFacetSelect('inventoryTypeFilter', result.facets?.resourceTypes || []);
+        populateInventoryFacetSelect('inventoryRgFilter', result.facets?.resourceGroups || []);
+        populateInventoryFacetSelect('inventorySubFilter', result.facets?.subscriptions || []);
+    } catch (error) {
+        document.getElementById('inventorySummary').textContent = `Failed to load filter facets: ${error.message}`;
+    }
+}
+
+function populateInventoryFacetSelect(selectId, values) {
+    const select = document.getElementById(selectId);
+    if (!select) {
+        return;
+    }
+
+    const current = select.value;
+    const options = ['<option value="">All</option>']
+        .concat((values || []).map(value => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`));
+    select.innerHTML = options.join('');
+    if (current && (values || []).includes(current)) {
+        select.value = current;
+    }
+}
+
+async function runInventorySearch(resetOffset = false) {
+    const runId = document.getElementById('runIdSelect').value;
+    if (!runId) {
+        return;
+    }
+
+    if (resetOffset || inventoryExplorerState.lastRunId !== runId) {
+        inventoryExplorerState.offset = 0;
+    }
+    inventoryExplorerState.lastRunId = runId;
+
+    const artifact = document.getElementById('inventoryArtifactType').value;
+    const query = document.getElementById('inventoryQuery').value.trim();
+    const resourceType = document.getElementById('inventoryTypeFilter').value.trim();
+    const resourceGroup = document.getElementById('inventoryRgFilter').value.trim();
+    const subscription = document.getElementById('inventorySubFilter').value.trim();
+    inventoryExplorerState.limit = Number.parseInt(document.getElementById('inventoryPageSize').value, 10) || 100;
+
+    const params = new URLSearchParams({
+        artifact,
+        offset: String(inventoryExplorerState.offset),
+        limit: String(inventoryExplorerState.limit),
+        query,
+        resource_type: resourceType,
+        resource_group: resourceGroup,
+        subscription,
+    });
+
+    try {
+        const response = await fetch(`/api/inventory/explore/${runId}?${params.toString()}`);
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.detail || 'Inventory query failed');
+        }
+        renderInventoryResults(result);
+    } catch (error) {
+        document.getElementById('inventorySummary').textContent = `Inventory query failed: ${error.message}`;
+        document.getElementById('inventoryResults').innerHTML = '';
+    }
+}
+
+function previousInventoryPage() {
+    inventoryExplorerState.offset = Math.max(0, inventoryExplorerState.offset - inventoryExplorerState.limit);
+    runInventorySearch(false);
+}
+
+function nextInventoryPage() {
+    inventoryExplorerState.offset += inventoryExplorerState.limit;
+    runInventorySearch(false);
+}
+
+function renderInventoryResults(result) {
+    const summary = document.getElementById('inventorySummary');
+    const results = document.getElementById('inventoryResults');
+
+    const end = Math.min(result.offset + result.rows.length, result.filteredRows);
+    summary.textContent =
+        `Artifact: ${result.artifactPath} | Showing ${result.rows.length === 0 ? 0 : result.offset + 1}-${end} of ${result.filteredRows} filtered rows (${result.totalRows} total)`;
+
+    if (!result.rows || result.rows.length === 0) {
+        results.innerHTML = '<p class="placeholder">No rows match the current inventory filters.</p>';
+        return;
+    }
+
+    const rows = result.rows.map(row => `
+        <tr>
+            <td>${escapeHtml(row.name || '-')}</td>
+            <td>${escapeHtml(row.type || '-')}</td>
+            <td>${escapeHtml(row.resourceGroup || '-')}</td>
+            <td>${escapeHtml(row.subscriptionId || '-')}</td>
+            <td>${escapeHtml(row.location || '-')}</td>
+            <td>${escapeHtml(row.id || '-')}</td>
+        </tr>
+    `).join('');
+
+    results.innerHTML = `
+        <div class="data-table-wrap" style="margin-top: 10px;">
+            <table class="data-table">
+                <thead><tr><th>Name</th><th>Type</th><th>Resource Group</th><th>Subscription</th><th>Location</th><th>ID</th></tr></thead>
+                <tbody>${rows}</tbody>
+            </table>
+        </div>
+    `;
+}
+
+async function previewArtifact(runId, artifactPath) {
+    try {
+        const response = await fetch(`/api/artifacts/preview/${runId}/${artifactPath}?limit=50`);
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.detail || 'Preview failed');
+        }
+
+        const panel = document.getElementById('artifactPreviewPanel');
+        const content = document.getElementById('artifactPreviewContent');
+        content.textContent = JSON.stringify(result, null, 2);
+        panel.style.display = 'block';
+    } catch (error) {
+        alert('Failed to preview artifact: ' + error.message);
     }
 }
 

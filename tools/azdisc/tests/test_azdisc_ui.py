@@ -5,6 +5,7 @@ import pytest
 
 
 fastapi = pytest.importorskip("fastapi")
+pytest.importorskip("httpx")
 testclient = pytest.importorskip("fastapi.testclient")
 
 from tools.azdisc_ui.__main__ import create_app

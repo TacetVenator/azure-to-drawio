@@ -429,7 +429,45 @@
             <h2>Pipeline Execution</h2>
             
             <div class="section">
+                <h3>Execution Mode</h3>
+                <label class="checkbox-label">
+                    <input type="checkbox" id="continueOnError">
+                    <span>Continue On Error</span>
+                    <span class="info-tip" title="Off by default for CLI parity. Enable only when you explicitly want partial outputs after a failed stage.">i</span>
+                </label>
                 <button class="btn-primary" onclick="startPipeline()">Start New Run</button>
+            </div>
+
+            <div class="section">
+                <h3>Import Existing Artifacts</h3>
+                <p class="placeholder">Use local file paths for large seed or inventory artifacts so the browser does not have to load them first.</p>
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="importAppName">Run Name</label>
+                        <input type="text" id="importAppName" placeholder="contoso-import">
+                    </div>
+                    <div class="form-group">
+                        <label for="importSubscriptions">Subscriptions (comma-separated, optional)</label>
+                        <input type="text" id="importSubscriptions" placeholder="00000000-0000-0000-0000-000000000000">
+                    </div>
+                    <div class="form-group form-group-full">
+                        <label for="importOutputDir">Output Directory (optional override)</label>
+                        <input type="text" id="importOutputDir" placeholder="Defaults to .azdisc_ui_runs/&lt;run_id&gt; under current working directory">
+                    </div>
+                    <div class="form-group form-group-full">
+                        <label for="importSeedPath">Seed JSON Path</label>
+                        <input type="text" id="importSeedPath" placeholder="/absolute/path/to/seed.json">
+                    </div>
+                    <div class="form-group form-group-full">
+                        <label for="importInventoryPath">Inventory JSON Path</label>
+                        <input type="text" id="importInventoryPath" placeholder="/absolute/path/to/inventory.json">
+                    </div>
+                </div>
+                <button class="btn-primary" type="button" onclick="importArtifacts()">Import Artifacts</button>
+                <div id="importResult" class="result-panel" style="display: none;">
+                    <h3>Import Result</h3>
+                    <pre id="importResultContent"></pre>
+                </div>
             </div>
 
             <h3>Recent Runs</h3>
@@ -458,6 +496,62 @@
                 <h3>Files</h3>
                 <div id="artifactsList" class="artifacts-list">
                     <!-- Populated by loadArtifacts() -->
+                </div>
+                <div id="artifactPreviewPanel" class="result-panel" style="display: none;">
+                    <h3>Artifact Preview</h3>
+                    <pre id="artifactPreviewContent"></pre>
+                </div>
+
+                <div class="section">
+                    <h3>Inventory Explorer</h3>
+                    <div class="filter-grid">
+                        <div class="form-group">
+                            <label for="inventoryArtifactType">Artifact</label>
+                            <select id="inventoryArtifactType" onchange="onInventoryArtifactChanged()">
+                                <option value="inventory" selected>inventory.json</option>
+                                <option value="seed">seed.json</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="inventoryQuery">Query</label>
+                            <input type="text" id="inventoryQuery" placeholder="name, id, type, tag value...">
+                        </div>
+                        <div class="form-group">
+                            <label for="inventoryTypeFilter">Type</label>
+                            <select id="inventoryTypeFilter">
+                                <option value="">All</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="inventoryRgFilter">Resource Group</label>
+                            <select id="inventoryRgFilter">
+                                <option value="">All</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="inventorySubFilter">Subscription</label>
+                            <select id="inventorySubFilter">
+                                <option value="">All</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="inventoryPageSize">Page Size</label>
+                            <select id="inventoryPageSize">
+                                <option value="50">50</option>
+                                <option value="100" selected>100</option>
+                                <option value="250">250</option>
+                                <option value="500">500</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="inventory-actions">
+                        <button class="btn-primary" type="button" onclick="runInventorySearch(true)">Search</button>
+                        <button class="btn-primary" type="button" onclick="loadInventoryFacets()">Refresh Filters</button>
+                        <button class="btn-primary" type="button" onclick="previousInventoryPage()">Previous</button>
+                        <button class="btn-primary" type="button" onclick="nextInventoryPage()">Next</button>
+                    </div>
+                    <div id="inventorySummary" class="placeholder" style="margin-top: 10px;">No inventory query executed yet.</div>
+                    <div id="inventoryResults"></div>
                 </div>
             </div>
         </div>

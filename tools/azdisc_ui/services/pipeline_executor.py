@@ -3,18 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Awaitable, Callable, Optional
 
 from tools.azdisc.config import Config
-from tools.azdisc.discover import run_seed, run_expand, run_policy, run_rbac
-from tools.azdisc.graph import build_graph
-from tools.azdisc.drawio import generate_drawio
-from tools.azdisc.docs import generate_docs
-from tools.azdisc.insights import run_advisor, run_quota, generate_vm_details_csv
-from tools.azdisc.migration_plan import generate_migration_plan
-from tools.azdisc.vm_report import generate_vm_report_packs
-from tools.azdisc.split import run_split
-from tools.azdisc.telemetry import run_telemetry_enrichment
-from tools.azdisc.master_report import generate_master_report
+from tools.azdisc.pipeline import build_pipeline_stages
 
 log = logging.getLogger(__name__)
 
@@ -30,7 +22,8 @@ class PipelineExecutor:
     async def execute_full_pipeline(
         self,
         config: Config,
-        status_callback: callable = None,
+        status_callback: Optional[Callable[[str, str], Awaitable[None]]] = None,
+        continue_on_error: bool = False,
     ) -> dict:
         """Execute full pipeline from seed through docs and optional outputs.
         
@@ -44,74 +37,53 @@ class PipelineExecutor:
         Raises:
             Exception if any stage fails and exception handling is strict
         """
-        stages = [
-            ("seed", lambda: run_seed(config)),
-            ("expand", lambda: run_expand(config)),
-            ("rbac", lambda: run_rbac(config) if config.includeRbac else None),
-            ("policy", lambda: run_policy(config) if config.includePolicy else None),
-            ("graph", lambda: build_graph(config)),
-            ("telemetry", lambda: run_telemetry_enrichment(config) if config.enableTelemetry else None),
-            ("drawio", lambda: generate_drawio(config)),
-            ("advisor", lambda: run_advisor(config) if config.includeAdvisor else None),
-            ("quota", lambda: run_quota(config) if config.includeQuota else None),
-            ("vm-details", lambda: generate_vm_details_csv(config) if config.includeVmDetails else None),
-            ("vm-report", lambda: generate_vm_report_packs(config)),
-            ("docs", lambda: generate_docs(config)),
-        ]
-        
-        # Optional stages
-        if config.applicationSplit.enabled:
-            stages.append(("split", lambda: run_split(config)))
-        
-        if config.migrationPlan.enabled:
-            stages.append(("migration-plan", lambda: generate_migration_plan(config)))
-        
-        # Master report (always last)
-        stages.append(("master-report", lambda: generate_master_report(config)))
-        
         completed_stages = []
+        pipeline_failed = False
+        pipeline_error = None
         
         try:
             config.ensure_output_dir()
-            
-            for stage_name, stage_fn in stages:
+
+            for stage in build_pipeline_stages(config):
                 try:
                     if status_callback:
-                        await status_callback(stage_name, "running")
-                    
-                    log.info("Starting stage: %s", stage_name)
-                    
+                        await status_callback(stage.name, "running")
+
+                    log.info("Starting stage: %s", stage.name)
+
                     # Run stage in thread pool to avoid blocking event loop
-                    await asyncio.to_thread(stage_fn)
-                    
+                    await asyncio.to_thread(stage.action)
+
                     completed_stages.append({
-                        "name": stage_name,
+                        "name": stage.name,
                         "status": "completed",
                         "error": None,
                     })
-                    
+
                     if status_callback:
-                        await status_callback(stage_name, "completed")
-                    
-                    log.info("Completed stage: %s", stage_name)
+                        await status_callback(stage.name, "completed")
+
+                    log.info("Completed stage: %s", stage.name)
                 except Exception as e:
-                    log.error("Stage %s failed: %s", stage_name, e)
+                    pipeline_failed = True
+                    pipeline_error = str(e)
+                    log.error("Stage %s failed: %s", stage.name, e)
                     completed_stages.append({
-                        "name": stage_name,
+                        "name": stage.name,
                         "status": "failed",
                         "error": str(e),
                     })
-                    
+
                     if status_callback:
-                        await status_callback(stage_name, "failed")
-                    
-                    # Continue other stages instead of failing immediately
-                    # This allows partial outputs when some stages fail
-            
+                        await status_callback(stage.name, "failed")
+
+                    if not continue_on_error:
+                        break
+
             return {
-                "status": "success",
+                "status": "completed-with-errors" if pipeline_failed and continue_on_error else ("failed" if pipeline_failed else "success"),
                 "stages": completed_stages,
-                "error": None,
+                "error": pipeline_error,
             }
         except Exception as e:
             log.error("Pipeline failed with exception: %s", e)

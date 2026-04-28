@@ -22,6 +22,7 @@ from .master_report import generate_master_report
 from .review import run_review_related
 from .registry import refresh_registry
 from .migration_plan import generate_migration_plan
+from .pipeline import build_pipeline_stages
 from .split import build_split_preview, run_split
 from .telemetry import run_telemetry_enrichment
 from .test_all import run_render_all, run_report_all, run_test_all
@@ -107,31 +108,12 @@ def cmd_analyze(args) -> None:
 
 def cmd_run(args) -> None:
     cfg = load_config(args.config)
-    run_seed(cfg)
-    run_expand(
+    for stage in build_pipeline_stages(
         cfg,
         software_inventory_workspace=args.software_inventory_csv,
         software_inventory_days=args.software_inventory_days,
-    )
-    run_rbac(cfg)
-    run_policy(cfg)
-    build_graph(cfg)
-    if cfg.enableTelemetry:
-        run_telemetry_enrichment(cfg)
-    generate_drawio(cfg)
-    if cfg.includeAdvisor:
-        run_advisor(cfg)
-    if cfg.includeQuota:
-        run_quota(cfg)
-    if cfg.includeVmDetails:
-        generate_vm_details_csv(cfg)
-    generate_vm_report_packs(cfg)
-    generate_docs(cfg)
-    if cfg.applicationSplit.enabled:
-        run_split(cfg)
-    if cfg.migrationPlan.enabled:
-        generate_migration_plan(cfg)
-    generate_master_report(cfg)
+    ):
+        stage.action()
     log.info("Pipeline complete for app=%s", cfg.app)
 
 

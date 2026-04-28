@@ -122,7 +122,10 @@ def create_app() -> FastAPI:
         try:
             # Support either raw config body or wrapped payload: {"config_data": {...}}
             if isinstance(config_data, dict) and "config_data" in config_data and isinstance(config_data["config_data"], dict):
+                continue_on_error = bool(config_data.get("execution_options", {}).get("continueOnError", False))
                 config_data = config_data["config_data"]
+            else:
+                continue_on_error = False
 
             # Load config from data or file
             if config_data:
@@ -133,7 +136,7 @@ def create_app() -> FastAPI:
                 raise ValueError("Must provide either config_data or config_path")
             
             # Start pipeline in background
-            job = await runner.start_run(run_id, cfg)
+            job = await runner.start_run(run_id, cfg, continue_on_error=continue_on_error)
             
             return {
                 "run_id": run_id,
@@ -142,8 +145,64 @@ def create_app() -> FastAPI:
                     "app": cfg.app,
                     "outputDir": cfg.outputDir,
                 },
+                "execution": {
+                    "continueOnError": continue_on_error,
+                },
             }
         except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.post("/api/import/run", tags=["pipeline", "artifacts"])
+    async def import_run(payload: dict) -> dict:
+        """Create a completed run from existing local seed/inventory artifacts."""
+        from tools.azdisc.config import Config
+        from tools.azdisc_ui.services.artifact_importer import default_import_output_dir, import_artifacts
+        from tools.azdisc_ui.services.pipeline_runner import get_runner
+
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="payload must be a JSON object")
+
+        app_name = str(payload.get("app", "")).strip() or "imported-run"
+        subscriptions = payload.get("subscriptions", [])
+        if not isinstance(subscriptions, list):
+            raise HTTPException(status_code=400, detail="subscriptions must be a list of strings")
+
+        sources = payload.get("sourceFiles", [])
+        if not isinstance(sources, list) or not sources:
+            raise HTTPException(status_code=400, detail="sourceFiles must be a non-empty list")
+
+        run_id = str(uuid.uuid4())[:8]
+        output_dir = str(payload.get("outputDir", "")).strip() or str(default_import_output_dir(run_id))
+        try:
+            imported = import_artifacts(output_dir=output_dir, sources=sources)
+            cfg = Config(
+                app=app_name,
+                subscriptions=[str(item).strip() for item in subscriptions if str(item).strip()],
+                seedResourceGroups=["imported-artifact"],
+                outputDir=output_dir,
+            )
+            runner = get_runner()
+            runner.register_imported_run(
+                run_id,
+                cfg,
+                imported_artifacts=[item.target_name for item in imported],
+            )
+            return {
+                "run_id": run_id,
+                "status": "completed",
+                "source_mode": "imported",
+                "outputDir": output_dir,
+                "artifacts": [
+                    {
+                        "artifactType": item.artifact_type,
+                        "targetName": item.target_name,
+                        "sizeBytes": item.size_bytes,
+                        "sha256": item.sha256,
+                    }
+                    for item in imported
+                ],
+            }
+        except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
     @app.get("/api/pipeline/jobs", tags=["pipeline"])
@@ -161,6 +220,8 @@ def create_app() -> FastAPI:
                     "run_id": job["id"],
                     "status": job["status"],
                     "app": job["config"].app,
+                    "source_mode": job.get("source_mode", "pipeline"),
+                    "continue_on_error": job.get("continue_on_error", False),
                     "created_at": job["created_at"],
                     "completed_at": job.get("completed_at"),
                 }
@@ -185,6 +246,9 @@ def create_app() -> FastAPI:
             "created_at": job.get("created_at"),
             "completed_at": job.get("completed_at"),
             "error": job.get("error"),
+            "source_mode": job.get("source_mode", "pipeline"),
+            "continue_on_error": job.get("continue_on_error", False),
+            "imported_artifacts": job.get("imported_artifacts", []),
             "stages": job.get("stages", []),
         }
     
@@ -260,6 +324,92 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="Not a file")
         
         return FileResponse(target, filename=target.name)
+
+    @app.get("/api/artifacts/preview/{run_id}/{file_path:path}", tags=["artifacts"])
+    async def preview_artifact(run_id: str, file_path: str, limit: int = 50) -> dict:
+        """Preview JSON artifacts with sample rows and summary metadata."""
+        from tools.azdisc_ui.services.json_preview import preview_json_artifact
+        from tools.azdisc_ui.services.pipeline_runner import get_runner
+
+        runner = get_runner()
+        job = runner.get_job(run_id)
+
+        if not job:
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+        root = Path(job["output_dir"])
+        target = root / file_path
+        if not target.is_relative_to(root):
+            raise HTTPException(status_code=403, detail="Access denied")
+        if not target.exists() or not target.is_file():
+            raise HTTPException(status_code=404, detail="File not found")
+        if target.suffix.lower() != ".json":
+            raise HTTPException(status_code=400, detail="Preview is only supported for JSON artifacts")
+
+        try:
+            preview = preview_json_artifact(target, sample_limit=max(1, min(limit, 200)))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        return {
+            "path": str(target.relative_to(root)),
+            "fileSize": target.stat().st_size,
+            **preview,
+        }
+
+    @app.get("/api/inventory/explore/{run_id}", tags=["artifacts"])
+    async def explore_inventory(
+        run_id: str,
+        artifact: str = "inventory",
+        offset: int = 0,
+        limit: int = 100,
+        query: str = "",
+        resource_type: str = "",
+        resource_group: str = "",
+        subscription: str = "",
+    ) -> dict:
+        """Explore inventory-like artifacts with pagination and simple filters."""
+        from tools.azdisc_ui.services.inventory_explorer import query_inventory
+        from tools.azdisc_ui.services.pipeline_runner import get_runner
+
+        runner = get_runner()
+        job = runner.get_job(run_id)
+        if not job:
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+        try:
+            return query_inventory(
+                job["output_dir"],
+                artifact=artifact,
+                offset=offset,
+                limit=limit,
+                query=query,
+                resource_types=[resource_type] if resource_type else [],
+                resource_groups=[resource_group] if resource_group else [],
+                subscriptions=[subscription] if subscription else [],
+            )
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.get("/api/inventory/facets/{run_id}", tags=["artifacts"])
+    async def inventory_facets(run_id: str, artifact: str = "inventory") -> dict:
+        """Return distinct values for inventory filters."""
+        from tools.azdisc_ui.services.inventory_explorer import get_inventory_facets
+        from tools.azdisc_ui.services.pipeline_runner import get_runner
+
+        runner = get_runner()
+        job = runner.get_job(run_id)
+        if not job:
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+        try:
+            return get_inventory_facets(job["output_dir"], artifact=artifact)
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
     
     # ============================================================================
     # Overview Routes (Phase 3, 3A)
