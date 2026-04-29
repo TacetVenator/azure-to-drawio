@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from .config import load_config
+from .config_presets import get_config_preset, list_config_presets
 from .analyze import run_analysis
 from .discover import prepare_related_extended_inventory, run_expand, run_policy, run_rbac, run_related_candidates, run_seed
 from .docs import generate_docs
@@ -127,6 +128,22 @@ def cmd_registry_refresh(args) -> None:
     print(json.dumps(summary, indent=2, sort_keys=True))
 
 
+def cmd_config_presets(args) -> None:
+    if args.name:
+        payload = get_config_preset(args.name)
+    else:
+        payload = {"presets": list_config_presets(include_config=not args.names_only)}
+
+    serialized = json.dumps(payload, indent=2, sort_keys=True)
+    if args.write:
+        out = Path(args.write).expanduser().resolve()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(serialized + "\n", encoding="utf-8")
+        print(str(out))
+        return
+    print(serialized)
+
+
 def _iter_command_specs() -> Iterable[CommandSpec]:
     return [
         CommandSpec("run", cmd_run, "Run the full pipeline", supports_software_inventory=True),
@@ -159,6 +176,7 @@ def _iter_command_specs() -> Iterable[CommandSpec]:
         CommandSpec("render-all", _run_with_config(run_render_all), "Generate all layout x mode variants from an existing graph"),
         CommandSpec("report-all", _run_with_config(run_report_all), "Generate a Markdown report of all layout x mode x spacing variants"),
         CommandSpec("master-report", _run_with_config(generate_master_report), "Generate a consolidated master architecture report"),
+        CommandSpec("config-presets", cmd_config_presets, "List built-in scoped config presets or export one", needs_config=False),
         CommandSpec("registry-refresh", cmd_registry_refresh, "Refresh assets/azure_type_registry.json from icon map + ARG type inventory", needs_config=False),
     ]
 
@@ -207,6 +225,10 @@ def build_parser() -> argparse.ArgumentParser:
                 "--subscriptions",
                 help="Comma-separated subscription IDs for ARG discovery (optional)",
             )
+        if spec.name == "config-presets":
+            p.add_argument("--name", help="Return one preset by name")
+            p.add_argument("--names-only", action="store_true", help="Return metadata without embedded config payloads")
+            p.add_argument("--write", help="Write JSON output to this path")
         p.set_defaults(func=spec.handler)
 
     p_test_all = sub.add_parser("test-all", help="Generate all layout x mode combinations from fixtures")

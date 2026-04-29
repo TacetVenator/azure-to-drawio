@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import json
+import pytest
 
-from tools.azdisc.analyze import run_analysis
-from tools.azdisc.config import load_config
+from tools.azdisc.analyze import CopilotChatClient, _build_analysis_client, run_analysis
+from tools.azdisc.config import load_config, load_config_from_dict
 from tools.azdisc.migration_plan import generate_migration_plan
 
 
@@ -125,6 +126,76 @@ def test_load_config_supports_local_analysis(tmp_path):
     assert cfg.localAnalysis.intents == ["estate-summary"]
     assert cfg.localAnalysis.packScope == "root"
     assert cfg.localAnalysis.topK == 4
+
+
+def test_load_config_supports_copilot_chat_provider(tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "app": "contoso",
+                "subscriptions": ["sub1"],
+                "seedResourceGroups": ["rg-app"],
+                "outputDir": str(tmp_path / "out"),
+                "localAnalysis": {
+                    "enabled": True,
+                    "provider": "copilot-chat",
+                    "model": "gpt-4.1",
+                    "intents": ["estate-summary"],
+                    "packScope": "root",
+                },
+            }
+        )
+    )
+
+    cfg = load_config(str(config_path))
+    assert cfg.localAnalysis.provider == "copilot-chat"
+
+
+def test_build_analysis_client_copilot_chat_requires_env(monkeypatch):
+    cfg = load_config_from_dict({
+        "app": "contoso",
+        "subscriptions": ["sub1"],
+        "seedResourceGroups": ["rg-app"],
+        "outputDir": "out",
+        "localAnalysis": {
+            "enabled": True,
+            "provider": "copilot-chat",
+            "model": "gpt-4.1",
+            "intents": ["estate-summary"],
+            "packScope": "root",
+        },
+    })
+
+    monkeypatch.delenv("M365_COPILOT_CHAT_COMPLETIONS_URL", raising=False)
+    monkeypatch.delenv("M365_COPILOT_CHAT_TOKEN", raising=False)
+    monkeypatch.delenv("COPILOT_CHAT_TOKEN", raising=False)
+
+    with pytest.raises(RuntimeError, match="M365_COPILOT_CHAT_COMPLETIONS_URL"):
+        _build_analysis_client(cfg.localAnalysis)
+
+
+def test_build_analysis_client_copilot_chat_with_env(monkeypatch):
+    cfg = load_config_from_dict({
+        "app": "contoso",
+        "subscriptions": ["sub1"],
+        "seedResourceGroups": ["rg-app"],
+        "outputDir": "out",
+        "localAnalysis": {
+            "enabled": True,
+            "provider": "copilot-chat",
+            "model": "gpt-4.1",
+            "intents": ["estate-summary"],
+            "packScope": "root",
+        },
+    })
+
+    monkeypatch.setenv("M365_COPILOT_CHAT_COMPLETIONS_URL", "https://example.invalid/chat/completions")
+    monkeypatch.setenv("M365_COPILOT_CHAT_TOKEN", "test-token")
+
+    client, model = _build_analysis_client(cfg.localAnalysis)
+    assert isinstance(client, CopilotChatClient)
+    assert model == "gpt-4.1"
 
 
 def test_run_analysis_generates_consultant_outputs(tmp_path):

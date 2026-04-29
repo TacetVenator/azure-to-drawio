@@ -1,8 +1,9 @@
-"""Consultant-style local analysis workflow backed by Ollama."""
+"""Consultant-style local analysis workflow backed by pluggable providers."""
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import urllib.error
 import urllib.request
@@ -120,6 +121,123 @@ class OllamaClient:
         return text
 
 
+class CopilotChatClient:
+    """Thin HTTP client for Copilot Chat compatible completion endpoints.
+
+    This client is intentionally endpoint-agnostic. Configure the endpoint and
+    bearer token via environment variables to keep secrets out of config files:
+
+    - M365_COPILOT_CHAT_COMPLETIONS_URL
+    - M365_COPILOT_CHAT_TOKEN (or COPILOT_CHAT_TOKEN)
+    """
+
+    def __init__(
+        self,
+        model: str,
+        *,
+        temperature: float = 0.1,
+        endpoint: Optional[str] = None,
+        token: Optional[str] = None,
+    ):
+        self.model = model
+        self.temperature = temperature
+        self.endpoint = (endpoint or os.getenv("M365_COPILOT_CHAT_COMPLETIONS_URL", "")).strip()
+        self.token = (
+            token
+            or os.getenv("M365_COPILOT_CHAT_TOKEN", "").strip()
+            or os.getenv("COPILOT_CHAT_TOKEN", "").strip()
+        )
+        if not self.endpoint:
+            raise RuntimeError(
+                "Copilot Chat endpoint is not configured. Set M365_COPILOT_CHAT_COMPLETIONS_URL."
+            )
+        if not self.token:
+            raise RuntimeError(
+                "Copilot Chat token is not configured. Set M365_COPILOT_CHAT_TOKEN (or COPILOT_CHAT_TOKEN)."
+            )
+
+    def _extract_text(self, payload: Dict[str, Any]) -> str:
+        choices = payload.get("choices")
+        if isinstance(choices, list) and choices:
+            first = choices[0] if isinstance(choices[0], dict) else {}
+            message = first.get("message") if isinstance(first, dict) else None
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str) and content.strip():
+                    return content.strip()
+            text = first.get("text") if isinstance(first, dict) else None
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+
+        for key in ("response", "output_text", "content", "text"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        raise RuntimeError("Copilot Chat response did not contain a supported text field")
+
+    def generate(self, prompt: str) -> str:
+        body: Dict[str, Any] = {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a senior Azure migration consultant. "
+                        "Answer from provided evidence and call out uncertainty explicitly."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": self.temperature,
+        }
+        if self.model:
+            body["model"] = self.model
+
+        request = urllib.request.Request(
+            self.endpoint,
+            data=json.dumps(body).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.token}",
+            },
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                text = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace") if hasattr(exc, "read") else str(exc)
+            raise RuntimeError(
+                f"Copilot Chat request failed with HTTP {exc.code}. Check token scope and endpoint. Details: {detail}"
+            ) from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(
+                f"Unable to reach Copilot Chat endpoint {self.endpoint}. Check connectivity and endpoint configuration."
+            ) from exc
+
+        data = json.loads(text)
+        return self._extract_text(data)
+
+
+def _build_analysis_client(
+    analysis_cfg: LocalAnalysisConfig,
+    *,
+    model_override: Optional[str] = None,
+    client: Optional[Any] = None,
+) -> Tuple[Any, str]:
+    if client is not None:
+        model = (model_override or analysis_cfg.model).strip()
+        return client, model
+
+    model = (model_override or analysis_cfg.model).strip()
+    if analysis_cfg.provider == "ollama":
+        return OllamaClient(model=model, temperature=analysis_cfg.temperature), model
+    if analysis_cfg.provider == "copilot-chat":
+        return CopilotChatClient(model=model, temperature=analysis_cfg.temperature), model
+    raise ValueError(f"Unsupported local analysis provider: {analysis_cfg.provider!r}")
+
+
 def run_analysis(
     cfg: Config,
     *,
@@ -138,8 +256,11 @@ def run_analysis(
 
     packs = _select_packs(cfg, analysis_cfg, pack_name)
     intents = resolve_intents([intent_name] if intent_name else analysis_cfg.intents)
-    model = (model_override or analysis_cfg.model).strip()
-    ollama_client = client or OllamaClient(model=model, temperature=analysis_cfg.temperature)
+    analysis_client, model = _build_analysis_client(
+        analysis_cfg,
+        model_override=model_override,
+        client=client,
+    )
 
     for pack in packs:
         pack.analysis_dir.mkdir(parents=True, exist_ok=True)
@@ -169,7 +290,7 @@ def run_analysis(
                 "missing_evidence": missing_evidence,
             }
             prompt = _build_prompt(pack, facts, intent, selected_chunks, missing_evidence)
-            report_text = _normalize_report(ollama_client.generate(prompt), intent, selected_chunks)
+            report_text = _normalize_report(analysis_client.generate(prompt), intent, selected_chunks)
             (pack.analysis_dir / f"{intent.name}.md").write_text(report_text)
             reports[intent.name] = report_text
         _write_json(pack.analysis_dir / "retrieval_debug.json", retrieval_debug)
