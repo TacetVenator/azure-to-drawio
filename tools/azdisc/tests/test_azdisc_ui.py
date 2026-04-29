@@ -117,3 +117,19 @@ def test_artifact_preview_rejects_unsupported_suffix(
 
     assert response.status_code == 400
     assert "Preview is supported" in response.json()["detail"]
+
+
+def test_config_presets_endpoint_lists_scoped_presets() -> None:
+    client = testclient.TestClient(create_app())
+
+    response = client.get("/api/config/presets")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] >= 2
+    names = {item["name"] for item in payload["presets"]}
+    assert "rg-scoped" in names
+    assert "single-vm-deterministic-min-noise" in names
+
+    vm_preset = next(item for item in payload["presets"] if item["name"] == "single-vm-deterministic-min-noise")
+    assert vm_preset["config"]["diagramFocus"]["networkScope"] == "immediate-vm-network"

@@ -8,6 +8,18 @@ let inventoryExplorerState = {
     limit: 100,
     lastRunId: '',
 };
+let diagramStudioState = {
+    runId: '',
+    diagrams: [],
+};
+let diagramBetaState = {
+    runId: '',
+    diagrams: [],
+    activeIndex: -1,
+    iframeReady: false,
+    viewerAvailable: false,
+    viewerUrl: '',
+};
 
 const QUICK_DIAGRAM_FOCUS_PRESETS = {
     'full-balanced': {
@@ -32,6 +44,153 @@ const QUICK_DIAGRAM_FOCUS_PRESETS = {
         diagramType: 'application',
     },
 };
+
+const configPresetByName = {};
+
+function toCsv(value) {
+    return Array.isArray(value) ? value.join(',') : '';
+}
+
+function toLines(value) {
+    return Array.isArray(value) ? value.join('\n') : '';
+}
+
+function tagsToLines(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return '';
+    }
+    return Object.entries(value)
+        .map(([key, val]) => `${key}=${val}`)
+        .join('\n');
+}
+
+function setValueById(id, value) {
+    const el = document.getElementById(id);
+    if (el) {
+        el.value = value;
+    }
+}
+
+function setCheckedByName(name, checked) {
+    const el = document.querySelector(`input[name="${name}"]`);
+    if (el) {
+        el.checked = Boolean(checked);
+    }
+}
+
+function showConfigPresetDescription(text) {
+    const description = document.getElementById('configPresetDescription');
+    if (!description) {
+        return;
+    }
+    description.textContent = text || '';
+}
+
+function applyConfigObjectToForm(config) {
+    const form = document.getElementById('configForm');
+    if (!form || !config || typeof config !== 'object') {
+        return;
+    }
+
+    form.reset();
+
+    setValueById('appName', String(config.app || ''));
+    setValueById('outputDir', String(config.outputDir || ''));
+    setValueById('subscriptions', toCsv(config.subscriptions));
+    setValueById('seedManagementGroups', toCsv(config.seedManagementGroups));
+    setValueById('seedResourceGroups', toCsv(config.seedResourceGroups));
+    setValueById('seedResourceIds', toLines(config.seedResourceIds));
+    setValueById('seedTagKeys', toCsv(config.seedTagKeys));
+    setValueById('seedTags', tagsToLines(config.seedTags));
+
+    if (config.layout) setValueById('layout', String(config.layout));
+    if (config.diagramMode) setValueById('diagramMode', String(config.diagramMode));
+    if (config.spacing) setValueById('spacing', String(config.spacing));
+    if (config.expandScope) setValueById('expandScope', String(config.expandScope));
+
+    setCheckedByName('tagFallbackToResourceGroup', config.tagFallbackToResourceGroup);
+    setCheckedByName('seedEntireSubscriptions', config.seedEntireSubscriptions);
+    setCheckedByName('includeVmDetails', config.includeVmDetails);
+
+    const focus = config.diagramFocus;
+    if (focus && typeof focus === 'object') {
+        if (focus.preset) setValueById('diagramFocusPreset', String(focus.preset));
+        if (focus.resourceTypes) setValueById('diagramFocusResourceTypes', toLines(focus.resourceTypes));
+        const includeDepsEl = document.getElementById('diagramFocusIncludeDeps');
+        if (includeDepsEl) includeDepsEl.checked = Boolean(focus.includeDependencies);
+        if (focus.dependencyDepth !== undefined && focus.dependencyDepth !== null) {
+            setValueById('diagramFocusDependencyDepth', String(focus.dependencyDepth));
+        }
+        if (focus.networkScope) setValueById('diagramFocusNetworkScope', String(focus.networkScope));
+        if (focus.diagramType) setValueById('diagramFocusDiagramType', String(focus.diagramType));
+    }
+
+    const showAdvancedToggle = document.getElementById('showAdvancedConfig');
+    if (showAdvancedToggle) {
+        showAdvancedToggle.checked = true;
+        toggleAdvancedConfig(true);
+    }
+
+    updateDiagramFocusVisibility();
+    setActiveQuickPresetButton('');
+}
+
+async function hydrateConfigPresets() {
+    const select = document.getElementById('configPresetSelect');
+    if (!select) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/config/presets');
+        if (!response.ok) {
+            return;
+        }
+        const payload = await response.json();
+        const presets = Array.isArray(payload.presets) ? payload.presets : [];
+
+        select.querySelectorAll('option[data-config-preset="1"]').forEach(opt => opt.remove());
+        Object.keys(configPresetByName).forEach(key => delete configPresetByName[key]);
+
+        presets.forEach(preset => {
+            if (!preset || typeof preset.name !== 'string' || !preset.name.trim()) {
+                return;
+            }
+            const name = preset.name.trim();
+            configPresetByName[name] = preset;
+
+            const option = document.createElement('option');
+            option.value = name;
+            option.dataset.configPreset = '1';
+            option.textContent = preset.title || name;
+            select.appendChild(option);
+        });
+    } catch (error) {
+        console.warn('Unable to hydrate config presets:', error);
+    }
+}
+
+function applySelectedConfigPreset() {
+    const select = document.getElementById('configPresetSelect');
+    if (!select) {
+        return;
+    }
+
+    const selectedName = String(select.value || '').trim();
+    if (!selectedName) {
+        showConfigPresetDescription('');
+        return;
+    }
+
+    const preset = configPresetByName[selectedName];
+    if (!preset || typeof preset !== 'object') {
+        showConfigPresetDescription('Selected preset is unavailable. Reload the page and try again.');
+        return;
+    }
+
+    applyConfigObjectToForm(preset.config || {});
+    showConfigPresetDescription(preset.description || '');
+}
 
 function parseCsv(raw) {
     return String(raw || '')
@@ -178,6 +337,27 @@ function buildConfigFromForm(formData) {
 function switchTab(eventOrName, maybeTabName) {
     const tabName = typeof eventOrName === 'string' ? eventOrName : maybeTabName;
 
+    // Stop any live status refresh when leaving the pipeline tab
+    if (tabName !== 'pipeline') {
+        _clearStatusRefresh();
+    }
+
+    // Auto-load split overview on tab switch if a run is selected
+    if (tabName === 'split') {
+        const sel = document.getElementById('splitRunIdSelect');
+        if (sel && sel.value) {
+            loadSplitAndCandidates();
+        }
+    }
+
+    // Auto-load beta diagram list on tab switch if a run is selected
+    if (tabName === 'diagram-beta') {
+        const sel = document.getElementById('diagramBetaRunIdSelect');
+        if (sel && sel.value) {
+            loadDiagramBeta();
+        }
+    }
+
     // Hide all tabs
     const tabs = document.querySelectorAll('.tab-content');
     tabs.forEach(tab => tab.classList.remove('active'));
@@ -270,14 +450,13 @@ async function startPipeline() {
         const result = await response.json();
         
         if (response.ok) {
-            alert('Pipeline started with run ID: ' + result.run_id);
-            
             // Add to run selector
             updateRunSelectors([{ run_id: result.run_id, app: config.app, status: 'running' }], true);
-            
-            // Switch to pipeline tab
+
+            // Switch to pipeline tab and immediately open live status
             switchToTab('pipeline');
-            loadJobs();
+            await loadJobs();
+            viewJobStatus(result.run_id);
         } else {
             alert('Failed to start pipeline: ' + result.detail);
         }
@@ -372,18 +551,101 @@ async function loadJobs() {
 }
 
 async function viewJobStatus(runId) {
+    _clearStatusRefresh();
+    await _refreshJobStatus(runId);
+}
+
+let _statusRefreshTimer = null;
+let _statusRefreshRunId = null;
+
+function _clearStatusRefresh() {
+    if (_statusRefreshTimer) {
+        clearTimeout(_statusRefreshTimer);
+        _statusRefreshTimer = null;
+    }
+    _statusRefreshRunId = null;
+}
+
+async function _refreshJobStatus(runId) {
     try {
-        const response = await fetch(`/api/pipeline/status/${runId}`);
-        const result = await response.json();
-        
-        const statusPanel = document.getElementById('jobStatusPanel');
-        const content = document.getElementById('statusContent');
-        
-        content.textContent = JSON.stringify(result, null, 2);
-        statusPanel.style.display = 'block';
+        const [statusResp, logsResp] = await Promise.all([
+            fetch(`/api/pipeline/status/${runId}`),
+            fetch(`/api/pipeline/logs/${runId}?tail=300`),
+        ]);
+        if (!statusResp.ok) {
+            const err = await statusResp.json().catch(() => ({ detail: statusResp.statusText }));
+            alert(`Failed to load status: ${err.detail || statusResp.statusText}`);
+            return;
+        }
+        const result = await statusResp.json();
+        const logs = logsResp.ok ? await logsResp.text() : '(logs not available)';
+
+        _renderJobStatus(result, logs);
+
+        if (result.status === 'running') {
+            _statusRefreshRunId = runId;
+            _statusRefreshTimer = setTimeout(() => _refreshJobStatus(runId), 3000);
+        }
     } catch (error) {
         alert('Failed to load status: ' + error.message);
     }
+}
+
+function _renderJobStatus(result, logs) {
+    const statusPanel = document.getElementById('jobStatusPanel');
+    const content = document.getElementById('statusContent');
+    const logContent = document.getElementById('logContent');
+    const logDetails = document.getElementById('logDetails');
+
+    const stageIcons = { running: '⟳', completed: '✓', failed: '✗' };
+
+    const stageRows = (result.stages || []).map(s => {
+        const icon = stageIcons[s.status] || '?';
+        const errorCell = s.error ? `<span style="color:#c00;">${escapeHtml(s.error)}</span>` : '—';
+        return `<tr>
+            <td>${icon} ${escapeHtml(s.name)}</td>
+            <td><span class="job-badge ${s.status}">${s.status}</span></td>
+            <td style="font-size:11px;">${errorCell}</td>
+        </tr>`;
+    }).join('');
+
+    const fallbackNote = result.fallback_triggered
+        ? `<div style="background:#fff8e1;border:1px solid #f0c040;padding:6px 10px;border-radius:4px;font-size:12px;margin-bottom:8px;">
+               CLI fallback triggered at stage <strong>${escapeHtml(result.fallback_stage || '?')}</strong>: ${escapeHtml(result.fallback_reason || '')}
+           </div>` : '';
+
+    const errorNote = result.error
+        ? `<div style="background:#ffe0e0;border:1px solid #f08080;padding:6px 10px;border-radius:4px;font-size:12px;margin-bottom:8px;">${escapeHtml(result.error)}</div>` : '';
+
+    const authLabel = result.auth_mode_effective && result.auth_mode_effective !== 'undefined'
+        ? ` &nbsp;·&nbsp; auth: <strong>${escapeHtml(result.auth_mode_effective)}</strong>` : '';
+
+    const refreshNote = result.status === 'running'
+        ? `<p style="color:#0078D4;font-size:12px;margin-top:4px;">⟳ Auto-refreshing every 3 s…</p>` : '';
+
+    content.innerHTML = `
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap;">
+            <span class="job-badge ${result.status}" style="font-size:14px;padding:4px 10px;">${result.status}</span>
+            <span style="font-size:12px;color:#555;">run: <code>${escapeHtml(result.run_id)}</code>${authLabel}</span>
+        </div>
+        ${fallbackNote}${errorNote}
+        ${stageRows
+            ? `<table class="data-table"><thead><tr><th>Stage</th><th>Status</th><th>Error</th></tr></thead><tbody>${stageRows}</tbody></table>`
+            : '<p style="color:#888;font-size:13px;">No stages recorded yet.</p>'}
+        ${refreshNote}
+    `;
+
+    if (logContent) {
+        const atBottom = logContent.scrollHeight - logContent.scrollTop <= logContent.clientHeight + 20;
+        logContent.textContent = logs || '(no log output)';
+        if (atBottom || result.status === 'running') {
+            logContent.scrollTop = logContent.scrollHeight;
+        }
+    }
+    if (logDetails) {
+        logDetails.open = true;
+    }
+    statusPanel.style.display = 'block';
 }
 
 // Artifact browsing
@@ -392,6 +654,13 @@ async function loadArtifacts() {
     
     if (!runId) {
         document.getElementById('artifactsBrowser').style.display = 'none';
+        const panel = document.getElementById('diagramStudioPanel');
+        const buttons = document.getElementById('diagramQuickButtons');
+        const viewer = document.getElementById('diagramViewer');
+        if (panel) panel.style.display = 'none';
+        if (buttons) buttons.innerHTML = '';
+        if (viewer) viewer.textContent = 'Select a run to browse diagrams.';
+        diagramStudioState = { runId: '', diagrams: [] };
         return;
     }
     
@@ -443,6 +712,7 @@ async function loadArtifacts() {
         inventoryExplorerState.offset = 0;
         await loadInventoryFacets();
         runInventorySearch(true);
+        await loadDiagramStudio();
     } catch (error) {
         alert('Failed to load artifacts: ' + error.message);
     }
@@ -621,6 +891,80 @@ async function previewArtifact(runId, encodedArtifactPath) {
         panel.style.display = 'block';
     } catch (error) {
         alert('Failed to preview artifact: ' + error.message);
+    }
+}
+
+async function loadDiagramStudio() {
+    const runId = document.getElementById('runIdSelect').value;
+    const panel = document.getElementById('diagramStudioPanel');
+    const buttons = document.getElementById('diagramQuickButtons');
+    const viewer = document.getElementById('diagramViewer');
+
+    if (!runId || !panel || !buttons || !viewer) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/artifacts/diagrams/${encodeURIComponent(runId)}`);
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.detail || 'Failed to load diagram artifacts');
+        }
+
+        const diagrams = Array.isArray(result.diagrams) ? result.diagrams : [];
+        diagramStudioState = { runId, diagrams };
+        panel.style.display = 'block';
+
+        if (diagrams.length === 0) {
+            buttons.innerHTML = '';
+            viewer.innerHTML = '<p class="placeholder">No .drawio/.mxlibrary/.svg/.png diagram artifacts found for this run.</p>';
+            return;
+        }
+
+        buttons.innerHTML = diagrams.map((diagram, index) => `
+            <button type="button" onclick="previewStudioDiagram(${index})">
+                ${escapeHtml(diagram.label || diagram.path || diagram.name || `diagram ${index + 1}`)}
+            </button>
+        `).join('');
+
+        previewStudioDiagram(0);
+    } catch (error) {
+        panel.style.display = 'block';
+        buttons.innerHTML = '';
+        viewer.innerHTML = `<p class="placeholder">Failed to load diagrams: ${escapeHtml(error.message)}</p>`;
+    }
+}
+
+async function previewStudioDiagram(index) {
+    const { runId, diagrams } = diagramStudioState;
+    const viewer = document.getElementById('diagramViewer');
+    if (!viewer || !runId || !Array.isArray(diagrams) || index < 0 || index >= diagrams.length) {
+        return;
+    }
+
+    const diagram = diagrams[index];
+    const encodedPath = encodeArtifactPath(diagram.path || '');
+    const downloadUrl = `/api/artifacts/download/${encodeURIComponent(runId)}/${encodedPath}`;
+    const header = `<div class="diagram-header"><strong>${escapeHtml(diagram.label || diagram.name || diagram.path || 'diagram')}</strong> · ${escapeHtml(diagram.path || '')}</div>`;
+
+    if (diagram.kind === 'image') {
+        viewer.innerHTML = `${header}<img src="${downloadUrl}" alt="${escapeHtml(diagram.name || 'diagram preview')}">`;
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/artifacts/preview/${encodeURIComponent(runId)}/${encodedPath}?limit=120`);
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.detail || 'Failed to preview draw.io artifact');
+        }
+
+        const intro = `<p class="placeholder" style="margin-bottom: 8px;">Embedded draw.io source preview. Use Download/Open to edit in your local draw.io/diagrams.net app.</p>`;
+        const openLinks = `<div style="margin-bottom: 8px;"><a href="${downloadUrl}" target="_blank">Open Raw File</a></div>`;
+        const xml = escapeHtml(result.previewText || '(no preview text returned)');
+        viewer.innerHTML = `${header}${intro}${openLinks}<pre>${xml}</pre>`;
+    } catch (error) {
+        viewer.innerHTML = `${header}<p class="placeholder">Failed to preview diagram: ${escapeHtml(error.message)}</p>`;
     }
 }
 
@@ -990,7 +1334,7 @@ function renderLinkedCandidates(deployment) {
 }
 
 function updateRunSelectors(jobs, appendOnly = false) {
-    const selectors = ['runIdSelect', 'splitRunIdSelect', 'migrationRunIdSelect'];
+    const selectors = ['runIdSelect', 'splitRunIdSelect', 'migrationRunIdSelect', 'diagramBetaRunIdSelect'];
     selectors.forEach(id => {
         const select = document.getElementById(id);
         if (!select) {
@@ -1017,6 +1361,254 @@ function updateRunSelectors(jobs, appendOnly = false) {
             select.value = current;
         }
     });
+}
+
+async function loadDiagramBeta() {
+    const runId = document.getElementById('diagramBetaRunIdSelect')?.value || '';
+    const buttonsHost = document.getElementById('diagramBetaButtons');
+    const statusEl = document.getElementById('diagramBetaStatus');
+    const iframe = document.getElementById('diagramBetaIframe');
+    const imageHost = document.getElementById('diagramBetaImageHost');
+    if (!buttonsHost || !statusEl || !iframe || !imageHost) {
+        return;
+    }
+
+    if (!runId) {
+        diagramBetaState = {
+            runId: '',
+            diagrams: [],
+            activeIndex: -1,
+            iframeReady: diagramBetaState.iframeReady,
+            viewerAvailable: diagramBetaState.viewerAvailable,
+            viewerUrl: diagramBetaState.viewerUrl,
+        };
+        buttonsHost.innerHTML = '';
+        statusEl.textContent = 'Select a run to load diagram artifacts.';
+        imageHost.style.display = 'none';
+        iframe.style.display = diagramBetaState.viewerAvailable ? '' : 'none';
+        const scopeSelect = document.getElementById('diagramGenerateScope');
+        if (scopeSelect) {
+            scopeSelect.innerHTML = '<option value="">-- Choose scope --</option>';
+        }
+        return;
+    }
+
+    try {
+        statusEl.textContent = 'Loading diagram artifacts...';
+        const response = await fetch(`/api/artifacts/diagrams/${encodeURIComponent(runId)}`);
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.detail || 'Failed to load diagram artifacts');
+        }
+
+        const diagrams = Array.isArray(result.diagrams) ? result.diagrams : [];
+        diagramBetaState = {
+            runId,
+            diagrams,
+            activeIndex: -1,
+            iframeReady: diagramBetaState.iframeReady,
+            viewerAvailable: diagramBetaState.viewerAvailable,
+            viewerUrl: diagramBetaState.viewerUrl,
+        };
+
+        if (!diagrams.length) {
+            buttonsHost.innerHTML = '';
+            statusEl.textContent = 'No diagram artifacts (.drawio/.mxlibrary/.svg/.png) found for this run.';
+            imageHost.style.display = 'none';
+            iframe.style.display = diagramBetaState.viewerAvailable ? '' : 'none';
+            return;
+        }
+
+        buttonsHost.innerHTML = diagrams.map((diagram, idx) => `
+            <button type="button" onclick="previewDiagramBeta(${idx})">${escapeHtml(diagram.label || diagram.path || `diagram ${idx + 1}`)}</button>
+        `).join('');
+
+        statusEl.textContent = `Found ${diagrams.length} diagram artifact(s).`;
+        await previewDiagramBeta(0);
+        await loadDiagramScopeOptions();
+    } catch (error) {
+        buttonsHost.innerHTML = '';
+        statusEl.textContent = `Failed to load diagram artifacts: ${error.message}`;
+    }
+}
+
+async function loadDiagramScopeOptions() {
+    const runId = document.getElementById('diagramBetaRunIdSelect')?.value || '';
+    const target = document.getElementById('diagramGenerateTarget')?.value || 'resourcegroup';
+    const scopeSelect = document.getElementById('diagramGenerateScope');
+    const statusEl = document.getElementById('diagramBetaStatus');
+    if (!scopeSelect) {
+        return;
+    }
+
+    if (!runId) {
+        scopeSelect.innerHTML = '<option value="">-- Choose scope --</option>';
+        return;
+    }
+
+    try {
+        scopeSelect.innerHTML = '<option value="">Loading scope options...</option>';
+        const response = await fetch(`/api/diagram/scope-options/${encodeURIComponent(runId)}?target=${encodeURIComponent(target)}&limit=1000`);
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.detail || 'Failed to load scope options');
+        }
+
+        const options = Array.isArray(result.options) ? result.options : [];
+        if (!options.length) {
+            scopeSelect.innerHTML = '<option value="">-- No scope values found --</option>';
+            if (statusEl) {
+                statusEl.textContent = `No scope options found for target ${target}.`;
+            }
+            return;
+        }
+
+        scopeSelect.innerHTML = ['<option value="">-- Choose scope --</option>']
+            .concat(options.map(item => `<option value="${escapeHtml(item.value || '')}">${escapeHtml(item.label || item.value || '')}</option>`))
+            .join('');
+    } catch (error) {
+        scopeSelect.innerHTML = '<option value="">-- Failed to load scope options --</option>';
+        if (statusEl) {
+            statusEl.textContent = `Failed to load scope options: ${error.message}`;
+        }
+    }
+}
+
+async function generateScopedNetworkDiagram() {
+    const runId = document.getElementById('diagramBetaRunIdSelect')?.value || '';
+    const target = document.getElementById('diagramGenerateTarget')?.value || 'resourcegroup';
+    const scope = document.getElementById('diagramGenerateScope')?.value || '';
+    const statusEl = document.getElementById('diagramBetaStatus');
+
+    if (!runId) {
+        alert('Choose a run first.');
+        return;
+    }
+    if (!scope) {
+        alert('Choose a scope value first.');
+        return;
+    }
+
+    try {
+        if (statusEl) {
+            statusEl.textContent = `Generating scoped network diagram for ${target}: ${scope}...`;
+        }
+
+        const response = await fetch('/api/diagram/generate-scoped', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ run_id: runId, target, scope, include_neighbors: true }),
+        });
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.detail || 'Scoped diagram generation failed');
+        }
+
+        if (statusEl) {
+            statusEl.textContent = `Generated scoped diagram (${result.nodeCount} nodes / ${result.edgeCount} edges): ${result.diagramPath}`;
+        }
+
+        await loadDiagramBeta();
+        const idx = diagramBetaState.diagrams.findIndex(item => item.path === result.diagramPath);
+        if (idx >= 0) {
+            await previewDiagramBeta(idx);
+        }
+    } catch (error) {
+        if (statusEl) {
+            statusEl.textContent = `Scoped diagram generation failed: ${error.message}`;
+        }
+    }
+}
+
+async function previewDiagramBeta(index) {
+    try {
+        const { runId, diagrams, iframeReady } = diagramBetaState;
+        const statusEl = document.getElementById('diagramBetaStatus');
+        const iframe = document.getElementById('diagramBetaIframe');
+        const imageHost = document.getElementById('diagramBetaImageHost');
+
+        if (!runId || !Array.isArray(diagrams) || index < 0 || index >= diagrams.length || !statusEl || !iframe || !imageHost) {
+            return;
+        }
+
+        const diagram = diagrams[index];
+        diagramBetaState.activeIndex = index;
+        const encodedPath = encodeArtifactPath(diagram.path || '');
+        const downloadUrl = `/api/artifacts/download/${encodeURIComponent(runId)}/${encodedPath}`;
+
+        if (diagram.kind === 'image' || !diagramBetaState.viewerAvailable) {
+            iframe.style.display = 'none';
+            imageHost.style.display = '';
+            if (!diagramBetaState.viewerAvailable && diagram.kind !== 'image') {
+                const xmlResp = await fetch(downloadUrl);
+                if (!xmlResp.ok) {
+                    throw new Error(`Unable to fetch diagram XML (${xmlResp.status})`);
+                }
+                const xmlText = await xmlResp.text();
+                imageHost.innerHTML = `
+                    <div class="diagram-header"><strong>${escapeHtml(diagram.label || diagram.name || 'draw.io')}</strong></div>
+                    <p class="placeholder" style="margin-bottom: 8px;">Local embedded viewer not available. Showing raw XML preview.</p>
+                    <pre>${escapeHtml(xmlText.slice(0, 25000))}${xmlText.length > 25000 ? '\n... (truncated)' : ''}</pre>
+                `;
+                statusEl.textContent = `Viewer unavailable; showing draw.io XML preview: ${diagram.path}`;
+                return;
+            }
+            imageHost.innerHTML = `
+                <div class="diagram-header"><strong>${escapeHtml(diagram.label || diagram.name || 'image')}</strong></div>
+                <img src="${downloadUrl}" alt="${escapeHtml(diagram.name || 'diagram image')}" />
+            `;
+            statusEl.textContent = `Previewing image diagram: ${diagram.path}`;
+            return;
+        }
+
+        iframe.style.display = '';
+        imageHost.style.display = 'none';
+        imageHost.innerHTML = '';
+        statusEl.textContent = `Loading draw.io diagram: ${diagram.path}`;
+
+        const xmlResp = await fetch(downloadUrl);
+        if (!xmlResp.ok) {
+            throw new Error(`Unable to fetch diagram XML (${xmlResp.status})`);
+        }
+        const xmlText = await xmlResp.text();
+
+        const postLoad = () => {
+            const payload = {
+                action: 'load',
+                xml: xmlText,
+                autosave: 0,
+                modified: 'unsavedChanges',
+                saveAndExit: '0',
+            };
+            iframe.contentWindow?.postMessage(JSON.stringify(payload), '*');
+        };
+
+        if (iframeReady) {
+            postLoad();
+        } else {
+            statusEl.textContent = 'Waiting for embedded diagrams.net viewer to initialize...';
+            const timeoutAt = Date.now() + 12000;
+            const waitForReady = () => {
+                if (diagramBetaState.iframeReady) {
+                    postLoad();
+                    statusEl.textContent = `Previewing draw.io diagram: ${diagram.path}`;
+                } else if (Date.now() < timeoutAt) {
+                    setTimeout(waitForReady, 150);
+                } else {
+                    statusEl.textContent = 'Embedded viewer did not initialize in time. Try refreshing Diagram Beta.';
+                }
+            };
+            waitForReady();
+            return;
+        }
+
+        statusEl.textContent = `Previewing draw.io diagram: ${diagram.path}`;
+    } catch (error) {
+        const statusEl = document.getElementById('diagramBetaStatus');
+        if (statusEl) {
+            statusEl.textContent = `Failed to preview diagram: ${error.message}`;
+        }
+    }
 }
 
 function escapeHtml(value) {
@@ -1269,7 +1861,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const toggle = document.getElementById('showAdvancedConfig');
     toggleAdvancedConfig(Boolean(toggle && toggle.checked));
     loadJobs();
+    hydrateConfigPresets();
     hydrateScenarioTemplates();
+
+    const configPresetSelect = document.getElementById('configPresetSelect');
+    if (configPresetSelect) {
+        configPresetSelect.addEventListener('change', () => {
+            const selectedName = String(configPresetSelect.value || '').trim();
+            const preset = configPresetByName[selectedName];
+            showConfigPresetDescription(preset && preset.description ? preset.description : '');
+        });
+    }
 
     // Diagram Focus: custom type visibility and quick one-click presets
     const focusPreset = document.getElementById('diagramFocusPreset');
@@ -1289,4 +1891,54 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     updateDiagramFocusVisibility();
+
+    initDiagramBetaViewer();
+
+    window.addEventListener('message', (event) => {
+        let payload = event.data;
+        if (typeof payload === 'string') {
+            try {
+                payload = JSON.parse(payload);
+            } catch {
+                return;
+            }
+        }
+        if (!payload || typeof payload !== 'object') {
+            return;
+        }
+        if (payload.event === 'init') {
+            diagramBetaState.iframeReady = true;
+        }
+    });
 });
+
+async function initDiagramBetaViewer() {
+    const iframe = document.getElementById('diagramBetaIframe');
+    const hint = document.getElementById('diagramBetaViewerHint');
+    if (!iframe || !hint) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/diagram-beta/viewer');
+        const result = await response.json();
+        if (!response.ok || !result.available || !result.url) {
+            diagramBetaState.viewerAvailable = false;
+            diagramBetaState.viewerUrl = '';
+            iframe.style.display = 'none';
+            hint.textContent = 'Local embedded viewer not found. Beta tab will use XML/image fallback only.';
+            return;
+        }
+
+        diagramBetaState.viewerAvailable = true;
+        diagramBetaState.viewerUrl = String(result.url);
+        iframe.src = diagramBetaState.viewerUrl;
+        iframe.style.display = '';
+        hint.textContent = `Using local viewer (${result.source}).`;
+    } catch (error) {
+        diagramBetaState.viewerAvailable = false;
+        diagramBetaState.viewerUrl = '';
+        iframe.style.display = 'none';
+        hint.textContent = `Local viewer detection failed: ${error.message}`;
+    }
+}

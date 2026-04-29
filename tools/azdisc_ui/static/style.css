@@ -300,6 +300,62 @@ header .subtitle {
     background: #fff;
 }
 
+.diagram-quick-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.diagram-quick-buttons button {
+    border: 1px solid #bcd7f2;
+    background: #edf5fd;
+    color: #005a9e;
+    border-radius: 999px;
+    padding: 6px 12px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.diagram-quick-buttons button:hover {
+    background: #dbeeff;
+}
+
+.diagram-viewer {
+    min-height: 320px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: #fff;
+    padding: 10px;
+    overflow: auto;
+}
+
+.diagram-viewer img {
+    max-width: 100%;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+}
+
+.diagram-viewer .diagram-header {
+    margin-bottom: 8px;
+    font-size: 12px;
+    color: #555;
+}
+
+.diagram-beta-iframe {
+    width: 100%;
+    min-height: 640px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: #fff;
+}
+
+#diagramBetaImageHost img {
+    max-width: 100%;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+}
+
 /* Lists */
 .jobs-list,
 .artifacts-list {

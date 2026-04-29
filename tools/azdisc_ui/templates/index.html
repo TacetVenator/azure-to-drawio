@@ -17,6 +17,7 @@
             <button class="tab-button active" onclick="switchTab('config')">Config</button>
             <button class="tab-button" onclick="switchTab('pipeline')">Pipeline</button>
             <button class="tab-button" onclick="switchTab('artifacts')">Artifacts</button>
+            <button class="tab-button" onclick="switchTab('diagram-beta')">Diagram Beta</button>
             <button class="tab-button" onclick="switchTab('split')">Split Overview</button>
             <button class="tab-button" onclick="switchTab('migration')">Migration</button>
             <button class="tab-button" onclick="switchTab('scenario')">Scenario</button>
@@ -44,6 +45,23 @@
                         <label for="subscriptions" class="label-with-help">Subscriptions (comma-separated) * <span class="info-tip" title="Azure subscription IDs used for ARG queries and discovery.">i</span></label>
                         <textarea id="subscriptions" name="subscriptions" rows="2" required></textarea>
                     </div>
+                </div>
+
+                <div class="section">
+                    <h3>Config Presets</h3>
+                    <p class="section-hint">Apply a starter config for resource-group scoped or single-VM deterministic discovery.</p>
+                    <div class="form-grid">
+                        <div class="form-group form-group-full">
+                            <label for="configPresetSelect" class="label-with-help">Preset <span class="info-tip" title="Presets populate the form with recommended defaults. Update placeholders before running.">i</span></label>
+                            <select id="configPresetSelect" name="configPresetSelect">
+                                <option value="">Select a preset...</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="scenario-actions">
+                        <button type="button" onclick="applySelectedConfigPreset()">Apply Preset</button>
+                    </div>
+                    <div id="configPresetDescription" class="placeholder" style="margin-top: 8px; font-size: 12px;"></div>
                 </div>
 
                 <div class="form-toolbar">
@@ -423,9 +441,10 @@
                     <h3>Local Analysis</h3>
                     <div class="form-grid">
                         <div class="form-group">
-                            <label for="localAnalysisProvider" class="label-with-help">Provider <span class="info-tip" title="Local analysis provider (currently ollama).">i</span></label>
+                            <label for="localAnalysisProvider" class="label-with-help">Provider <span class="info-tip" title="Choose Ollama or Copilot Chat. Copilot Chat requires environment variables M365_COPILOT_CHAT_COMPLETIONS_URL and M365_COPILOT_CHAT_TOKEN.">i</span></label>
                             <select id="localAnalysisProvider" name="localAnalysisProvider">
                                 <option value="ollama" selected>ollama</option>
+                                <option value="copilot-chat">copilot-chat</option>
                             </select>
                         </div>
 
@@ -569,7 +588,11 @@
 
             <div id="jobStatusPanel" class="result-panel" style="display: none;">
                 <h3>Run Status</h3>
-                <pre id="statusContent"></pre>
+                <div id="statusContent"></div>
+                <details id="logDetails" style="margin-top: 12px;">
+                    <summary style="cursor: pointer; font-weight: 600; padding: 4px 0;">Pipeline Logs</summary>
+                    <pre id="logContent" style="max-height: 400px; overflow: auto; background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 4px; font-size: 11px; margin-top: 8px; white-space: pre-wrap; word-break: break-all;"></pre>
+                </details>
             </div>
         </div>
 
@@ -593,6 +616,20 @@
                     <h3>Artifact Preview</h3>
                     <div id="artifactPreviewMedia" style="display: none;"></div>
                     <pre id="artifactPreviewContent"></pre>
+                </div>
+
+                <div class="section" id="diagramStudioPanel" style="display: none;">
+                    <h3>Diagram Studio (Embedded Preview)</h3>
+                    <p class="placeholder" style="margin-bottom: 8px;">
+                        Preview generated topology diagrams and slice diagrams directly in the UI.
+                    </p>
+                    <div class="inventory-actions" style="margin-bottom: 10px;">
+                        <button class="btn-primary" type="button" onclick="loadDiagramStudio()">Refresh Diagram List</button>
+                    </div>
+                    <div id="diagramQuickButtons" class="diagram-quick-buttons"></div>
+                    <div id="diagramViewer" class="diagram-viewer placeholder">
+                        Select a diagram button to preview it here.
+                    </div>
                 </div>
 
                 <div class="section">
@@ -646,6 +683,69 @@
                     <div id="inventorySummary" class="placeholder" style="margin-top: 10px;">No inventory query executed yet.</div>
                     <div id="inventoryResults"></div>
                 </div>
+            </div>
+        </div>
+
+        <!-- Diagram Beta Tab -->
+        <div id="diagram-beta" class="tab-content">
+            <h2>Diagram Beta (Embedded draw.io)</h2>
+            <p class="placeholder">Beta viewer backed by diagrams.net embed mode. Use this to interactively inspect generated draw.io files.</p>
+
+            <div class="section">
+                <div class="form-group">
+                    <label for="diagramBetaRunIdSelect">Run</label>
+                    <select id="diagramBetaRunIdSelect" onchange="loadDiagramBeta()">
+                        <option value="">-- Choose a run --</option>
+                    </select>
+                </div>
+                <div class="inventory-actions">
+                    <button class="btn-primary" type="button" onclick="loadDiagramBeta()">Refresh Diagram List</button>
+                </div>
+            </div>
+
+            <div class="section">
+                <h3>Scoped Network Diagram Generator</h3>
+                <div class="filter-grid">
+                    <div class="form-group">
+                        <label for="diagramGenerateTarget">Generate network diagram for</label>
+                        <select id="diagramGenerateTarget" onchange="loadDiagramScopeOptions()">
+                            <option value="tag">Tag</option>
+                            <option value="resourcegroup" selected>Resource Group</option>
+                            <option value="resource">Resource</option>
+                        </select>
+                    </div>
+                    <div class="form-group form-group-full">
+                        <label for="diagramGenerateScope">Scope</label>
+                        <select id="diagramGenerateScope">
+                            <option value="">-- Choose scope --</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="inventory-actions">
+                    <button class="btn-primary" type="button" onclick="generateScopedNetworkDiagram()">Generate Scoped Network Diagram</button>
+                    <button class="btn-primary" type="button" onclick="loadDiagramScopeOptions()">Refresh Scope Options</button>
+                </div>
+            </div>
+
+            <div class="section">
+                <h3>Available Diagrams</h3>
+                <div id="diagramBetaButtons" class="diagram-quick-buttons"></div>
+                <div id="diagramBetaStatus" class="placeholder" style="margin-top: 8px;">Select a run to load diagram artifacts.</div>
+            </div>
+
+            <div class="section">
+                <h3>Embedded Viewer</h3>
+                <div id="diagramBetaImageHost" class="diagram-viewer" style="display: none;"></div>
+                <iframe
+                    id="diagramBetaIframe"
+                    title="Diagram Beta Viewer"
+                    class="diagram-beta-iframe"
+                    src="about:blank"
+                    loading="lazy">
+                </iframe>
+                <p id="diagramBetaViewerHint" class="placeholder" style="margin-top: 8px;">
+                    Loading local embedded viewer...
+                </p>
             </div>
         </div>
 

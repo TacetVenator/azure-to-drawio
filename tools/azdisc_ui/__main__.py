@@ -101,6 +101,17 @@ def create_app() -> FastAPI:
                 "errors": [str(e)],
                 "preview": None,
             }
+
+    @app.get("/api/config/presets", tags=["config"])
+    async def list_config_presets() -> dict:
+        """List built-in config presets that can be applied in the UI."""
+        from tools.azdisc.config_presets import list_config_presets as load_presets
+
+        presets = load_presets(include_config=True)
+        return {
+            "presets": presets,
+            "total": len(presets),
+        }
     
     # ============================================================================
     # Pipeline Execution API Routes (Phase 2, 2A)
@@ -288,6 +299,26 @@ def create_app() -> FastAPI:
             "stages": job.get("stages", []),
         }
     
+    @app.get("/api/pipeline/logs/{run_id}", tags=["pipeline"])
+    async def pipeline_logs(run_id: str, tail: int = 300) -> str:
+        """Return the last *tail* lines from the pipeline.log for a run."""
+        from tools.azdisc_ui.services.pipeline_runner import get_runner
+
+        runner = get_runner()
+        job = runner.get_job(run_id)
+        if not job:
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+        log_path = Path(job.get("output_dir", "")) / "pipeline.log"
+        if not log_path.exists():
+            return "(pipeline.log not yet available — run may still be initialising)"
+
+        try:
+            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            return "\n".join(lines[-tail:]) if len(lines) > tail else "\n".join(lines)
+        except Exception as exc:
+            return f"(could not read log: {exc})"
+    
     # ============================================================================
     # Artifact API Routes (Phase 2B)
     # ============================================================================
@@ -330,6 +361,332 @@ def create_app() -> FastAPI:
         return {
             "artifacts": artifacts,
             "path": str(target.relative_to(root)) or "/",
+        }
+
+    @app.get("/api/artifacts/diagrams/{run_id}", tags=["artifacts"])
+    async def list_diagram_artifacts(run_id: str) -> dict:
+        """List diagram-like artifacts available for embedded preview."""
+        from tools.azdisc_ui.services.pipeline_runner import get_runner
+
+        runner = get_runner()
+        job = runner.get_job(run_id)
+
+        if not job:
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+        root = Path(job["output_dir"])
+        if not root.exists():
+            return {"diagrams": []}
+
+        diagrams = []
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+
+            suffix = path.suffix.lower()
+            if suffix not in {".drawio", ".mxlibrary", ".svg", ".png"}:
+                continue
+
+            rel = str(path.relative_to(root))
+            lower_rel = rel.lower()
+            if lower_rel.startswith("applications/") and lower_rel.endswith("/diagram.drawio"):
+                diagram_class = "application-slice"
+                label = f"Application Slice: {path.parent.name}"
+            elif path.name.lower() == "diagram.drawio":
+                diagram_class = "global-topology"
+                label = "Global Topology"
+            elif suffix in {".svg", ".png"}:
+                diagram_class = "image"
+                label = f"Image: {path.name}"
+            else:
+                diagram_class = "drawio"
+                label = path.name
+
+            diagrams.append(
+                {
+                    "path": rel,
+                    "name": path.name,
+                    "kind": "image" if suffix in {".svg", ".png"} else "drawio",
+                    "diagramClass": diagram_class,
+                    "label": label,
+                    "size": path.stat().st_size,
+                }
+            )
+
+        diagrams.sort(key=lambda item: (item.get("diagramClass", ""), item.get("path", "")))
+        return {"diagrams": diagrams}
+
+    @app.get("/api/diagram-beta/viewer", tags=["artifacts"])
+    async def diagram_beta_viewer() -> dict:
+        """Return local embedded viewer URL when a bundled diagrams.net viewer is available."""
+        ui_static_root = Path(__file__).resolve().parent / "static"
+        local_candidates = [
+            ui_static_root / "vendor" / "diagrams-net" / "index.html",
+            ui_static_root / "vendor" / "drawio" / "index.html",
+        ]
+        for candidate in local_candidates:
+            if candidate.exists() and candidate.is_file():
+                rel = candidate.relative_to(ui_static_root).as_posix()
+                return {
+                    "available": True,
+                    "url": f"/static/{rel}?embed=1&ui=min&spin=1&proto=json",
+                    "source": "local-static",
+                }
+        return {
+            "available": False,
+            "url": None,
+            "source": "none",
+            "hint": "Place a bundled diagrams.net build at static/vendor/diagrams-net/index.html",
+        }
+
+    @app.get("/api/diagram/scope-options/{run_id}", tags=["artifacts"])
+    async def diagram_scope_options(run_id: str, target: str = "resourcegroup", limit: int = 500) -> dict:
+        """Return scope dropdown options for scoped diagram generation."""
+        from tools.azdisc_ui.services.pipeline_runner import get_runner
+
+        target_mode = str(target or "").strip().lower()
+        if target_mode not in {"tag", "resourcegroup", "resource"}:
+            raise HTTPException(status_code=400, detail="target must be one of: tag, resourcegroup, resource")
+
+        runner = get_runner()
+        job = runner.get_job(run_id)
+        if not job:
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+        root = Path(job["output_dir"])
+        inv_path = root / "inventory.json"
+        if not inv_path.exists():
+            raise HTTPException(status_code=404, detail="inventory.json not found for this run")
+
+        try:
+            inventory = json.loads(inv_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Could not parse inventory.json: {exc}")
+
+        if not isinstance(inventory, list):
+            raise HTTPException(status_code=400, detail="inventory.json must be a JSON array")
+
+        safe_limit = max(1, min(int(limit), 5000))
+
+        if target_mode == "resourcegroup":
+            counts: dict[str, int] = {}
+            for row in inventory:
+                if not isinstance(row, dict):
+                    continue
+                rg = str(row.get("resourceGroup") or "").strip()
+                if not rg:
+                    continue
+                counts[rg] = counts.get(rg, 0) + 1
+            options = [
+                {"value": rg, "label": f"{rg} ({count} resources)", "count": count}
+                for rg, count in sorted(counts.items(), key=lambda item: (-item[1], item[0].lower()))[:safe_limit]
+            ]
+            return {"target": target_mode, "options": options}
+
+        if target_mode == "tag":
+            counts: dict[str, int] = {}
+            for row in inventory:
+                if not isinstance(row, dict):
+                    continue
+                tags = row.get("tags")
+                if not isinstance(tags, dict):
+                    continue
+                for key, value in tags.items():
+                    k = str(key or "").strip()
+                    v = str(value or "").strip()
+                    if not k or not v:
+                        continue
+                    pair = f"{k}={v}"
+                    counts[pair] = counts.get(pair, 0) + 1
+            options = [
+                {"value": pair, "label": f"{pair} ({count} resources)", "count": count}
+                for pair, count in sorted(counts.items(), key=lambda item: (-item[1], item[0].lower()))[:safe_limit]
+            ]
+            return {"target": target_mode, "options": options}
+
+        # target_mode == "resource"
+        resources: list[dict] = []
+        for row in inventory:
+            if not isinstance(row, dict):
+                continue
+            rid = str(row.get("id") or "").strip()
+            if not rid:
+                continue
+            name = str(row.get("name") or rid.split("/")[-1])
+            rtype = str(row.get("type") or "unknown")
+            rg = str(row.get("resourceGroup") or "")
+            label = f"{name} ({rtype})" + (f" - {rg}" if rg else "")
+            resources.append({"value": rid, "label": label, "count": 1})
+
+        resources.sort(key=lambda row: row["label"].lower())
+        return {"target": target_mode, "options": resources[:safe_limit]}
+
+    @app.post("/api/diagram/generate-scoped", tags=["artifacts"])
+    async def generate_scoped_diagram(payload: dict) -> dict:
+        """Generate a scoped network diagram from an existing run's graph/inventory artifacts."""
+        from dataclasses import asdict
+
+        from tools.azdisc.config import load_config_from_dict
+        from tools.azdisc.drawio import generate_drawio
+        from tools.azdisc.util import normalize_id
+        from tools.azdisc_ui.services.pipeline_runner import get_runner
+
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="payload must be a JSON object")
+
+        run_id = str(payload.get("run_id") or "").strip()
+        target_mode = str(payload.get("target") or "").strip().lower()
+        scope_value = str(payload.get("scope") or "").strip()
+        include_neighbors = bool(payload.get("include_neighbors", True))
+
+        if not run_id:
+            raise HTTPException(status_code=400, detail="run_id is required")
+        if target_mode not in {"tag", "resourcegroup", "resource"}:
+            raise HTTPException(status_code=400, detail="target must be one of: tag, resourcegroup, resource")
+        if not scope_value:
+            raise HTTPException(status_code=400, detail="scope is required")
+
+        runner = get_runner()
+        job = runner.get_job(run_id)
+        if not job:
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+        root = Path(job["output_dir"])
+        graph_path = root / "graph.json"
+        inventory_path = root / "inventory.json"
+        if not graph_path.exists():
+            raise HTTPException(status_code=404, detail="graph.json not found for this run")
+        if not inventory_path.exists():
+            raise HTTPException(status_code=404, detail="inventory.json not found for this run")
+
+        try:
+            graph = json.loads(graph_path.read_text(encoding="utf-8"))
+            inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Failed to parse run artifacts: {exc}")
+
+        if not isinstance(graph, dict) or not isinstance(inventory, list):
+            raise HTTPException(status_code=400, detail="Invalid graph.json or inventory.json structure")
+
+        nodes = graph.get("nodes") or []
+        edges = graph.get("edges") or []
+        if not isinstance(nodes, list) or not isinstance(edges, list):
+            raise HTTPException(status_code=400, detail="graph.json must include array fields: nodes and edges")
+
+        selected_ids: set[str] = set()
+        if target_mode == "resourcegroup":
+            wanted = scope_value.lower()
+            for row in inventory:
+                if isinstance(row, dict) and str(row.get("resourceGroup") or "").strip().lower() == wanted:
+                    rid = normalize_id(row.get("id") or "")
+                    if rid:
+                        selected_ids.add(rid)
+        elif target_mode == "resource":
+            selected_ids.add(normalize_id(scope_value))
+        else:
+            if "=" not in scope_value:
+                raise HTTPException(status_code=400, detail="Tag scope must be in key=value format")
+            wanted_key, wanted_value = scope_value.split("=", 1)
+            wanted_key = wanted_key.strip().lower()
+            wanted_value = wanted_value.strip().lower()
+            for row in inventory:
+                if not isinstance(row, dict):
+                    continue
+                tags = row.get("tags")
+                if not isinstance(tags, dict):
+                    continue
+                for key, value in tags.items():
+                    if str(key or "").strip().lower() == wanted_key and str(value or "").strip().lower() == wanted_value:
+                        rid = normalize_id(row.get("id") or "")
+                        if rid:
+                            selected_ids.add(rid)
+                        break
+
+        if not selected_ids:
+            raise HTTPException(status_code=404, detail="No resources matched the selected scope")
+
+        node_id_to_original: dict[str, str] = {}
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            nid = normalize_id(node.get("id") or "")
+            if nid:
+                node_id_to_original[nid] = node.get("id")
+
+        keep_norm_ids: set[str] = {nid for nid in selected_ids if nid in node_id_to_original}
+        if include_neighbors:
+            for edge in edges:
+                if not isinstance(edge, dict):
+                    continue
+                src = normalize_id(edge.get("source") or "")
+                tgt = normalize_id(edge.get("target") or "")
+                if src in keep_norm_ids or tgt in keep_norm_ids:
+                    if src in node_id_to_original:
+                        keep_norm_ids.add(src)
+                    if tgt in node_id_to_original:
+                        keep_norm_ids.add(tgt)
+
+        filtered_nodes = [
+            node for node in nodes
+            if isinstance(node, dict) and normalize_id(node.get("id") or "") in keep_norm_ids
+        ]
+        filtered_edges = [
+            edge for edge in edges
+            if isinstance(edge, dict)
+            and normalize_id(edge.get("source") or "") in keep_norm_ids
+            and normalize_id(edge.get("target") or "") in keep_norm_ids
+        ]
+
+        if not filtered_nodes:
+            raise HTTPException(status_code=404, detail="No graph nodes found for the selected scope")
+
+        slug = "".join(ch.lower() if ch.isalnum() else "-" for ch in scope_value).strip("-")
+        slug = slug[:64] if slug else target_mode
+        suffix = uuid.uuid4().hex[:6]
+        out_dir = root / "diagram-beta" / f"{target_mode}-{slug}-{suffix}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        (out_dir / "graph.json").write_text(
+            json.dumps({"nodes": filtered_nodes, "edges": filtered_edges}, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        (out_dir / "unresolved.json").write_text("[]\n", encoding="utf-8")
+
+        cfg_data = asdict(job["config"])
+        cfg_data["outputDir"] = str(out_dir)
+        cfg_data["diagramFocus"] = {
+            "preset": "full",
+            "resourceTypes": [],
+            "includeDependencies": True,
+            "dependencyDepth": 1,
+            "networkScope": "full",
+            "diagramType": "network",
+        }
+
+        try:
+            scoped_cfg = load_config_from_dict(cfg_data)
+            generate_drawio(scoped_cfg)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Scoped diagram generation failed: {exc}")
+
+        diagram_drawio = out_dir / "diagram.drawio"
+        if not diagram_drawio.exists():
+            raise HTTPException(status_code=500, detail="diagram.drawio was not produced")
+
+        rel_drawio = diagram_drawio.relative_to(root).as_posix()
+        rel_svg = (out_dir / "diagram.svg").relative_to(root).as_posix()
+        rel_png = (out_dir / "diagram.png").relative_to(root).as_posix()
+
+        return {
+            "run_id": run_id,
+            "target": target_mode,
+            "scope": scope_value,
+            "output_dir": out_dir.relative_to(root).as_posix(),
+            "diagramPath": rel_drawio,
+            "svgPath": rel_svg if (out_dir / "diagram.svg").exists() else None,
+            "pngPath": rel_png if (out_dir / "diagram.png").exists() else None,
+            "nodeCount": len(filtered_nodes),
+            "edgeCount": len(filtered_edges),
         }
     
     @app.get("/api/artifacts/download/{run_id}/{file_path:path}", tags=["artifacts"])
