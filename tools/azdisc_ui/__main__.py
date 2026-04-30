@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import json
 import logging
+import io
 import uuid
+import zipfile
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -378,6 +381,16 @@ def create_app() -> FastAPI:
         if not root.exists():
             return {"diagrams": []}
 
+        def _read_diagram_meta(path: Path) -> dict | None:
+            meta_path = path.parent / "diagram_meta.json"
+            if not meta_path.exists() or not meta_path.is_file():
+                return None
+            try:
+                parsed = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                return None
+            return parsed if isinstance(parsed, dict) else None
+
         diagrams = []
         for path in root.rglob("*"):
             if not path.is_file():
@@ -410,17 +423,82 @@ def create_app() -> FastAPI:
                     "diagramClass": diagram_class,
                     "label": label,
                     "size": path.stat().st_size,
+                    "meta": _read_diagram_meta(path),
                 }
             )
 
         diagrams.sort(key=lambda item: (item.get("diagramClass", ""), item.get("path", "")))
         return {"diagrams": diagrams}
 
+    @app.post("/api/artifacts/export-bundle", tags=["artifacts"])
+    async def export_diagram_bundle(payload: dict) -> StreamingResponse:
+        """Export selected diagram artifacts as a zip bundle."""
+        from tools.azdisc_ui.services.pipeline_runner import get_runner
+
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="payload must be a JSON object")
+
+        run_id = str(payload.get("run_id") or "").strip()
+        diagram_paths = payload.get("diagram_paths")
+        include_related = bool(payload.get("include_related", True))
+
+        if not run_id:
+            raise HTTPException(status_code=400, detail="run_id is required")
+        if not isinstance(diagram_paths, list) or not diagram_paths:
+            raise HTTPException(status_code=400, detail="diagram_paths must be a non-empty array")
+
+        runner = get_runner()
+        job = runner.get_job(run_id)
+        if not job:
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+        root = Path(job["output_dir"]).resolve()
+        if not root.exists():
+            raise HTTPException(status_code=404, detail="Run output directory not found")
+
+        def _safe_resolve(rel_path: str) -> Path:
+            candidate = (root / Path(str(rel_path).lstrip("/"))).resolve()
+            if not candidate.is_relative_to(root):
+                raise HTTPException(status_code=403, detail="Path traversal not allowed")
+            return candidate
+
+        selected: set[Path] = set()
+        for rel in diagram_paths:
+            if not isinstance(rel, str) or not rel.strip():
+                continue
+            path = _safe_resolve(rel)
+            if path.exists() and path.is_file():
+                selected.add(path)
+            if include_related and path.suffix.lower() == ".drawio":
+                for ext in (".svg", ".png"):
+                    related = path.with_suffix(ext)
+                    if related.exists() and related.is_file():
+                        selected.add(related)
+                meta = path.parent / "diagram_meta.json"
+                if meta.exists() and meta.is_file():
+                    selected.add(meta)
+
+        if not selected:
+            raise HTTPException(status_code=404, detail="No matching artifact files found for export")
+
+        bundle = io.BytesIO()
+        with zipfile.ZipFile(bundle, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for path in sorted(selected):
+                arcname = path.relative_to(root).as_posix()
+                zf.write(path, arcname)
+
+        bundle.seek(0)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        filename = f"diagram-preview-bundle-{run_id[:12]}-{stamp}.zip"
+        headers = {"Content-Disposition": f"attachment; filename={filename}"}
+        return StreamingResponse(bundle, media_type="application/zip", headers=headers)
+
     @app.get("/api/diagram-beta/viewer", tags=["artifacts"])
     async def diagram_beta_viewer() -> dict:
         """Return local embedded viewer URL when a bundled diagrams.net viewer is available."""
         ui_static_root = Path(__file__).resolve().parent / "static"
         local_candidates = [
+            ui_static_root / "vendor" / "drawio-viewer.html",
             ui_static_root / "vendor" / "diagrams-net" / "index.html",
             ui_static_root / "vendor" / "drawio" / "index.html",
         ]
@@ -436,17 +514,26 @@ def create_app() -> FastAPI:
             "available": False,
             "url": None,
             "source": "none",
-            "hint": "Place a bundled diagrams.net build at static/vendor/diagrams-net/index.html",
+            "hint": "Place a local viewer at static/vendor/drawio-viewer.html or static/vendor/diagrams-net/index.html",
         }
 
     @app.get("/api/diagram/scope-options/{run_id}", tags=["artifacts"])
-    async def diagram_scope_options(run_id: str, target: str = "resourcegroup", limit: int = 500) -> dict:
+    async def diagram_scope_options(
+        run_id: str,
+        target: str = "resourcegroup",
+        limit: int = 500,
+        tag_key: str = "",
+        tag_value: str = "",
+    ) -> dict:
         """Return scope dropdown options for scoped diagram generation."""
         from tools.azdisc_ui.services.pipeline_runner import get_runner
 
         target_mode = str(target or "").strip().lower()
-        if target_mode not in {"tag", "resourcegroup", "resource"}:
-            raise HTTPException(status_code=400, detail="target must be one of: tag, resourcegroup, resource")
+        if target_mode not in {"tag", "resourcegroup", "resource", "application", "resourcegroup-tag"}:
+            raise HTTPException(
+                status_code=400,
+                detail="target must be one of: tag, resourcegroup, resource, application, resourcegroup-tag",
+            )
 
         runner = get_runner()
         job = runner.get_job(run_id)
@@ -483,6 +570,62 @@ def create_app() -> FastAPI:
             ]
             return {"target": target_mode, "options": options}
 
+        if target_mode == "resourcegroup-tag":
+            wanted_key = str(tag_key or "").strip().lower()
+            wanted_value = str(tag_value or "").strip().lower()
+            counts: dict[str, int] = {}
+            matched_tag_by_rg: dict[str, str] = {}
+            for row in inventory:
+                if not isinstance(row, dict):
+                    continue
+                rg = str(row.get("resourceGroup") or "").strip()
+                if not rg:
+                    continue
+                tags = row.get("tags")
+                if not isinstance(tags, dict):
+                    continue
+
+                matched = False
+                matched_pair = ""
+                for key, value in tags.items():
+                    k = str(key or "").strip()
+                    v = str(value or "").strip()
+                    if not k:
+                        continue
+                    k_l = k.lower()
+                    v_l = v.lower()
+                    if wanted_key and k_l != wanted_key:
+                        continue
+                    if wanted_value and v_l != wanted_value:
+                        continue
+                    matched = True
+                    matched_pair = f"{k}={v}"
+                    break
+
+                if not matched:
+                    continue
+                counts[rg] = counts.get(rg, 0) + 1
+                if rg not in matched_tag_by_rg and matched_pair:
+                    matched_tag_by_rg[rg] = matched_pair
+
+            options = []
+            for rg, count in sorted(counts.items(), key=lambda item: (-item[1], item[0].lower()))[:safe_limit]:
+                pair = matched_tag_by_rg.get(rg, "")
+                pair_text = f" [{pair}]" if pair else ""
+                options.append(
+                    {
+                        "value": rg,
+                        "label": f"{rg}{pair_text} ({count} matching resources)",
+                        "count": count,
+                        "source": "resource-tags",
+                    }
+                )
+            return {
+                "target": target_mode,
+                "options": options,
+                "filter": {"tagKey": wanted_key, "tagValue": wanted_value},
+            }
+
         if target_mode == "tag":
             counts: dict[str, int] = {}
             for row in inventory:
@@ -500,6 +643,33 @@ def create_app() -> FastAPI:
                     counts[pair] = counts.get(pair, 0) + 1
             options = [
                 {"value": pair, "label": f"{pair} ({count} resources)", "count": count}
+                for pair, count in sorted(counts.items(), key=lambda item: (-item[1], item[0].lower()))[:safe_limit]
+            ]
+            return {"target": target_mode, "options": options}
+
+        if target_mode == "application":
+            counts: dict[str, int] = {}
+            app_keys = {"application", "app", "workload"}
+            for row in inventory:
+                if not isinstance(row, dict):
+                    continue
+                tags = row.get("tags")
+                if not isinstance(tags, dict):
+                    continue
+                for key, value in tags.items():
+                    k = str(key or "").strip().lower()
+                    v = str(value or "").strip()
+                    if k not in app_keys or not v:
+                        continue
+                    pair = f"{k}={v}"
+                    counts[pair] = counts.get(pair, 0) + 1
+            options = [
+                {
+                    "value": pair,
+                    "label": f"Tag scope: {pair} ({count} resources)",
+                    "count": count,
+                    "source": "tag-derived",
+                }
                 for pair, count in sorted(counts.items(), key=lambda item: (-item[1], item[0].lower()))[:safe_limit]
             ]
             return {"target": target_mode, "options": options}
@@ -531,20 +701,49 @@ def create_app() -> FastAPI:
         from tools.azdisc.util import normalize_id
         from tools.azdisc_ui.services.pipeline_runner import get_runner
 
+        def _as_bool(value: object, default: bool) -> bool:
+            if value is None:
+                return default
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                lowered = value.strip().lower()
+                if lowered in {"1", "true", "yes", "on"}:
+                    return True
+                if lowered in {"0", "false", "no", "off"}:
+                    return False
+            return bool(value)
+
         if not isinstance(payload, dict):
             raise HTTPException(status_code=400, detail="payload must be a JSON object")
 
         run_id = str(payload.get("run_id") or "").strip()
         target_mode = str(payload.get("target") or "").strip().lower()
         scope_value = str(payload.get("scope") or "").strip()
-        include_neighbors = bool(payload.get("include_neighbors", True))
+        include_neighbors = _as_bool(payload.get("include_neighbors", True), True)
+        relationship_depth = int(payload.get("relationship_depth", 1) or 1)
+        relationship_depth = max(0, min(3, relationship_depth))
+        diagram_mode = str(payload.get("diagram_mode") or "MSFT").strip().upper()
+        spacing_preset = str(payload.get("spacing_preset") or "compact").strip().lower()
+        layout_magic = _as_bool(payload.get("layout_magic", True), True)
+        edge_labels = _as_bool(payload.get("edge_labels", False), False)
+        subnet_colors = _as_bool(payload.get("subnet_colors", False), False)
+        tag_key = str(payload.get("tag_key") or "").strip().lower()
+        tag_value = str(payload.get("tag_value") or "").strip().lower()
 
         if not run_id:
             raise HTTPException(status_code=400, detail="run_id is required")
-        if target_mode not in {"tag", "resourcegroup", "resource"}:
-            raise HTTPException(status_code=400, detail="target must be one of: tag, resourcegroup, resource")
+        if target_mode not in {"tag", "resourcegroup", "resource", "application", "resourcegroup-tag"}:
+            raise HTTPException(
+                status_code=400,
+                detail="target must be one of: tag, resourcegroup, resource, application, resourcegroup-tag",
+            )
         if not scope_value:
             raise HTTPException(status_code=400, detail="scope is required")
+        if diagram_mode not in {"MSFT", "L2R"}:
+            raise HTTPException(status_code=400, detail="diagram_mode must be one of: MSFT, L2R")
+        if spacing_preset not in {"compact", "spacious"}:
+            raise HTTPException(status_code=400, detail="spacing_preset must be one of: compact, spacious")
 
         runner = get_runner()
         job = runner.get_job(run_id)
@@ -581,8 +780,52 @@ def create_app() -> FastAPI:
                     rid = normalize_id(row.get("id") or "")
                     if rid:
                         selected_ids.add(rid)
+        elif target_mode == "resourcegroup-tag":
+            wanted_rg = scope_value.lower()
+            for row in inventory:
+                if not isinstance(row, dict):
+                    continue
+                rg = str(row.get("resourceGroup") or "").strip().lower()
+                if rg != wanted_rg:
+                    continue
+                tags = row.get("tags")
+                if not isinstance(tags, dict):
+                    continue
+                tag_match = False
+                for key, value in tags.items():
+                    k = str(key or "").strip().lower()
+                    v = str(value or "").strip().lower()
+                    if tag_key and k != tag_key:
+                        continue
+                    if tag_value and v != tag_value:
+                        continue
+                    tag_match = True
+                    break
+                if not tag_match:
+                    continue
+                rid = normalize_id(row.get("id") or "")
+                if rid:
+                    selected_ids.add(rid)
         elif target_mode == "resource":
             selected_ids.add(normalize_id(scope_value))
+        elif target_mode == "application":
+            if "=" not in scope_value:
+                raise HTTPException(status_code=400, detail="Application scope must be in key=value format")
+            wanted_key, wanted_value = scope_value.split("=", 1)
+            wanted_key = wanted_key.strip().lower()
+            wanted_value = wanted_value.strip().lower()
+            for row in inventory:
+                if not isinstance(row, dict):
+                    continue
+                tags = row.get("tags")
+                if not isinstance(tags, dict):
+                    continue
+                for key, value in tags.items():
+                    if str(key or "").strip().lower() == wanted_key and str(value or "").strip().lower() == wanted_value:
+                        rid = normalize_id(row.get("id") or "")
+                        if rid:
+                            selected_ids.add(rid)
+                        break
         else:
             if "=" not in scope_value:
                 raise HTTPException(status_code=400, detail="Tag scope must be in key=value format")
@@ -614,17 +857,32 @@ def create_app() -> FastAPI:
                 node_id_to_original[nid] = node.get("id")
 
         keep_norm_ids: set[str] = {nid for nid in selected_ids if nid in node_id_to_original}
-        if include_neighbors:
+        if include_neighbors and relationship_depth > 0:
+            adjacency: dict[str, set[str]] = {}
             for edge in edges:
                 if not isinstance(edge, dict):
                     continue
                 src = normalize_id(edge.get("source") or "")
                 tgt = normalize_id(edge.get("target") or "")
-                if src in keep_norm_ids or tgt in keep_norm_ids:
-                    if src in node_id_to_original:
-                        keep_norm_ids.add(src)
-                    if tgt in node_id_to_original:
-                        keep_norm_ids.add(tgt)
+                if not src or not tgt:
+                    continue
+                if src not in node_id_to_original or tgt not in node_id_to_original:
+                    continue
+                adjacency.setdefault(src, set()).add(tgt)
+                adjacency.setdefault(tgt, set()).add(src)
+
+            frontier = set(keep_norm_ids)
+            visited = set(keep_norm_ids)
+            for _ in range(relationship_depth):
+                next_frontier: set[str] = set()
+                for nid in frontier:
+                    next_frontier.update(adjacency.get(nid, set()))
+                next_frontier -= visited
+                if not next_frontier:
+                    break
+                keep_norm_ids.update(next_frontier)
+                visited.update(next_frontier)
+                frontier = next_frontier
 
         filtered_nodes = [
             node for node in nodes
@@ -652,8 +910,33 @@ def create_app() -> FastAPI:
         )
         (out_dir / "unresolved.json").write_text("[]\n", encoding="utf-8")
 
+        (out_dir / "diagram_meta.json").write_text(
+            json.dumps(
+                {
+                    "target": target_mode,
+                    "scope": scope_value,
+                    "diagramMode": diagram_mode,
+                    "spacingPreset": spacing_preset,
+                    "layoutMagic": layout_magic,
+                    "edgeLabels": edge_labels,
+                    "subnetColors": subnet_colors,
+                    "includeNeighbors": include_neighbors,
+                    "relationshipDepth": relationship_depth,
+                    "generatedAt": datetime.now(timezone.utc).isoformat(),
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+
         cfg_data = asdict(job["config"])
         cfg_data["outputDir"] = str(out_dir)
+        cfg_data["diagramMode"] = diagram_mode
+        cfg_data["spacing"] = spacing_preset
+        cfg_data["layoutMagic"] = layout_magic
+        cfg_data["edgeLabels"] = edge_labels
+        cfg_data["subnetColors"] = subnet_colors
         cfg_data["diagramFocus"] = {
             "preset": "full",
             "resourceTypes": [],
@@ -681,6 +964,218 @@ def create_app() -> FastAPI:
             "run_id": run_id,
             "target": target_mode,
             "scope": scope_value,
+            "diagramMode": diagram_mode,
+            "spacingPreset": spacing_preset,
+            "layoutMagic": layout_magic,
+            "edgeLabels": edge_labels,
+            "subnetColors": subnet_colors,
+            "includeNeighbors": include_neighbors,
+            "relationshipDepth": relationship_depth,
+            "output_dir": out_dir.relative_to(root).as_posix(),
+            "diagramPath": rel_drawio,
+            "svgPath": rel_svg if (out_dir / "diagram.svg").exists() else None,
+            "pngPath": rel_png if (out_dir / "diagram.png").exists() else None,
+            "nodeCount": len(filtered_nodes),
+            "edgeCount": len(filtered_edges),
+        }
+
+    @app.post("/api/diagram/generate-selection", tags=["artifacts"])
+    async def generate_selection_diagram(payload: dict) -> dict:
+        """Generate a diagram from explicitly selected resources in a run."""
+        from dataclasses import asdict
+
+        from tools.azdisc.config import load_config_from_dict
+        from tools.azdisc.drawio import generate_drawio
+        from tools.azdisc.util import normalize_id
+        from tools.azdisc_ui.services.pipeline_runner import get_runner
+
+        def _as_bool(value: object, default: bool) -> bool:
+            if value is None:
+                return default
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                lowered = value.strip().lower()
+                if lowered in {"1", "true", "yes", "on"}:
+                    return True
+                if lowered in {"0", "false", "no", "off"}:
+                    return False
+            return bool(value)
+
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="payload must be a JSON object")
+
+        run_id = str(payload.get("run_id") or "").strip()
+        resource_ids = payload.get("resource_ids")
+        include_neighbors = _as_bool(payload.get("include_neighbors", True), True)
+        relationship_depth = int(payload.get("relationship_depth", 1) or 1)
+        relationship_depth = max(0, min(3, relationship_depth))
+        diagram_mode = str(payload.get("diagram_mode") or "MSFT").strip().upper()
+        spacing_preset = str(payload.get("spacing_preset") or "compact").strip().lower()
+        layout_magic = _as_bool(payload.get("layout_magic", True), True)
+        edge_labels = _as_bool(payload.get("edge_labels", False), False)
+        subnet_colors = _as_bool(payload.get("subnet_colors", False), False)
+
+        if not run_id:
+            raise HTTPException(status_code=400, detail="run_id is required")
+        if not isinstance(resource_ids, list) or not resource_ids:
+            raise HTTPException(status_code=400, detail="resource_ids must be a non-empty array")
+        if diagram_mode not in {"MSFT", "L2R"}:
+            raise HTTPException(status_code=400, detail="diagram_mode must be one of: MSFT, L2R")
+        if spacing_preset not in {"compact", "spacious"}:
+            raise HTTPException(status_code=400, detail="spacing_preset must be one of: compact, spacious")
+
+        runner = get_runner()
+        job = runner.get_job(run_id)
+        if not job:
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+        root = Path(job["output_dir"])
+        graph_path = root / "graph.json"
+        if not graph_path.exists():
+            raise HTTPException(status_code=404, detail="graph.json not found for this run")
+
+        try:
+            graph = json.loads(graph_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Failed to parse graph.json: {exc}")
+
+        if not isinstance(graph, dict):
+            raise HTTPException(status_code=400, detail="Invalid graph.json structure")
+
+        nodes = graph.get("nodes") or []
+        edges = graph.get("edges") or []
+        if not isinstance(nodes, list) or not isinstance(edges, list):
+            raise HTTPException(status_code=400, detail="graph.json must include array fields: nodes and edges")
+
+        selected_ids = {normalize_id(raw_id or "") for raw_id in resource_ids}
+        selected_ids.discard("")
+        if not selected_ids:
+            raise HTTPException(status_code=400, detail="No valid resource IDs provided")
+
+        node_id_to_original: dict[str, str] = {}
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            nid = normalize_id(node.get("id") or "")
+            if nid:
+                node_id_to_original[nid] = node.get("id")
+
+        keep_norm_ids: set[str] = {nid for nid in selected_ids if nid in node_id_to_original}
+        if not keep_norm_ids:
+            raise HTTPException(status_code=404, detail="None of the selected resources were found in graph nodes")
+
+        if include_neighbors and relationship_depth > 0:
+            adjacency: dict[str, set[str]] = {}
+            for edge in edges:
+                if not isinstance(edge, dict):
+                    continue
+                src = normalize_id(edge.get("source") or "")
+                tgt = normalize_id(edge.get("target") or "")
+                if not src or not tgt:
+                    continue
+                if src not in node_id_to_original or tgt not in node_id_to_original:
+                    continue
+                adjacency.setdefault(src, set()).add(tgt)
+                adjacency.setdefault(tgt, set()).add(src)
+
+            frontier = set(keep_norm_ids)
+            visited = set(keep_norm_ids)
+            for _ in range(relationship_depth):
+                next_frontier: set[str] = set()
+                for nid in frontier:
+                    next_frontier.update(adjacency.get(nid, set()))
+                next_frontier -= visited
+                if not next_frontier:
+                    break
+                keep_norm_ids.update(next_frontier)
+                visited.update(next_frontier)
+                frontier = next_frontier
+
+        filtered_nodes = [
+            node for node in nodes
+            if isinstance(node, dict) and normalize_id(node.get("id") or "") in keep_norm_ids
+        ]
+        filtered_edges = [
+            edge for edge in edges
+            if isinstance(edge, dict)
+            and normalize_id(edge.get("source") or "") in keep_norm_ids
+            and normalize_id(edge.get("target") or "") in keep_norm_ids
+        ]
+
+        if not filtered_nodes:
+            raise HTTPException(status_code=404, detail="No graph nodes found for selected resources")
+
+        suffix = uuid.uuid4().hex[:6]
+        out_dir = root / "diagram-beta" / f"selection-{len(selected_ids)}-{suffix}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        (out_dir / "graph.json").write_text(
+            json.dumps({"nodes": filtered_nodes, "edges": filtered_edges}, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        (out_dir / "unresolved.json").write_text("[]\n", encoding="utf-8")
+
+        (out_dir / "diagram_meta.json").write_text(
+            json.dumps(
+                {
+                    "target": "selection",
+                    "scope": f"selected:{len(selected_ids)}",
+                    "diagramMode": diagram_mode,
+                    "spacingPreset": spacing_preset,
+                    "layoutMagic": layout_magic,
+                    "edgeLabels": edge_labels,
+                    "subnetColors": subnet_colors,
+                    "includeNeighbors": include_neighbors,
+                    "relationshipDepth": relationship_depth,
+                    "generatedAt": datetime.now(timezone.utc).isoformat(),
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+
+        cfg_data = asdict(job["config"])
+        cfg_data["outputDir"] = str(out_dir)
+        cfg_data["diagramMode"] = diagram_mode
+        cfg_data["spacing"] = spacing_preset
+        cfg_data["layoutMagic"] = layout_magic
+        cfg_data["edgeLabels"] = edge_labels
+        cfg_data["subnetColors"] = subnet_colors
+        cfg_data["diagramFocus"] = {
+            "preset": "full",
+            "resourceTypes": [],
+            "includeDependencies": True,
+            "dependencyDepth": 1,
+            "networkScope": "full",
+            "diagramType": "network",
+        }
+
+        try:
+            scoped_cfg = load_config_from_dict(cfg_data)
+            generate_drawio(scoped_cfg)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Selection diagram generation failed: {exc}")
+
+        diagram_drawio = out_dir / "diagram.drawio"
+        if not diagram_drawio.exists():
+            raise HTTPException(status_code=500, detail="diagram.drawio was not produced")
+
+        rel_drawio = diagram_drawio.relative_to(root).as_posix()
+        rel_svg = (out_dir / "diagram.svg").relative_to(root).as_posix()
+        rel_png = (out_dir / "diagram.png").relative_to(root).as_posix()
+
+        return {
+            "run_id": run_id,
+            "selectedCount": len(selected_ids),
+            "diagramMode": diagram_mode,
+            "spacingPreset": spacing_preset,
+            "layoutMagic": layout_magic,
+            "edgeLabels": edge_labels,
+            "subnetColors": subnet_colors,
+            "includeNeighbors": include_neighbors,
+            "relationshipDepth": relationship_depth,
             "output_dir": out_dir.relative_to(root).as_posix(),
             "diagramPath": rel_drawio,
             "svgPath": rel_svg if (out_dir / "diagram.svg").exists() else None,
@@ -790,6 +1285,8 @@ def create_app() -> FastAPI:
         resource_type: str = "",
         resource_group: str = "",
         subscription: str = "",
+        tag_key: str = "",
+        tag_value: str = "",
     ) -> dict:
         """Explore inventory-like artifacts with pagination and simple filters."""
         from tools.azdisc_ui.services.inventory_explorer import query_inventory
@@ -810,6 +1307,8 @@ def create_app() -> FastAPI:
                 resource_types=[resource_type] if resource_type else [],
                 resource_groups=[resource_group] if resource_group else [],
                 subscriptions=[subscription] if subscription else [],
+                tag_keys=[tag_key] if tag_key else [],
+                tag_values=[tag_value] if tag_value else [],
             )
         except FileNotFoundError as e:
             raise HTTPException(status_code=404, detail=str(e))

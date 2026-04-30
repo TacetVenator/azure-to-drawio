@@ -18,6 +18,7 @@
             <button class="tab-button" onclick="switchTab('pipeline')">Pipeline</button>
             <button class="tab-button" onclick="switchTab('artifacts')">Artifacts</button>
             <button class="tab-button" onclick="switchTab('diagram-beta')">Diagram Beta</button>
+            <button class="tab-button" onclick="switchTab('resource-diagram')">Resource Diagram Builder</button>
             <button class="tab-button" onclick="switchTab('split')">Split Overview</button>
             <button class="tab-button" onclick="switchTab('migration')">Migration</button>
             <button class="tab-button" onclick="switchTab('scenario')">Scenario</button>
@@ -665,6 +666,18 @@
                             </select>
                         </div>
                         <div class="form-group">
+                            <label for="inventoryTagKeyFilter">Tag Key</label>
+                            <select id="inventoryTagKeyFilter" onchange="onInventoryTagKeyChanged()">
+                                <option value="">All</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="inventoryTagValueFilter">Tag Value</label>
+                            <select id="inventoryTagValueFilter">
+                                <option value="">All</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
                             <label for="inventoryPageSize">Page Size</label>
                             <select id="inventoryPageSize">
                                 <option value="50">50</option>
@@ -705,13 +718,34 @@
 
             <div class="section">
                 <h3>Scoped Network Diagram Generator</h3>
+                <p class="placeholder" style="margin-bottom: 8px;">
+                    High-value paths: generate directly from a Resource Group (low-noise) or from a Tag scope.
+                </p>
+                <div class="inventory-actions" style="margin-bottom: 10px;">
+                    <button class="btn-primary" type="button" onclick="generateResourceGroupGraphQuick()">Generate Resource Group Graph</button>
+                    <button class="btn-primary" type="button" onclick="generateTagGraphQuick()">Generate Tag Graph</button>
+                </div>
                 <div class="filter-grid">
                     <div class="form-group">
                         <label for="diagramGenerateTarget">Generate network diagram for</label>
-                        <select id="diagramGenerateTarget" onchange="loadDiagramScopeOptions()">
+                        <select id="diagramGenerateTarget" onchange="onDiagramGenerateTargetChanged()">
                             <option value="tag">Tag</option>
+                            <option value="application">Application</option>
                             <option value="resourcegroup" selected>Resource Group</option>
+                            <option value="resourcegroup-tag">Resource Group By Tag</option>
                             <option value="resource">Resource</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="diagramGenerateTagKey">Tag Key (for RG-by-tag)</label>
+                        <select id="diagramGenerateTagKey" onchange="onDiagramTagKeyChanged(); loadDiagramScopeOptions()">
+                            <option value="">All tag keys</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="diagramGenerateTagValue">Tag Value (optional)</label>
+                        <select id="diagramGenerateTagValue" onchange="loadDiagramScopeOptions()">
+                            <option value="">All tag values</option>
                         </select>
                     </div>
                     <div class="form-group form-group-full">
@@ -720,9 +754,61 @@
                             <option value="">-- Choose scope --</option>
                         </select>
                     </div>
+                    <div class="form-group">
+                        <label for="diagramIncludeNeighbors">Relationship Expansion</label>
+                        <select id="diagramIncludeNeighbors">
+                            <option value="false" selected>No expansion (low-noise)</option>
+                            <option value="true">Include related resources</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="diagramRelationshipDepth">Relationship Depth</label>
+                        <select id="diagramRelationshipDepth">
+                            <option value="0" selected>0</option>
+                            <option value="1">1</option>
+                            <option value="2">2</option>
+                            <option value="3">3</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="diagramGenerateMode">Diagram Style</label>
+                        <select id="diagramGenerateMode">
+                            <option value="MSFT" selected>MSFT (architecture-center style)</option>
+                            <option value="L2R">L2R (left-to-right flow)</option>
+                            <option value="HUB-SPOKE">Hub-Spoke (SAP / enterprise style)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="diagramSpacingSlider">Spacing</label>
+                        <input type="range" id="diagramSpacingSlider" min="0" max="100" step="1" value="20" oninput="onDiagramSpacingChanged()">
+                        <div class="placeholder" id="diagramSpacingValue">Compact</div>
+                    </div>
+                    <div class="form-group">
+                        <label for="diagramLayoutMagic">Smart Layout</label>
+                        <select id="diagramLayoutMagic">
+                            <option value="true" selected>Enabled</option>
+                            <option value="false">Disabled</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="diagramEdgeLabels">Edge Labels</label>
+                        <select id="diagramEdgeLabels">
+                            <option value="false" selected>Hidden</option>
+                            <option value="true">Visible</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="diagramSubnetColors">Subnet Colors</label>
+                        <select id="diagramSubnetColors">
+                            <option value="false" selected>Off</option>
+                            <option value="true">On</option>
+                        </select>
+                    </div>
                 </div>
                 <div class="inventory-actions">
                     <button class="btn-primary" type="button" onclick="generateScopedNetworkDiagram()">Generate Scoped Network Diagram</button>
+                    <button class="btn-primary" type="button" onclick="generateStylePreviewSet()">Generate Style Previews</button>
+                    <button class="btn-primary" type="button" onclick="autoTuneDiagramSettings()">Auto Tune</button>
                     <button class="btn-primary" type="button" onclick="loadDiagramScopeOptions()">Refresh Scope Options</button>
                 </div>
             </div>
@@ -730,6 +816,10 @@
             <div class="section">
                 <h3>Available Diagrams</h3>
                 <div id="diagramBetaButtons" class="diagram-quick-buttons"></div>
+                <div id="diagramBetaExportActions" class="inventory-actions" style="margin-top: 8px;"></div>
+                <div class="inventory-actions" style="margin-top: 8px;">
+                    <button class="btn-primary" type="button" onclick="exportPreviewSetZip()">Export Preview Set (.zip)</button>
+                </div>
                 <div id="diagramBetaStatus" class="placeholder" style="margin-top: 8px;">Select a run to load diagram artifacts.</div>
             </div>
 
@@ -746,6 +836,118 @@
                 <p id="diagramBetaViewerHint" class="placeholder" style="margin-top: 8px;">
                     Loading local embedded viewer...
                 </p>
+            </div>
+        </div>
+
+        <!-- Resource Diagram Builder Tab -->
+        <div id="resource-diagram" class="tab-content">
+            <h2>Resource Diagram Builder</h2>
+            <p class="placeholder">Select resources from inventory and generate a discrete diagram from selected resources and their relationships.</p>
+
+            <div class="section">
+                <div class="form-group">
+                    <label for="resourceDiagramRunIdSelect">Run</label>
+                    <select id="resourceDiagramRunIdSelect" onchange="loadResourceDiagramInventory(true)">
+                        <option value="">-- Choose a run --</option>
+                    </select>
+                </div>
+                <div class="inventory-actions">
+                    <button class="btn-primary" type="button" onclick="loadResourceDiagramInventory(true)">Load Inventory</button>
+                </div>
+            </div>
+
+            <div class="section">
+                <h3>Resource Selection</h3>
+                <div class="filter-grid">
+                    <div class="form-group">
+                        <label for="resourceDiagramQuery">Query</label>
+                        <input type="text" id="resourceDiagramQuery" placeholder="name, id, type, tag value...">
+                    </div>
+                    <div class="form-group">
+                        <label for="resourceDiagramTagKey">Tag Key</label>
+                        <input type="text" id="resourceDiagramTagKey" placeholder="Application">
+                    </div>
+                    <div class="form-group">
+                        <label for="resourceDiagramTagValue">Tag Value</label>
+                        <input type="text" id="resourceDiagramTagValue" placeholder="ERP">
+                    </div>
+                    <div class="form-group">
+                        <label for="resourceDiagramPageSize">Page Size</label>
+                        <select id="resourceDiagramPageSize">
+                            <option value="50">50</option>
+                            <option value="100" selected>100</option>
+                            <option value="250">250</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="inventory-actions">
+                    <button class="btn-primary" type="button" onclick="loadResourceDiagramInventory(true)">Search</button>
+                    <button class="btn-primary" type="button" onclick="resourceDiagramPreviousPage()">Previous</button>
+                    <button class="btn-primary" type="button" onclick="resourceDiagramNextPage()">Next</button>
+                    <button class="btn-primary" type="button" onclick="selectAllVisibleResourceDiagramRows()">Select Visible</button>
+                    <button class="btn-primary" type="button" onclick="clearResourceDiagramSelection()">Clear Selection</button>
+                </div>
+            </div>
+
+            <div class="section">
+                <h3>Generate Discrete Diagram</h3>
+                <div class="filter-grid">
+                    <div class="form-group">
+                        <label for="resourceDiagramIncludeNeighbors">Relationship Expansion</label>
+                        <select id="resourceDiagramIncludeNeighbors">
+                            <option value="false">No expansion (selected only)</option>
+                            <option value="true" selected>Include related resources</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="resourceDiagramRelationshipDepth">Relationship Depth</label>
+                        <select id="resourceDiagramRelationshipDepth">
+                            <option value="0">0</option>
+                            <option value="1" selected>1</option>
+                            <option value="2">2</option>
+                            <option value="3">3</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="resourceDiagramMode">Diagram Style</label>
+                        <select id="resourceDiagramMode">
+                            <option value="MSFT" selected>MSFT (architecture-center style)</option>
+                            <option value="L2R">L2R (left-to-right flow)</option>
+                            <option value="HUB-SPOKE">Hub-Spoke (SAP / enterprise style)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="resourceDiagramSpacingSlider">Spacing</label>
+                        <input type="range" id="resourceDiagramSpacingSlider" min="0" max="100" step="1" value="20" oninput="onResourceDiagramSpacingChanged()">
+                        <div class="placeholder" id="resourceDiagramSpacingValue">Compact</div>
+                    </div>
+                    <div class="form-group">
+                        <label for="resourceDiagramLayoutMagic">Smart Layout</label>
+                        <select id="resourceDiagramLayoutMagic">
+                            <option value="true" selected>Enabled</option>
+                            <option value="false">Disabled</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="resourceDiagramEdgeLabels">Edge Labels</label>
+                        <select id="resourceDiagramEdgeLabels">
+                            <option value="false" selected>Hidden</option>
+                            <option value="true">Visible</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="resourceDiagramSubnetColors">Subnet Colors</label>
+                        <select id="resourceDiagramSubnetColors">
+                            <option value="false" selected>Off</option>
+                            <option value="true">On</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="inventory-actions">
+                    <button class="btn-primary" type="button" onclick="generateResourceSelectionDiagram()">Generate Diagram From Selection</button>
+                </div>
+                <div id="resourceDiagramStatus" class="placeholder">Choose a run to load resources.</div>
+                <div id="resourceDiagramResults"></div>
             </div>
         </div>
 

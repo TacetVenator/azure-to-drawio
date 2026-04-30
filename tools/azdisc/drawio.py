@@ -381,8 +381,13 @@ def _edge_style(kind: str, msft: bool = False) -> str:
         return MSFT_EDGE_STYLE_TELEMETRY_DEPENDENCY if msft else EDGE_STYLE_TELEMETRY_DEPENDENCY
     if kind == "flowLog->flow":
         return MSFT_EDGE_STYLE_TELEMETRY_FLOW if msft else EDGE_STYLE_TELEMETRY_FLOW
-    # Fall through to intent-classified style
-    return _intent_style(_edge_intent(kind), msft)
+    # Keep legacy traffic style for default network-flow edges so existing
+    # snapshots/tests continue to match, while still using intent styles for
+    # richer semantic buckets (data-flow, control-plane, governance, integration).
+    intent = _edge_intent(kind)
+    if intent == "network-flow":
+        return MSFT_EDGE_STYLE_TRAFFIC if msft else EDGE_STYLE_TRAFFIC
+    return _intent_style(intent, msft)
 
 def _validate_render_surface(cfg: Config) -> None:
     if cfg.layout not in VALID_LAYOUTS:
@@ -3590,6 +3595,305 @@ def layout_nodes_hub_spoke(
 
 
 # ---------------------------------------------------------------------------
+# HUB-SPOKE render mode
+# ---------------------------------------------------------------------------
+
+# Subscription container colour palette (fill, stroke).
+# Index 0 = hub/connectivity subscription (grey-blue), then production (green),
+# non-production (orange), management (purple), extras cycle.
+_HS_SUB_PALETTE = [
+    ("#E8EAF6", "#3949AB"),   # 0 — hub/connectivity — indigo tint
+    ("#E8F5E9", "#2E7D32"),   # 1 — production       — green tint
+    ("#FFF3E0", "#E65100"),   # 2 — non-production    — orange tint
+    ("#F3E5F5", "#6A1B9A"),   # 3 — management        — purple tint
+    ("#E0F7FA", "#006064"),   # 4 — extra             — teal tint
+    ("#FCE4EC", "#880E4F"),   # 5 — extra             — pink tint
+]
+
+_HS_SUB_CONTAINER_STYLE = (
+    "rounded=1;whiteSpace=wrap;html=1;"
+    "fillColor={fill};strokeColor={stroke};"
+    "fontColor=#1A1A1A;verticalAlign=top;align=left;"
+    "spacingLeft=14;spacingTop=8;"
+    "fontSize=13;fontStyle=1;arcSize=3;"
+    "opacity=35;dashed=1;dashPattern=10 5;"
+)
+
+_HS_SUB_PAD = 40   # padding around VNets inside a subscription box
+_HS_SUB_LABEL_H = 36  # extra top space for the subscription label
+
+
+def _hs_subscription_label(sub_id: str, nodes: List[Dict]) -> str:
+    """Build a human-readable label for a subscription container."""
+    # Try to find a subscription name from graph data
+    for n in nodes:
+        sub_name = (n.get("properties") or {}).get("subscriptionDisplayName", "")
+        if sub_name and n.get("subscriptionId", "").lower() == sub_id:
+            return f"Azure Subscription: {sub_name}"
+    short = sub_id[:8] + "…" if len(sub_id) > 8 else sub_id
+    return f"Azure Subscription: {short}"
+
+
+def _hs_build_sub_containers(
+    vnet_containers: List[Dict],
+    node_by_id: Dict[str, Dict],
+    hub_vnet_ids: set,
+    nodes: List[Dict],
+) -> List[Dict]:
+    """Wrap VNet containers in subscription-level bounding boxes.
+
+    Returns a list of subscription container dicts (parent="1").
+    """
+    # Map container ID → vnet resource ID
+    cid_to_sub: Dict[str, str] = {}
+    for cont in vnet_containers:
+        cid = cont["id"]
+        if not cid.startswith("hs_vnet_"):
+            continue
+        for n in node_by_id.values():
+            if "hs_vnet_" + stable_id(n["id"]) == cid:
+                sub_id = (n.get("subscriptionId") or "unknown").lower()
+                cid_to_sub[cid] = sub_id
+                break
+
+    # Group VNet containers by subscription
+    sub_to_conts: Dict[str, List[Dict]] = {}
+    for cont in vnet_containers:
+        sub_id = cid_to_sub.get(cont["id"])
+        if sub_id is not None:
+            sub_to_conts.setdefault(sub_id, []).append(cont)
+
+    if not sub_to_conts:
+        return []
+
+    # Determine which subscriptions contain hub VNets (assign colour index 0)
+    hub_sub_ids: set = set()
+    for n in node_by_id.values():
+        if n["id"] in hub_vnet_ids:
+            sub_id = (n.get("subscriptionId") or "").lower()
+            if sub_id:
+                hub_sub_ids.add(sub_id)
+
+    # Sort subscriptions: hub first, then alphabetical
+    ordered_subs = sorted(sub_to_conts.keys(), key=lambda s: (0 if s in hub_sub_ids else 1, s))
+    color_idx = 0
+
+    sub_containers = []
+    for sub_id in ordered_subs:
+        conts = sub_to_conts[sub_id]
+        min_x = min(c["x"] for c in conts) - _HS_SUB_PAD
+        min_y = min(c["y"] for c in conts) - _HS_SUB_PAD - _HS_SUB_LABEL_H
+        max_x = max(c["x"] + c["w"] for c in conts) + _HS_SUB_PAD
+        max_y = max(c["y"] + c["h"] for c in conts) + _HS_SUB_PAD
+
+        palette_idx = 0 if sub_id in hub_sub_ids else min(color_idx + 1, len(_HS_SUB_PALETTE) - 1)
+        if sub_id not in hub_sub_ids:
+            color_idx += 1
+        fill, stroke = _HS_SUB_PALETTE[palette_idx % len(_HS_SUB_PALETTE)]
+
+        style = _HS_SUB_CONTAINER_STYLE.format(fill=fill, stroke=stroke)
+        label = _hs_subscription_label(sub_id, nodes)
+
+        sub_containers.append({
+            "id":     "hs_sub_" + stable_id(sub_id),
+            "label":  label,
+            "style":  style,
+            "x":      min_x,
+            "y":      min_y,
+            "w":      max_x - min_x,
+            "h":      max_y - min_y,
+            "parent": "1",
+        })
+
+    return sub_containers
+
+
+def _render_hub_spoke_mode(
+    cfg: Config,
+    nodes: List[Dict],
+    edges: List[Dict],
+    icon_map: Dict[str, str],
+    msft_icons: Optional[Dict[str, Path]] = None,
+) -> None:
+    """Render in HUB-SPOKE mode: tier-based hub/spoke layout with subscription
+    containers, colour-coded VNets/subnets, and boundary nodes — matching the
+    style of Microsoft Architecture Center SAP reference diagrams."""
+    sp = _spacing_factor(cfg.spacing)
+    node_by_id: Dict[str, Dict] = {n["id"]: n for n in nodes}
+
+    hub_vnet_ids = _detect_hub_vnet_ids(nodes, edges)
+    positions, containers = layout_nodes_hub_spoke(
+        nodes, edges, spacing=sp,
+        subnet_colors=True,   # always on — tier colours are the key visual feature
+        hub_vnet_ids=hub_vnet_ids,
+    )
+
+    # VNet-only containers (parent="1") used for subscription wrapping
+    vnet_conts = [c for c in containers if c["id"].startswith("hs_vnet_") and c["parent"] == "1"]
+    sub_containers = _hs_build_sub_containers(vnet_conts, node_by_id, hub_vnet_ids, nodes)
+
+    # Subscription containers go behind VNets — emit first (lower z-order)
+    all_containers = sub_containers + containers
+
+    icons_used: Dict[str, Any] = {"mapped": {}, "fallback": [], "unknown": []}
+    mxfile, root = _build_mxfile_root(cfg)
+
+    # --- Emit containers ---
+    for cont in _topo_sort_containers(all_containers):
+        cont_parent = LAYER_CONTAINERS if cont["parent"] == "1" else cont["parent"]
+        cc = ET.SubElement(root, "mxCell")
+        cc.set("id", cont["id"])
+        cc.set("value", cont["label"])
+        cc.set("style", cont["style"])
+        cc.set("vertex", "1")
+        cc.set("parent", cont_parent)
+        cc.set("connectable", "0")
+        cg = ET.SubElement(cc, "mxGeometry")
+        cg.set("x", str(cont["x"]))
+        cg.set("y", str(cont["y"]))
+        cg.set("width", str(cont["w"]))
+        cg.set("height", str(cont["h"]))
+        cg.set("as", "geometry")
+
+    # Add subnet icon decorations inside subnet containers
+    for cont in containers:
+        if cont["id"].startswith("hs_subnet_"):
+            icon_id = cont["id"] + "_icon"
+            # Find the vnet container to get absolute position
+            parent_cont = next((c for c in containers if c["id"] == cont["parent"]), None)
+            if parent_cont:
+                abs_sn_x = parent_cont["x"] + cont["x"]
+                abs_sn_y = parent_cont["y"] + cont["y"]
+            else:
+                abs_sn_x, abs_sn_y = cont["x"], cont["y"]
+            ic = ET.SubElement(root, "mxCell")
+            ic.set("id", icon_id)
+            ic.set("value", "")
+            ic.set("style",
+                   "shape=mxgraph.azure.virtual_network_v2;fillColor=#0078D4;strokeColor=#005A9E;"
+                   "verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;")
+            ic.set("vertex", "1")
+            ic.set("parent", LAYER_LABELS)
+            ig = ET.SubElement(ic, "mxGeometry")
+            ig.set("x", str(abs_sn_x + 4))
+            ig.set("y", str(abs_sn_y + 2))
+            ig.set("width", "20")
+            ig.set("height", "20")
+            ig.set("as", "geometry")
+
+    # --- Emit resource nodes ---
+    vnet_subnet_types = {
+        "microsoft.network/virtualnetworks",
+        "microsoft.network/virtualnetworks/subnets",
+    }
+    node_id_map: Dict[str, str] = {}
+    emitted_cell_ids: set[str] = {c["id"] for c in all_containers}
+    visible_node_ids: set = set(positions.keys())
+
+    for node in nodes:
+        nid = node["id"]
+        sid = stable_id(nid)
+        ntype = node.get("type", "").lower()
+
+        # VNets and subnets are rendered as containers in HUB-SPOKE mode.
+        if ntype == "microsoft.network/virtualnetworks":
+            node_id_map[nid] = "hs_vnet_" + stable_id(nid)
+            continue
+        if ntype == "microsoft.network/virtualnetworks/subnets":
+            node_id_map[nid] = "hs_subnet_" + stable_id(nid)
+            continue
+
+        node_id_map[nid] = sid
+
+        # VNets and subnets are rendered as containers — skip as resource cells
+        if node.get("type", "") in vnet_subnet_types:
+            continue
+
+        if nid not in positions:
+            continue
+
+        x, y, w, h = positions[nid]
+        render_node = dict(node)
+        hub_roles = _hub_role_map(nodes, edges)
+        role = hub_roles.get(nid)
+        if role and render_node.get("type", "").lower() == "microsoft.network/virtualnetworks":
+            render_node["displayName"] = f"{render_node.get('name', nid)} ({role})"
+        style = _node_style(render_node, icon_map, msft_icons)
+        t = render_node.get("type", "")
+        if style == UNKNOWN_STYLE:
+            if t not in icons_used["unknown"]:
+                icons_used["unknown"].append(t)
+        elif "data:image/svg+xml" in style:
+            if t not in icons_used["fallback"]:
+                icons_used["fallback"].append(t)
+        elif style != EXTERNAL_STYLE:
+            icons_used["mapped"][t] = icons_used["mapped"].get(t, 0) + 1
+        _emit_resource_cell(root, render_node, sid, style, x, y, w, h, parent_id=LAYER_RESOURCES)
+        emitted_cell_ids.add(sid)
+
+    # --- Inventory & legend panels ---
+    right_x = max(
+        (c["x"] + c["w"] for c in (sub_containers or vnet_conts) if c["parent"] == "1"),
+        default=100,
+    ) + 60
+    panel_y = 60
+    inventory_lines = _diagram_inventory_lines(nodes, visible_node_ids)
+    if inventory_lines:
+        inv_h = _emit_text_panel(
+            root, "hs_inventory_box", inventory_lines,
+            x=right_x, y=panel_y, width=320, style=L2R_CONTEXT_BOX_STYLE,
+        )
+        panel_y += inv_h + 20
+    _emit_legend_box(root, "hs_network_legend", right_x, panel_y)
+
+    # --- Edges ---
+    for e in edges:
+        if e["kind"] == "subnet->routeTable":
+            continue
+        src = node_id_map.get(e["source"])
+        tgt = node_id_map.get(e["target"])
+        if not src or not tgt:
+            continue
+        # Keep references resolvable: emit only edges whose endpoints are present.
+        if src not in emitted_cell_ids or tgt not in emitted_cell_ids:
+            continue
+        edge_id = f"e_{stable_id(e['source'] + e['target'] + e['kind'])}"
+        ec = ET.SubElement(root, "mxCell")
+        ec.set("id", edge_id)
+        ec.set("value", _edge_label(e["kind"]) if cfg.edgeLabels else "")
+        ec.set("style", _edge_style(e["kind"], msft=True))
+        ec.set("edge", "1")
+        ec.set("source", src)
+        ec.set("target", tgt)
+        ec.set("parent", _edge_layer(e["kind"]))
+        eg = ET.SubElement(ec, "mxGeometry")
+        eg.set("relative", "1")
+        eg.set("as", "geometry")
+
+    # --- Overlap metrics ---
+    absolute_rects: Dict[str, Tuple[int, int, int, int]] = {}
+    for nid, (x, y, w, h) in positions.items():
+        absolute_rects[normalize_id(nid)] = (x, y, w, h)
+    overlap_metrics = _build_overlap_metrics(edges, absolute_rects)
+    overlap_metrics["containerOverflowViolations"] = []
+    _write_overlap_metrics(cfg, overlap_metrics)
+
+    tree = ET.ElementTree(mxfile)
+    ET.indent(tree, space="  ")
+    out_path = cfg.out("diagram.drawio")
+    cfg.ensure_output_dir()
+    tree.write(str(out_path), xml_declaration=True, encoding="utf-8")
+    log.info("Wrote %s (HUB-SPOKE mode)", out_path)
+
+    cfg.out("icons_used.json").write_text(json.dumps(icons_used, indent=2, sort_keys=True))
+    _write_resource_catalog(cfg, nodes, visible_node_ids, icons_used, icon_map=icon_map, edges=edges)
+    assets_dir = Path(__file__).parent.parent.parent / "assets"
+    _rebuild_fallback_library(assets_dir, msft_icons or {})
+    _try_export(cfg, out_path, "svg")
+    _try_export(cfg, out_path, "png")
+
+
+# ---------------------------------------------------------------------------
 # Diagram focus filtering
 # ---------------------------------------------------------------------------
 
@@ -3800,6 +4104,10 @@ def generate_drawio(cfg: Config) -> None:
 
     if cfg.diagramMode == "L2R":
         _render_l2r_mode(cfg, nodes, edges, icon_map, msft_icons)
+        return
+
+    if cfg.diagramMode == "HUB-SPOKE":
+        _render_hub_spoke_mode(cfg, nodes, edges, icon_map, msft_icons)
         return
 
     if cfg.diagramMode == "MSFT":

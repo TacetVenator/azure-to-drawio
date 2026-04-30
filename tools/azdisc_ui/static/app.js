@@ -7,6 +7,7 @@ let inventoryExplorerState = {
     offset: 0,
     limit: 100,
     lastRunId: '',
+    tagValuesByKey: {},
 };
 let diagramStudioState = {
     runId: '',
@@ -19,6 +20,17 @@ let diagramBetaState = {
     iframeReady: false,
     viewerAvailable: false,
     viewerUrl: '',
+    tagValuesByKey: {},
+    previewSetPaths: [],
+};
+
+let resourceDiagramState = {
+    offset: 0,
+    limit: 100,
+    totalRows: 0,
+    filteredRows: 0,
+    rows: [],
+    selectedIds: new Set(),
 };
 
 const QUICK_DIAGRAM_FOCUS_PRESETS = {
@@ -355,6 +367,13 @@ function switchTab(eventOrName, maybeTabName) {
         const sel = document.getElementById('diagramBetaRunIdSelect');
         if (sel && sel.value) {
             loadDiagramBeta();
+        }
+    }
+
+    if (tabName === 'resource-diagram') {
+        const sel = document.getElementById('resourceDiagramRunIdSelect');
+        if (sel && sel.value) {
+            loadResourceDiagramInventory(true);
         }
     }
 
@@ -740,9 +759,18 @@ async function loadInventoryFacets() {
         populateInventoryFacetSelect('inventoryTypeFilter', result.facets?.resourceTypes || []);
         populateInventoryFacetSelect('inventoryRgFilter', result.facets?.resourceGroups || []);
         populateInventoryFacetSelect('inventorySubFilter', result.facets?.subscriptions || []);
+        populateInventoryFacetSelect('inventoryTagKeyFilter', result.facets?.tagKeys || []);
+        inventoryExplorerState.tagValuesByKey = result.facets?.tagValuesByKey || {};
+        onInventoryTagKeyChanged();
     } catch (error) {
         document.getElementById('inventorySummary').textContent = `Failed to load filter facets: ${error.message}`;
     }
+}
+
+function onInventoryTagKeyChanged() {
+    const key = document.getElementById('inventoryTagKeyFilter')?.value || '';
+    const values = key ? (inventoryExplorerState.tagValuesByKey[key] || []) : [];
+    populateInventoryFacetSelect('inventoryTagValueFilter', values);
 }
 
 function populateInventoryFacetSelect(selectId, values) {
@@ -776,6 +804,8 @@ async function runInventorySearch(resetOffset = false) {
     const resourceType = document.getElementById('inventoryTypeFilter').value.trim();
     const resourceGroup = document.getElementById('inventoryRgFilter').value.trim();
     const subscription = document.getElementById('inventorySubFilter').value.trim();
+    const tagKey = document.getElementById('inventoryTagKeyFilter')?.value.trim() || '';
+    const tagValue = document.getElementById('inventoryTagValueFilter')?.value.trim() || '';
     inventoryExplorerState.limit = Number.parseInt(document.getElementById('inventoryPageSize').value, 10) || 100;
 
     const params = new URLSearchParams({
@@ -786,6 +816,8 @@ async function runInventorySearch(resetOffset = false) {
         resource_type: resourceType,
         resource_group: resourceGroup,
         subscription,
+        tag_key: tagKey,
+        tag_value: tagValue,
     });
 
     try {
@@ -831,6 +863,7 @@ function renderInventoryResults(result) {
             <td>${escapeHtml(row.resourceGroup || '-')}</td>
             <td>${escapeHtml(row.subscriptionId || '-')}</td>
             <td>${escapeHtml(row.location || '-')}</td>
+            <td>${escapeHtml(Object.entries(row.tags || {}).map(([k, v]) => `${k}=${v}`).join(', ') || '-')}</td>
             <td>${escapeHtml(row.id || '-')}</td>
         </tr>
     `).join('');
@@ -838,7 +871,7 @@ function renderInventoryResults(result) {
     results.innerHTML = `
         <div class="data-table-wrap" style="margin-top: 10px;">
             <table class="data-table">
-                <thead><tr><th>Name</th><th>Type</th><th>Resource Group</th><th>Subscription</th><th>Location</th><th>ID</th></tr></thead>
+                <thead><tr><th>Name</th><th>Type</th><th>Resource Group</th><th>Subscription</th><th>Location</th><th>Tags</th><th>ID</th></tr></thead>
                 <tbody>${rows}</tbody>
             </table>
         </div>
@@ -1334,7 +1367,7 @@ function renderLinkedCandidates(deployment) {
 }
 
 function updateRunSelectors(jobs, appendOnly = false) {
-    const selectors = ['runIdSelect', 'splitRunIdSelect', 'migrationRunIdSelect', 'diagramBetaRunIdSelect'];
+    const selectors = ['runIdSelect', 'splitRunIdSelect', 'migrationRunIdSelect', 'diagramBetaRunIdSelect', 'resourceDiagramRunIdSelect'];
     selectors.forEach(id => {
         const select = document.getElementById(id);
         if (!select) {
@@ -1369,6 +1402,7 @@ async function loadDiagramBeta() {
     const statusEl = document.getElementById('diagramBetaStatus');
     const iframe = document.getElementById('diagramBetaIframe');
     const imageHost = document.getElementById('diagramBetaImageHost');
+    const exportHost = document.getElementById('diagramBetaExportActions');
     if (!buttonsHost || !statusEl || !iframe || !imageHost) {
         return;
     }
@@ -1381,8 +1415,11 @@ async function loadDiagramBeta() {
             iframeReady: diagramBetaState.iframeReady,
             viewerAvailable: diagramBetaState.viewerAvailable,
             viewerUrl: diagramBetaState.viewerUrl,
+            tagValuesByKey: diagramBetaState.tagValuesByKey,
+            previewSetPaths: [],
         };
         buttonsHost.innerHTML = '';
+        if (exportHost) exportHost.innerHTML = '';
         statusEl.textContent = 'Select a run to load diagram artifacts.';
         imageHost.style.display = 'none';
         iframe.style.display = diagramBetaState.viewerAvailable ? '' : 'none';
@@ -1409,22 +1446,29 @@ async function loadDiagramBeta() {
             iframeReady: diagramBetaState.iframeReady,
             viewerAvailable: diagramBetaState.viewerAvailable,
             viewerUrl: diagramBetaState.viewerUrl,
+            tagValuesByKey: diagramBetaState.tagValuesByKey,
+            previewSetPaths: diagramBetaState.previewSetPaths,
         };
 
         if (!diagrams.length) {
             buttonsHost.innerHTML = '';
+            if (exportHost) exportHost.innerHTML = '';
             statusEl.textContent = 'No diagram artifacts (.drawio/.mxlibrary/.svg/.png) found for this run.';
             imageHost.style.display = 'none';
             iframe.style.display = diagramBetaState.viewerAvailable ? '' : 'none';
             return;
         }
 
-        buttonsHost.innerHTML = diagrams.map((diagram, idx) => `
-            <button type="button" onclick="previewDiagramBeta(${idx})">${escapeHtml(diagram.label || diagram.path || `diagram ${idx + 1}`)}</button>
-        `).join('');
+        buttonsHost.innerHTML = diagrams.map((diagram, idx) => {
+            const badge = diagramMetaBadgeText(diagram.meta);
+            const badgeHtml = badge ? `<div class="placeholder" style="font-size: 11px; margin-top: 2px;">${escapeHtml(badge)}</div>` : '';
+            const title = escapeHtml(diagram.label || diagram.path || `diagram ${idx + 1}`);
+            return `<button type="button" onclick="previewDiagramBeta(${idx})">${title}${badgeHtml}</button>`;
+        }).join('');
 
         statusEl.textContent = `Found ${diagrams.length} diagram artifact(s).`;
         await previewDiagramBeta(0);
+        await loadDiagramTagFacets();
         await loadDiagramScopeOptions();
     } catch (error) {
         buttonsHost.innerHTML = '';
@@ -1432,9 +1476,38 @@ async function loadDiagramBeta() {
     }
 }
 
+async function loadDiagramTagFacets() {
+    const runId = document.getElementById('diagramBetaRunIdSelect')?.value || '';
+    if (!runId) {
+        return;
+    }
+    try {
+        const response = await fetch(`/api/inventory/facets/${encodeURIComponent(runId)}?artifact=inventory`);
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.detail || 'Failed to load diagram tag facets');
+        }
+        const tagKeys = result.facets?.tagKeys || [];
+        diagramBetaState.tagValuesByKey = result.facets?.tagValuesByKey || {};
+        populateInventoryFacetSelect('diagramGenerateTagKey', tagKeys);
+        onDiagramTagKeyChanged();
+    } catch {
+        populateInventoryFacetSelect('diagramGenerateTagKey', []);
+        populateInventoryFacetSelect('diagramGenerateTagValue', []);
+    }
+}
+
+function onDiagramTagKeyChanged() {
+    const key = document.getElementById('diagramGenerateTagKey')?.value || '';
+    const values = key ? (diagramBetaState.tagValuesByKey[key] || []) : [];
+    populateInventoryFacetSelect('diagramGenerateTagValue', values);
+}
+
 async function loadDiagramScopeOptions() {
     const runId = document.getElementById('diagramBetaRunIdSelect')?.value || '';
     const target = document.getElementById('diagramGenerateTarget')?.value || 'resourcegroup';
+    const tagKey = document.getElementById('diagramGenerateTagKey')?.value.trim() || '';
+    const tagValue = document.getElementById('diagramGenerateTagValue')?.value.trim() || '';
     const scopeSelect = document.getElementById('diagramGenerateScope');
     const statusEl = document.getElementById('diagramBetaStatus');
     if (!scopeSelect) {
@@ -1448,7 +1521,8 @@ async function loadDiagramScopeOptions() {
 
     try {
         scopeSelect.innerHTML = '<option value="">Loading scope options...</option>';
-        const response = await fetch(`/api/diagram/scope-options/${encodeURIComponent(runId)}?target=${encodeURIComponent(target)}&limit=1000`);
+        const params = new URLSearchParams({ target, limit: '1000', tag_key: tagKey, tag_value: tagValue });
+        const response = await fetch(`/api/diagram/scope-options/${encodeURIComponent(runId)}?${params.toString()}`);
         const result = await response.json();
         if (!response.ok) {
             throw new Error(result.detail || 'Failed to load scope options');
@@ -1463,9 +1537,20 @@ async function loadDiagramScopeOptions() {
             return;
         }
 
-        scopeSelect.innerHTML = ['<option value="">-- Choose scope --</option>']
-            .concat(options.map(item => `<option value="${escapeHtml(item.value || '')}">${escapeHtml(item.label || item.value || '')}</option>`))
-            .join('');
+        scopeSelect.innerHTML = '';
+        const placeholderOption = document.createElement('option');
+        placeholderOption.value = '';
+        placeholderOption.textContent = '-- Choose scope --';
+        scopeSelect.appendChild(placeholderOption);
+        options.forEach(item => {
+            const option = document.createElement('option');
+            option.value = String(item.value || '');
+            option.textContent = String(item.label || item.value || '');
+            if (typeof item.count === 'number') {
+                option.dataset.count = String(item.count);
+            }
+            scopeSelect.appendChild(option);
+        });
     } catch (error) {
         scopeSelect.innerHTML = '<option value="">-- Failed to load scope options --</option>';
         if (statusEl) {
@@ -1474,10 +1559,161 @@ async function loadDiagramScopeOptions() {
     }
 }
 
+function onDiagramGenerateTargetChanged() {
+    const target = document.getElementById('diagramGenerateTarget')?.value || 'resourcegroup';
+    const includeNeighborsEl = document.getElementById('diagramIncludeNeighbors');
+    const depthEl = document.getElementById('diagramRelationshipDepth');
+    if (includeNeighborsEl && depthEl) {
+        if (target === 'resourcegroup' || target === 'resourcegroup-tag') {
+            includeNeighborsEl.value = 'false';
+            depthEl.value = '0';
+        } else {
+            includeNeighborsEl.value = 'true';
+            if (depthEl.value === '0') {
+                depthEl.value = '1';
+            }
+        }
+    }
+    loadDiagramScopeOptions();
+}
+
+function spacingPresetFromSlider(value) {
+    const numeric = Number.parseInt(String(value || '20'), 10);
+    return numeric >= 50 ? 'spacious' : 'compact';
+}
+
+function spacingLabelForPreset(preset) {
+    return preset === 'spacious' ? 'Spacious' : 'Compact';
+}
+
+function diagramMetaBadgeText(meta) {
+    if (!meta || typeof meta !== 'object') {
+        return '';
+    }
+    const parts = [];
+    if (meta.diagramMode) parts.push(String(meta.diagramMode));
+    if (meta.spacingPreset) parts.push(spacingLabelForPreset(String(meta.spacingPreset).toLowerCase()));
+    if (typeof meta.layoutMagic === 'boolean') parts.push(meta.layoutMagic ? 'Smart' : 'Manual');
+    return parts.join(' | ');
+}
+
+function onDiagramSpacingChanged() {
+    const slider = document.getElementById('diagramSpacingSlider');
+    const value = document.getElementById('diagramSpacingValue');
+    if (!slider || !value) {
+        return;
+    }
+    value.textContent = spacingLabelForPreset(spacingPresetFromSlider(slider.value));
+}
+
+function onResourceDiagramSpacingChanged() {
+    const slider = document.getElementById('resourceDiagramSpacingSlider');
+    const value = document.getElementById('resourceDiagramSpacingValue');
+    if (!slider || !value) {
+        return;
+    }
+    value.textContent = spacingLabelForPreset(spacingPresetFromSlider(slider.value));
+}
+
+function autoTuneDiagramSettings() {
+    const scopeEl = document.getElementById('diagramGenerateScope');
+    const modeEl = document.getElementById('diagramGenerateMode');
+    const includeNeighborsEl = document.getElementById('diagramIncludeNeighbors');
+    const depthEl = document.getElementById('diagramRelationshipDepth');
+    const spacingEl = document.getElementById('diagramSpacingSlider');
+    const layoutMagicEl = document.getElementById('diagramLayoutMagic');
+    const edgeLabelsEl = document.getElementById('diagramEdgeLabels');
+    const subnetColorsEl = document.getElementById('diagramSubnetColors');
+
+    const selected = scopeEl?.selectedOptions?.[0];
+    const count = Number.parseInt(selected?.dataset?.count || '0', 10) || 0;
+
+    if (count >= 200) {
+        if (modeEl) modeEl.value = 'L2R';
+        if (includeNeighborsEl) includeNeighborsEl.value = 'false';
+        if (depthEl) depthEl.value = '0';
+        if (spacingEl) spacingEl.value = '80';
+        if (layoutMagicEl) layoutMagicEl.value = 'true';
+        if (edgeLabelsEl) edgeLabelsEl.value = 'false';
+        if (subnetColorsEl) subnetColorsEl.value = 'false';
+    } else if (count >= 80) {
+        if (modeEl) modeEl.value = 'MSFT';
+        if (includeNeighborsEl) includeNeighborsEl.value = 'true';
+        if (depthEl) depthEl.value = '1';
+        if (spacingEl) spacingEl.value = '70';
+        if (layoutMagicEl) layoutMagicEl.value = 'true';
+        if (edgeLabelsEl) edgeLabelsEl.value = 'false';
+        if (subnetColorsEl) subnetColorsEl.value = 'true';
+    } else {
+        if (modeEl) modeEl.value = 'MSFT';
+        if (includeNeighborsEl) includeNeighborsEl.value = 'true';
+        if (depthEl) depthEl.value = '2';
+        if (spacingEl) spacingEl.value = '20';
+        if (layoutMagicEl) layoutMagicEl.value = 'true';
+        if (edgeLabelsEl) edgeLabelsEl.value = 'true';
+        if (subnetColorsEl) subnetColorsEl.value = 'true';
+    }
+
+    onDiagramSpacingChanged();
+}
+
+async function generateResourceGroupGraphQuick() {
+    const targetEl = document.getElementById('diagramGenerateTarget');
+    const includeNeighborsEl = document.getElementById('diagramIncludeNeighbors');
+    const depthEl = document.getElementById('diagramRelationshipDepth');
+    if (targetEl) {
+        targetEl.value = 'resourcegroup';
+    }
+    if (includeNeighborsEl) {
+        includeNeighborsEl.value = 'false';
+    }
+    if (depthEl) {
+        depthEl.value = '0';
+    }
+    await loadDiagramScopeOptions();
+    const scope = document.getElementById('diagramGenerateScope')?.value || '';
+    if (!scope) {
+        alert('Choose a resource group scope first.');
+        return;
+    }
+    await generateScopedNetworkDiagram();
+}
+
+async function generateTagGraphQuick() {
+    const targetEl = document.getElementById('diagramGenerateTarget');
+    const includeNeighborsEl = document.getElementById('diagramIncludeNeighbors');
+    const depthEl = document.getElementById('diagramRelationshipDepth');
+    if (targetEl) {
+        targetEl.value = 'tag';
+    }
+    if (includeNeighborsEl) {
+        includeNeighborsEl.value = 'true';
+    }
+    if (depthEl) {
+        depthEl.value = '1';
+    }
+    await loadDiagramScopeOptions();
+    const scope = document.getElementById('diagramGenerateScope')?.value || '';
+    if (!scope) {
+        alert('Choose a tag scope first.');
+        return;
+    }
+    await generateScopedNetworkDiagram();
+}
+
 async function generateScopedNetworkDiagram() {
     const runId = document.getElementById('diagramBetaRunIdSelect')?.value || '';
     const target = document.getElementById('diagramGenerateTarget')?.value || 'resourcegroup';
     const scope = document.getElementById('diagramGenerateScope')?.value || '';
+    const diagramMode = document.getElementById('diagramGenerateMode')?.value || 'MSFT';
+    const spacingPreset = spacingPresetFromSlider(document.getElementById('diagramSpacingSlider')?.value || '20');
+    const layoutMagic = (document.getElementById('diagramLayoutMagic')?.value || 'true') === 'true';
+    const edgeLabels = (document.getElementById('diagramEdgeLabels')?.value || 'false') === 'true';
+    const subnetColors = (document.getElementById('diagramSubnetColors')?.value || 'false') === 'true';
+    const tagKey = document.getElementById('diagramGenerateTagKey')?.value.trim() || '';
+    const tagValue = document.getElementById('diagramGenerateTagValue')?.value.trim() || '';
+    const includeNeighbors = (document.getElementById('diagramIncludeNeighbors')?.value || 'false') === 'true';
+    const relationshipDepth = Number.parseInt(document.getElementById('diagramRelationshipDepth')?.value || '0', 10) || 0;
     const statusEl = document.getElementById('diagramBetaStatus');
 
     if (!runId) {
@@ -1497,7 +1733,20 @@ async function generateScopedNetworkDiagram() {
         const response = await fetch('/api/diagram/generate-scoped', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ run_id: runId, target, scope, include_neighbors: true }),
+            body: JSON.stringify({
+                run_id: runId,
+                target,
+                scope,
+                diagram_mode: diagramMode,
+                spacing_preset: spacingPreset,
+                layout_magic: layoutMagic,
+                edge_labels: edgeLabels,
+                subnet_colors: subnetColors,
+                include_neighbors: includeNeighbors,
+                relationship_depth: relationshipDepth,
+                tag_key: tagKey,
+                tag_value: tagValue,
+            }),
         });
         const result = await response.json();
         if (!response.ok) {
@@ -1513,11 +1762,133 @@ async function generateScopedNetworkDiagram() {
         if (idx >= 0) {
             await previewDiagramBeta(idx);
         }
+        return result;
     } catch (error) {
         if (statusEl) {
             statusEl.textContent = `Scoped diagram generation failed: ${error.message}`;
         }
+        return null;
     }
+}
+
+async function generateStylePreviewSet() {
+    const presets = [
+        { diagramMode: 'MSFT', spacingValue: '20', layoutMagic: 'true', edgeLabels: 'false', subnetColors: 'true' },
+        { diagramMode: 'MSFT', spacingValue: '80', layoutMagic: 'true', edgeLabels: 'false', subnetColors: 'false' },
+        { diagramMode: 'L2R', spacingValue: '70', layoutMagic: 'true', edgeLabels: 'false', subnetColors: 'false' },
+        { diagramMode: 'HUB-SPOKE', spacingValue: '20', layoutMagic: 'true', edgeLabels: 'false', subnetColors: 'true' },
+    ];
+
+    const statusEl = document.getElementById('diagramBetaStatus');
+    const modeEl = document.getElementById('diagramGenerateMode');
+    const spacingEl = document.getElementById('diagramSpacingSlider');
+    const layoutMagicEl = document.getElementById('diagramLayoutMagic');
+    const edgeLabelsEl = document.getElementById('diagramEdgeLabels');
+    const subnetColorsEl = document.getElementById('diagramSubnetColors');
+    const generatedPaths = [];
+
+    for (let i = 0; i < presets.length; i += 1) {
+        const preset = presets[i];
+        if (modeEl) modeEl.value = preset.diagramMode;
+        if (spacingEl) spacingEl.value = preset.spacingValue;
+        if (layoutMagicEl) layoutMagicEl.value = preset.layoutMagic;
+        if (edgeLabelsEl) edgeLabelsEl.value = preset.edgeLabels;
+        if (subnetColorsEl) subnetColorsEl.value = preset.subnetColors;
+        onDiagramSpacingChanged();
+
+        if (statusEl) {
+            statusEl.textContent = `Generating preview ${i + 1}/${presets.length} (${preset.diagramMode}, ${spacingLabelForPreset(spacingPresetFromSlider(preset.spacingValue))})...`;
+        }
+        const result = await generateScopedNetworkDiagram();
+        if (result && result.diagramPath) {
+            generatedPaths.push(String(result.diagramPath));
+        }
+    }
+
+    diagramBetaState.previewSetPaths = generatedPaths;
+}
+
+async function exportPreviewSetZip() {
+    const runId = document.getElementById('diagramBetaRunIdSelect')?.value || '';
+    const statusEl = document.getElementById('diagramBetaStatus');
+    const candidatePaths = Array.isArray(diagramBetaState.previewSetPaths) && diagramBetaState.previewSetPaths.length
+        ? diagramBetaState.previewSetPaths
+        : (Array.isArray(diagramBetaState.diagrams) ? diagramBetaState.diagrams.map(item => item.path).filter(Boolean) : []);
+
+    if (!runId) {
+        alert('Choose a run first.');
+        return;
+    }
+    if (!candidatePaths.length) {
+        alert('No preview set diagrams available yet. Generate style previews first.');
+        return;
+    }
+
+    try {
+        if (statusEl) {
+            statusEl.textContent = `Bundling ${candidatePaths.length} diagram artifacts...`;
+        }
+
+        const response = await fetch('/api/artifacts/export-bundle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                run_id: runId,
+                diagram_paths: candidatePaths,
+                include_related: true,
+            }),
+        });
+
+        if (!response.ok) {
+            const result = await response.json().catch(() => ({}));
+            throw new Error(result.detail || 'Failed to create zip bundle');
+        }
+
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const disposition = response.headers.get('Content-Disposition') || '';
+        const match = disposition.match(/filename=([^;]+)/i);
+        const fileName = match ? match[1].replace(/["']/g, '') : `diagram-preview-bundle-${runId}.zip`;
+
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = fileName;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(url);
+
+        if (statusEl) {
+            statusEl.textContent = `Exported preview bundle: ${fileName}`;
+        }
+    } catch (error) {
+        if (statusEl) {
+            statusEl.textContent = `Preview bundle export failed: ${error.message}`;
+        }
+    }
+}
+
+function renderDiagramExportActions(runId, diagram) {
+    const host = document.getElementById('diagramBetaExportActions');
+    if (!host) {
+        return;
+    }
+    if (!runId || !diagram || !diagram.path) {
+        host.innerHTML = '';
+        return;
+    }
+
+    const drawioPath = String(diagram.path || '');
+    const basePath = drawioPath.replace(/\.drawio$/i, '');
+    const drawioUrl = `/api/artifacts/download/${encodeURIComponent(runId)}/${encodeArtifactPath(drawioPath)}`;
+    const svgUrl = `/api/artifacts/download/${encodeURIComponent(runId)}/${encodeArtifactPath(basePath + '.svg')}`;
+    const pngUrl = `/api/artifacts/download/${encodeURIComponent(runId)}/${encodeArtifactPath(basePath + '.png')}`;
+
+    host.innerHTML = [
+        `<a class="btn-primary" href="${drawioUrl}" download>Export .drawio</a>`,
+        `<a class="btn-primary" href="${svgUrl}" download>Export .svg</a>`,
+        `<a class="btn-primary" href="${pngUrl}" download>Export .png</a>`,
+    ].join('');
 }
 
 async function previewDiagramBeta(index) {
@@ -1535,6 +1906,7 @@ async function previewDiagramBeta(index) {
         diagramBetaState.activeIndex = index;
         const encodedPath = encodeArtifactPath(diagram.path || '');
         const downloadUrl = `/api/artifacts/download/${encodeURIComponent(runId)}/${encodedPath}`;
+        renderDiagramExportActions(runId, diagram);
 
         if (diagram.kind === 'image' || !diagramBetaState.viewerAvailable) {
             iframe.style.display = 'none';
@@ -1658,6 +2030,184 @@ function switchToTab(tabName) {
             .find(btn => btn.textContent.toLowerCase().includes(tabName.toLowerCase()));
         if (button) {
             button.click();
+        }
+    }
+}
+
+async function loadResourceDiagramInventory(resetOffset = false) {
+    const runId = document.getElementById('resourceDiagramRunIdSelect')?.value || '';
+    const statusEl = document.getElementById('resourceDiagramStatus');
+    const resultsEl = document.getElementById('resourceDiagramResults');
+    if (!statusEl || !resultsEl) {
+        return;
+    }
+    if (!runId) {
+        statusEl.textContent = 'Choose a run to load resources.';
+        resultsEl.innerHTML = '';
+        return;
+    }
+
+    if (resetOffset) {
+        resourceDiagramState.offset = 0;
+    }
+    resourceDiagramState.limit = Number.parseInt(document.getElementById('resourceDiagramPageSize')?.value || '100', 10) || 100;
+    const query = document.getElementById('resourceDiagramQuery')?.value.trim() || '';
+    const tagKey = document.getElementById('resourceDiagramTagKey')?.value.trim() || '';
+    const tagValue = document.getElementById('resourceDiagramTagValue')?.value.trim() || '';
+
+    const params = new URLSearchParams({
+        artifact: 'inventory',
+        offset: String(resourceDiagramState.offset),
+        limit: String(resourceDiagramState.limit),
+        query,
+        tag_key: tagKey,
+        tag_value: tagValue,
+    });
+
+    try {
+        const response = await fetch(`/api/inventory/explore/${encodeURIComponent(runId)}?${params.toString()}`);
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.detail || 'Failed to load resource inventory');
+        }
+        resourceDiagramState.rows = Array.isArray(result.rows) ? result.rows : [];
+        resourceDiagramState.totalRows = Number(result.totalRows || 0);
+        resourceDiagramState.filteredRows = Number(result.filteredRows || 0);
+        const end = Math.min(result.offset + resourceDiagramState.rows.length, resourceDiagramState.filteredRows);
+        statusEl.textContent =
+            `Selected ${resourceDiagramState.selectedIds.size} resources | ` +
+            `Showing ${resourceDiagramState.rows.length === 0 ? 0 : result.offset + 1}-${end} of ${resourceDiagramState.filteredRows}`;
+
+        const previewRows = resourceDiagramState.rows.map(row => {
+            const rid = String(row.id || '');
+            const checked = resourceDiagramState.selectedIds.has(rid) ? 'checked' : '';
+            return `
+            <tr>
+                <td><input type="checkbox" ${checked} onchange="toggleResourceDiagramSelection('${escapeHtml(rid)}', this.checked)"></td>
+                <td>${escapeHtml(row.name || '-')}</td>
+                <td>${escapeHtml(row.type || '-')}</td>
+                <td>${escapeHtml(row.resourceGroup || '-')}</td>
+                <td>${escapeHtml(row.id || '-')}</td>
+            </tr>
+        `;
+        }).join('');
+
+        resultsEl.innerHTML = `
+            <div class="data-table-wrap" style="margin-top: 10px;">
+                <table class="data-table">
+                    <thead><tr><th>Select</th><th>Name</th><th>Type</th><th>Resource Group</th><th>ID</th></tr></thead>
+                    <tbody>${previewRows}</tbody>
+                </table>
+            </div>
+        `;
+    } catch (error) {
+        statusEl.textContent = `Failed to load resource inventory: ${error.message}`;
+        resultsEl.innerHTML = '';
+    }
+}
+
+function toggleResourceDiagramSelection(resourceId, checked) {
+    const rid = String(resourceId || '');
+    if (!rid) {
+        return;
+    }
+    if (checked) {
+        resourceDiagramState.selectedIds.add(rid);
+    } else {
+        resourceDiagramState.selectedIds.delete(rid);
+    }
+    const statusEl = document.getElementById('resourceDiagramStatus');
+    if (statusEl) {
+        statusEl.textContent =
+            `Selected ${resourceDiagramState.selectedIds.size} resources | ` +
+            `Showing ${resourceDiagramState.rows.length} on current page`;
+    }
+}
+
+function selectAllVisibleResourceDiagramRows() {
+    resourceDiagramState.rows.forEach(row => {
+        const rid = String(row.id || '');
+        if (rid) {
+            resourceDiagramState.selectedIds.add(rid);
+        }
+    });
+    loadResourceDiagramInventory(false);
+}
+
+function clearResourceDiagramSelection() {
+    resourceDiagramState.selectedIds.clear();
+    loadResourceDiagramInventory(false);
+}
+
+function resourceDiagramPreviousPage() {
+    resourceDiagramState.offset = Math.max(0, resourceDiagramState.offset - resourceDiagramState.limit);
+    loadResourceDiagramInventory(false);
+}
+
+function resourceDiagramNextPage() {
+    resourceDiagramState.offset += resourceDiagramState.limit;
+    loadResourceDiagramInventory(false);
+}
+
+async function generateResourceSelectionDiagram() {
+    const runId = document.getElementById('resourceDiagramRunIdSelect')?.value || '';
+    const statusEl = document.getElementById('resourceDiagramStatus');
+    if (!runId) {
+        alert('Choose a run first.');
+        return;
+    }
+    const resourceIds = Array.from(resourceDiagramState.selectedIds);
+    if (!resourceIds.length) {
+        alert('Select at least one resource first.');
+        return;
+    }
+
+    const includeNeighbors = (document.getElementById('resourceDiagramIncludeNeighbors')?.value || 'true') === 'true';
+    const relationshipDepth = Number.parseInt(document.getElementById('resourceDiagramRelationshipDepth')?.value || '1', 10) || 1;
+    const diagramMode = document.getElementById('resourceDiagramMode')?.value || 'MSFT';
+    const spacingPreset = spacingPresetFromSlider(document.getElementById('resourceDiagramSpacingSlider')?.value || '20');
+    const layoutMagic = (document.getElementById('resourceDiagramLayoutMagic')?.value || 'true') === 'true';
+    const edgeLabels = (document.getElementById('resourceDiagramEdgeLabels')?.value || 'false') === 'true';
+    const subnetColors = (document.getElementById('resourceDiagramSubnetColors')?.value || 'false') === 'true';
+
+    try {
+        if (statusEl) {
+            statusEl.textContent = `Generating diagram from ${resourceIds.length} selected resources...`;
+        }
+        const response = await fetch('/api/diagram/generate-selection', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                run_id: runId,
+                resource_ids: resourceIds,
+                diagram_mode: diagramMode,
+                spacing_preset: spacingPreset,
+                layout_magic: layoutMagic,
+                edge_labels: edgeLabels,
+                subnet_colors: subnetColors,
+                include_neighbors: includeNeighbors,
+                relationship_depth: relationshipDepth,
+            }),
+        });
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.detail || 'Failed to generate selection diagram');
+        }
+
+        if (statusEl) {
+            statusEl.textContent =
+                `Generated selection diagram (${result.nodeCount} nodes / ${result.edgeCount} edges): ${result.diagramPath}`;
+        }
+
+        const betaRunSelect = document.getElementById('diagramBetaRunIdSelect');
+        if (betaRunSelect) {
+            betaRunSelect.value = runId;
+        }
+        await loadDiagramBeta();
+        switchTab('diagram-beta');
+    } catch (error) {
+        if (statusEl) {
+            statusEl.textContent = `Selection diagram generation failed: ${error.message}`;
         }
     }
 }
@@ -1893,6 +2443,9 @@ document.addEventListener('DOMContentLoaded', () => {
     updateDiagramFocusVisibility();
 
     initDiagramBetaViewer();
+    onDiagramGenerateTargetChanged();
+    onDiagramSpacingChanged();
+    onResourceDiagramSpacingChanged();
 
     window.addEventListener('message', (event) => {
         let payload = event.data;

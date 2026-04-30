@@ -108,6 +108,17 @@ def generate_master_report(cfg: Config) -> None:
         ]
 
     if rbac_rows:
+        principal_counts: Dict[str, int] = {}
+        role_counts: Dict[str, int] = {}
+        for row in simplified_rbac:
+            principal = row.get("principalName") or "Unknown principal"
+            role = row.get("roleName") or "Unknown role"
+            principal_counts[principal] = principal_counts.get(principal, 0) + 1
+            role_counts[role] = role_counts.get(role, 0) + 1
+
+        top_principals = sorted(principal_counts.items(), key=lambda item: (-item[1], item[0].lower()))[:10]
+        top_roles = sorted(role_counts.items(), key=lambda item: (-item[1], item[0].lower()))[:10]
+
         lines += [
             "### RBAC Snapshot",
             "",
@@ -117,12 +128,41 @@ def generate_master_report(cfg: Config) -> None:
             f"- Resources with effective access captured: {len(access_rows)}",
             "",
         ]
+        if top_principals:
+            lines += [
+                "#### Top Principals (by assignment count)",
+                "",
+                "| principal | assignments |",
+                "|-----------|-------------|",
+            ]
+            for principal, count in top_principals:
+                lines.append(f"| {principal} | {count} |")
+            lines.append("")
+
+        if top_roles:
+            lines += [
+                "#### Top Roles (by assignment count)",
+                "",
+                "| role | assignments |",
+                "|------|-------------|",
+            ]
+            for role, count in top_roles:
+                lines.append(f"| {role} | {count} |")
+            lines.append("")
+
+        non_network_access_rows = [
+            row for row in access_rows if not str(row.get("resourceType", "")).lower().startswith("microsoft.network/")
+        ]
+        shown_access_rows = non_network_access_rows if non_network_access_rows else access_rows
+
         if access_rows:
             lines += [
+                "#### Resource Access View",
+                "",
                 "| resource | resource group | effective assignments | distinct roles | inherited assignments |",
                 "|----------|----------------|-----------------------|----------------|-----------------------|",
             ]
-            for row in access_rows[:10]:
+            for row in shown_access_rows[:10]:
                 lines.append(
                     f"| {row['resourceName']} ({row['resourceType']}) | {row['resourceGroup']} | {row['effectiveAssignments']} | {row['distinctRoles']} | {row['inheritedAssignments']} |"
                 )

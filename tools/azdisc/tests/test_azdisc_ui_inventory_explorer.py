@@ -71,6 +71,25 @@ def test_query_inventory_filters_by_query_and_exact_fields(tmp_path: Path) -> No
     assert result["rows"][0]["name"] == "vm-a"
 
 
+def test_query_inventory_filters_by_tag_key_and_value(tmp_path: Path) -> None:
+    _write_inventory(tmp_path / "inventory.json")
+
+    by_key = query_inventory(
+        str(tmp_path),
+        artifact="inventory",
+        tag_keys=["application"],
+    )
+    assert by_key["filteredRows"] == 2
+
+    by_value = query_inventory(
+        str(tmp_path),
+        artifact="inventory",
+        tag_values=["prod"],
+    )
+    assert by_value["filteredRows"] == 1
+    assert by_value["rows"][0]["name"] == "vnet-hub"
+
+
 def test_get_inventory_facets_returns_distinct_sorted_values(tmp_path: Path) -> None:
     _write_inventory(tmp_path / "inventory.json")
 
@@ -85,3 +104,6 @@ def test_get_inventory_facets_returns_distinct_sorted_values(tmp_path: Path) -> 
     ]
     assert result["facets"]["resourceGroups"] == ["rg-app", "rg-data", "rg-net"]
     assert result["facets"]["subscriptions"] == ["sub1", "sub2"]
+    assert result["facets"]["tagKeys"] == ["Application", "Environment"]
+    assert result["facets"]["tagValuesByKey"]["Application"] == ["Data", "ERP"]
+    assert result["facets"]["tagValuesByKey"]["Environment"] == ["prod"]

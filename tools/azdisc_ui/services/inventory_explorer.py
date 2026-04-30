@@ -39,6 +39,8 @@ def _matches_filters(
     resource_types: Optional[set[str]],
     resource_groups: Optional[set[str]],
     subscriptions: Optional[set[str]],
+    tag_keys: Optional[set[str]],
+    tag_values: Optional[set[str]],
 ) -> bool:
     if resource_types and str(item.get("type", "")).lower() not in resource_types:
         return False
@@ -46,6 +48,15 @@ def _matches_filters(
         return False
     if subscriptions and str(item.get("subscriptionId", "")) not in subscriptions:
         return False
+    tags = item.get("tags") if isinstance(item.get("tags"), dict) else {}
+    if tag_keys:
+        tag_keys_in_item = {str(k).strip().lower() for k in tags.keys() if str(k).strip()}
+        if not tag_keys_in_item.intersection(tag_keys):
+            return False
+    if tag_values:
+        tag_values_in_item = {str(v).strip().lower() for v in tags.values() if str(v).strip()}
+        if not tag_values_in_item.intersection(tag_values):
+            return False
     if not _contains_query(item, query):
         return False
     return True
@@ -80,6 +91,8 @@ def query_inventory(
     resource_types: Optional[Iterable[str]] = None,
     resource_groups: Optional[Iterable[str]] = None,
     subscriptions: Optional[Iterable[str]] = None,
+    tag_keys: Optional[Iterable[str]] = None,
+    tag_values: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
     path = resolve_inventory_path(output_dir, artifact)
     offset = max(0, int(offset))
@@ -88,6 +101,8 @@ def query_inventory(
     type_filter = {str(v).lower() for v in (resource_types or []) if str(v).strip()} or None
     rg_filter = {str(v).lower() for v in (resource_groups or []) if str(v).strip()} or None
     sub_filter = {str(v) for v in (subscriptions or []) if str(v).strip()} or None
+    tag_key_filter = {str(v).lower() for v in (tag_keys or []) if str(v).strip()} or None
+    tag_value_filter = {str(v).lower() for v in (tag_values or []) if str(v).strip()} or None
     query_text = str(query or "").strip()
 
     total_rows = 0
@@ -104,6 +119,8 @@ def query_inventory(
             resource_types=type_filter,
             resource_groups=rg_filter,
             subscriptions=sub_filter,
+            tag_keys=tag_key_filter,
+            tag_values=tag_value_filter,
         ):
             continue
         if filtered_rows >= index_start and filtered_rows < index_end:
@@ -129,6 +146,8 @@ def get_inventory_facets(output_dir: str, *, artifact: str = "inventory") -> Dic
     types: set[str] = set()
     resource_groups: set[str] = set()
     subscriptions: set[str] = set()
+    tag_keys: set[str] = set()
+    tag_values_by_key: Dict[str, set[str]] = {}
     total_rows = 0
 
     for item in _iter_rows(path):
@@ -142,6 +161,15 @@ def get_inventory_facets(output_dir: str, *, artifact: str = "inventory") -> Dic
             resource_groups.add(item_rg)
         if item_sub:
             subscriptions.add(item_sub)
+        item_tags = item.get("tags") if isinstance(item.get("tags"), dict) else {}
+        for key, value in item_tags.items():
+            k = str(key).strip()
+            v = str(value).strip()
+            if not k:
+                continue
+            tag_keys.add(k)
+            if v:
+                tag_values_by_key.setdefault(k, set()).add(v)
 
     return {
         "artifact": artifact,
@@ -151,5 +179,10 @@ def get_inventory_facets(output_dir: str, *, artifact: str = "inventory") -> Dic
             "resourceTypes": sorted(types, key=str.lower),
             "resourceGroups": sorted(resource_groups, key=str.lower),
             "subscriptions": sorted(subscriptions, key=str.lower),
+            "tagKeys": sorted(tag_keys, key=str.lower),
+            "tagValuesByKey": {
+                key: sorted(values, key=str.lower)
+                for key, values in sorted(tag_values_by_key.items(), key=lambda item: item[0].lower())
+            },
         },
     }

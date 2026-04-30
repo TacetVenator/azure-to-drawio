@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>draw.io Viewer</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #0f172a;
+    }
+    #loading {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #cbd5e1;
+      font: 14px/1.4 -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif;
+      background: radial-gradient(circle at 20% 20%, #1e293b 0%, #0f172a 50%, #020617 100%);
+    }
+  </style>
+</head>
+<body>
+  <div id="loading">Loading embedded draw.io viewer...</div>
+  <script>
+    (function loadLocalViewer() {
+      var script = document.createElement('script');
+      script.src = '/static/vendor/viewer-static.min.js';
+      script.async = true;
+      script.onload = function () {
+        var loading = document.getElementById('loading');
+        if (loading) loading.remove();
+      };
+      script.onerror = function () {
+        var loading = document.getElementById('loading');
+        if (loading) {
+          loading.textContent = 'Failed to load local draw.io viewer script.';
+        }
+      };
+      document.head.appendChild(script);
+    }());
+  </script>
+</body>
+</html>

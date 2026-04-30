@@ -39,8 +39,8 @@ def load_split_overview(output_dir: str) -> Optional[dict]:
                     try:
                         manifest = json.loads(manifest_file.read_text())
                         split_metadata.append({
-                            "name": app_dir.name,
-                            "resourceCount": manifest.get("resourceCount", 0),
+                            "name": manifest.get("application", app_dir.name),
+                            "resourceCount": manifest.get("directCount", 0) + manifest.get("sharedCount", 0),
                             "confidence": manifest.get("appBoundary", {}).get("confidence"),
                             "ambiguityLevel": manifest.get("appBoundary", {}).get("ambiguityLevel"),
                             "ambiguousResourceGroupCount": manifest.get("appBoundary", {}).get("ambiguousResourceGroupCount", 0),

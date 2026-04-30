@@ -11,7 +11,7 @@ from .util import load_json_file
 log = logging.getLogger(__name__)
 
 VALID_LAYOUTS = {"SUB>REGION>RG>NET"}
-VALID_DIAGRAM_MODES = {"MSFT", "L2R"}
+VALID_DIAGRAM_MODES = {"MSFT", "L2R", "HUB-SPOKE"}
 VALID_SPACINGS = {"compact", "spacious"}
 VALID_EXPAND_SCOPES = {"related", "all"}
 VALID_INVENTORY_GROUP_BYS = {"type", "rg"}

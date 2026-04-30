@@ -51,10 +51,22 @@ FIXTURES_DIR = Path(__file__).parent / "tests" / "fixtures"
 
 
 def _discover_fixtures() -> List[Path]:
-    """Return all JSON fixture files sorted by name."""
-    fixtures = sorted(FIXTURES_DIR.glob("*.json"))
+    """Return inventory fixture JSON files sorted by name.
+
+    Some files in the fixtures folder are metadata/expected outputs (dict shape),
+    not inventory payloads. Only inventory fixtures (top-level JSON list) are
+    valid inputs to the graph stage.
+    """
+    all_json = sorted(FIXTURES_DIR.glob("*.json"))
+    fixtures: List[Path] = []
+    for path in all_json:
+        data = load_json_file(path, context=f"fixture {path.name}")
+        if isinstance(data, list):
+            fixtures.append(path)
+        else:
+            log.debug("Skipping non-inventory fixture %s (top-level %s)", path.name, type(data).__name__)
     if not fixtures:
-        raise FileNotFoundError(f"No fixture files found in {FIXTURES_DIR}")
+        raise FileNotFoundError(f"No inventory fixture files found in {FIXTURES_DIR}")
     return fixtures
 
 

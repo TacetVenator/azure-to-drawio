@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
 from tools.azdisc.config import Config
@@ -86,12 +87,33 @@ class PipelineExecutor:
         try:
             config.ensure_output_dir()
 
+            # Attach a file handler so all azdisc log output is captured per-run
+            log_path = Path(config.outputDir) / "pipeline.log"
+            _file_handler = logging.FileHandler(str(log_path), mode="w", encoding="utf-8")
+            _file_handler.setLevel(logging.DEBUG)
+            _file_handler.setFormatter(logging.Formatter(
+                "%(asctime)s %(levelname)-8s %(name)s - %(message)s",
+                datefmt="%H:%M:%S",
+            ))
+            _run_logger = logging.getLogger("tools")
+            _run_logger.addHandler(_file_handler)
+
+            def _log_marker(msg: str) -> None:
+                try:
+                    with open(log_path, "a", encoding="utf-8") as _f:
+                        _f.write(f"{'=' * 64}\n{msg}\n{'=' * 64}\n")
+                except Exception:
+                    pass
+
+            _log_marker(f"Pipeline started: app={config.app}")
+
             for stage in build_pipeline_stages(config):
                 try:
                     if status_callback:
                         await status_callback(stage.name, "running")
 
                     log.info("Starting stage: %s", stage.name)
+                    _log_marker(f"STAGE START: {stage.name}")
 
                     # Run stage in thread pool to avoid blocking event loop
                     await asyncio.to_thread(stage.action)
@@ -106,10 +128,12 @@ class PipelineExecutor:
                         await status_callback(stage.name, "completed")
 
                     log.info("Completed stage: %s", stage.name)
+                    _log_marker(f"STAGE DONE: {stage.name}")
                 except Exception as e:
                     pipeline_failed = True
                     pipeline_error = str(e)
                     log.error("Stage %s failed: %s", stage.name, e)
+                    _log_marker(f"STAGE FAILED: {stage.name} — {e}")
                     completed_stages.append({
                         "name": stage.name,
                         "status": "failed",
@@ -137,7 +161,7 @@ class PipelineExecutor:
                     if not continue_on_error and not switched_to_cli:
                         break
 
-            return {
+            result = {
                 "status": "completed-with-errors" if pipeline_failed and continue_on_error else ("failed" if pipeline_failed else "success"),
                 "stages": completed_stages,
                 "error": pipeline_error,
@@ -146,8 +170,18 @@ class PipelineExecutor:
                 "fallback_reason": fallback_reason,
                 "fallback_stage": fallback_stage,
             }
+            _log_marker(f"Pipeline ended: {result['status']}")
+            _run_logger.removeHandler(_file_handler)
+            _file_handler.close()
+            return result
         except Exception as e:
             log.error("Pipeline failed with exception: %s", e)
+            try:
+                _log_marker(f"Pipeline exception: {e}")
+                _run_logger.removeHandler(_file_handler)
+                _file_handler.close()
+            except Exception:
+                pass
             return {
                 "status": "failed",
                 "stages": completed_stages,
