@@ -719,13 +719,15 @@
             <div class="section">
                 <h3>Scoped Network Diagram Generator</h3>
                 <p class="placeholder" style="margin-bottom: 8px;">
-                    High-value paths: generate directly from a Resource Group (low-noise) or from a Tag scope.
+                    Choose scope first, then relationship expansion, then visual style.
                 </p>
                 <div class="inventory-actions" style="margin-bottom: 10px;">
                     <button class="btn-primary" type="button" onclick="generateResourceGroupGraphQuick()">Generate Resource Group Graph</button>
                     <button class="btn-primary" type="button" onclick="generateTagGraphQuick()">Generate Tag Graph</button>
                 </div>
-                <div class="filter-grid">
+
+                <h4 class="section-subtitle">1. Scope</h4>
+                <div class="filter-grid" style="margin-bottom: 8px;">
                     <div class="form-group">
                         <label for="diagramGenerateTarget">Generate network diagram for</label>
                         <select id="diagramGenerateTarget" onchange="onDiagramGenerateTargetChanged()">
@@ -736,17 +738,24 @@
                             <option value="resource">Resource</option>
                         </select>
                     </div>
-                    <div class="form-group">
+                    <div id="diagramGenerateTagKeyGroup" class="form-group" style="display: none;">
                         <label for="diagramGenerateTagKey">Tag Key (for RG-by-tag)</label>
                         <select id="diagramGenerateTagKey" onchange="onDiagramTagKeyChanged(); loadDiagramScopeOptions()">
                             <option value="">All tag keys</option>
                         </select>
                     </div>
-                    <div class="form-group">
+                    <div id="diagramGenerateTagValueGroup" class="form-group" style="display: none;">
                         <label for="diagramGenerateTagValue">Tag Value (optional)</label>
                         <select id="diagramGenerateTagValue" onchange="loadDiagramScopeOptions()">
                             <option value="">All tag values</option>
                         </select>
+                    </div>
+                    <div id="diagramVmQuickGroup" class="form-group form-group-full" style="display: none;">
+                        <label for="diagramVmResourceId">VM Resource ID Shortcut</label>
+                        <input type="text" id="diagramVmResourceId" placeholder="/subscriptions/.../resourceGroups/.../providers/Microsoft.Compute/virtualMachines/vm-name">
+                        <div class="inventory-actions" style="margin-top: 8px;">
+                            <button class="btn-primary" type="button" onclick="generateVmQuickDiagram()">Generate VM Quick Diagram</button>
+                        </div>
                     </div>
                     <div class="form-group form-group-full">
                         <label for="diagramGenerateScope">Scope</label>
@@ -754,9 +763,13 @@
                             <option value="">-- Choose scope --</option>
                         </select>
                     </div>
+                </div>
+
+                <h4 class="section-subtitle">2. Relationship Expansion</h4>
+                <div class="filter-grid" style="margin-bottom: 8px;">
                     <div class="form-group">
                         <label for="diagramIncludeNeighbors">Relationship Expansion</label>
-                        <select id="diagramIncludeNeighbors">
+                        <select id="diagramIncludeNeighbors" onchange="onDiagramNeighborModeChanged()">
                             <option value="false" selected>No expansion (low-noise)</option>
                             <option value="true">Include related resources</option>
                         </select>
@@ -770,6 +783,10 @@
                             <option value="3">3</option>
                         </select>
                     </div>
+                </div>
+
+                <h4 class="section-subtitle">3. Visual Style</h4>
+                <div class="filter-grid">
                     <div class="form-group">
                         <label for="diagramGenerateMode">Diagram Style</label>
                         <select id="diagramGenerateMode">

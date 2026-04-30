@@ -25,6 +25,7 @@ def test_command_specs_include_expected_handlers():
     assert specs["wizard"].needs_config is True
     assert specs["config-presets"].needs_config is False
     assert "analyze" in specs
+    assert "vm-quick" in specs
 
 
 def test_analyze_parser_supports_stage_and_intent_flags():
@@ -35,6 +36,23 @@ def test_analyze_parser_supports_stage_and_intent_flags():
     assert args.pack == "root"
     assert args.rebuild_index is True
     assert args.model == "gemma4"
+
+
+def test_vm_quick_parser_supports_vm_resource_id_flags():
+    parser = build_parser()
+    args = parser.parse_args([
+        "vm-quick",
+        "app/myapp/config.json",
+        "--vm-resource-id",
+        "/subscriptions/sub1/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachines/vm-a",
+        "--relationship-depth",
+        "2",
+        "--output-dir",
+        "out/vm-a",
+    ])
+    assert args.vm_resource_id.endswith("/virtualMachines/vm-a")
+    assert args.relationship_depth == 2
+    assert args.output_dir == "out/vm-a"
 
 def test_run_generates_master_report_after_optional_outputs(monkeypatch, tmp_path):
     cfg = Config(

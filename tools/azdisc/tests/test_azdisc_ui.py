@@ -315,3 +315,119 @@ def test_generate_selection_diagram_supports_low_noise_no_expansion(
     assert payload["selectedCount"] == 1
     assert payload["nodeCount"] == 1
     assert payload["edgeCount"] == 0
+
+
+def test_list_diagram_artifacts_includes_hover_and_scoped_labels(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = "diagram-artifacts-hover-run"
+    output_dir = tmp_path / run_id
+    scoped_dir = output_dir / "diagram-beta" / "selection-1-abcd"
+    scoped_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    (output_dir / "diagram.drawio").write_text("<mxfile></mxfile>", encoding="utf-8")
+    (scoped_dir / "diagram.drawio").write_text("<mxfile></mxfile>", encoding="utf-8")
+    (scoped_dir / "diagram_meta.json").write_text(
+        json.dumps({"target": "selection", "scope": "selected:1", "diagramMode": "MSFT"}),
+        encoding="utf-8",
+    )
+
+    runner = PipelineRunner(state_dir=tmp_path / "runner-state")
+    cfg = Config(
+        app="diagram-artifacts-hover",
+        subscriptions=[],
+        seedResourceGroups=["imported-artifact"],
+        outputDir=str(output_dir),
+    )
+    runner.register_imported_run(run_id, cfg, imported_artifacts=["diagram.drawio"])
+    monkeypatch.setattr(pipeline_runner_module, "_runner", runner)
+
+    client = testclient.TestClient(create_app())
+    response = client.get(f"/api/artifacts/diagrams/{run_id}")
+    assert response.status_code == 200
+    diagrams = response.json()["diagrams"]
+
+    root_entry = next(item for item in diagrams if item["path"] == "diagram.drawio")
+    scoped_entry = next(item for item in diagrams if item["path"].endswith("selection-1-abcd/diagram.drawio"))
+
+    assert root_entry["label"] == "Global Topology (root)"
+    assert "Path: diagram.drawio" in root_entry["hover"]
+    assert scoped_entry["label"].startswith("Scoped (selection):")
+    assert "Scope: selected:1" in scoped_entry["hover"]
+
+
+def test_generate_vm_quick_diagram_uses_single_vm_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = "vm-quick-run"
+    output_dir = tmp_path / run_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+    vm_id = "/subscriptions/sub1/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachines/vm-a"
+    nic_id = "/subscriptions/sub1/resourceGroups/rg-app/providers/Microsoft.Network/networkInterfaces/nic-a"
+
+    (output_dir / "graph.json").write_text(
+        json.dumps(
+            {
+                "nodes": [
+                    {
+                        "id": vm_id,
+                        "name": "vm-a",
+                        "type": "microsoft.compute/virtualmachines",
+                        "resourceGroup": "rg-app",
+                        "location": "eastus",
+                        "tags": {},
+                        "properties": {},
+                        "isExternal": False,
+                        "childResources": [],
+                        "attributes": [],
+                    },
+                    {
+                        "id": nic_id,
+                        "name": "nic-a",
+                        "type": "microsoft.network/networkinterfaces",
+                        "resourceGroup": "rg-app",
+                        "location": "eastus",
+                        "tags": {},
+                        "properties": {},
+                        "isExternal": False,
+                        "childResources": [],
+                        "attributes": [],
+                    },
+                ],
+                "edges": [
+                    {
+                        "source": vm_id,
+                        "target": nic_id,
+                        "kind": "vm->nic",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    runner = PipelineRunner(state_dir=tmp_path / "runner-state")
+    cfg = Config(
+        app="vm-quick",
+        subscriptions=[],
+        seedResourceGroups=["imported-artifact"],
+        outputDir=str(output_dir),
+    )
+    runner.register_imported_run(run_id, cfg, imported_artifacts=["graph.json"])
+    monkeypatch.setattr(pipeline_runner_module, "_runner", runner)
+
+    client = testclient.TestClient(create_app())
+    response = client.post(
+        "/api/diagram/generate-vm-quick",
+        json={"run_id": run_id, "vm_resource_id": vm_id},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["target"] == "vm-quick"
+    assert payload["scope"].lower() == vm_id.lower()
+    assert payload["selectedCount"] == 1
+    assert payload["nodeCount"] >= 1

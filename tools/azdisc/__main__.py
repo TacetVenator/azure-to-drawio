@@ -5,11 +5,11 @@ import argparse
 import json
 import logging
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Callable, Iterable
 
-from .config import load_config
+from .config import load_config, load_config_from_dict
 from .config_presets import get_config_preset, list_config_presets
 from .analyze import run_analysis
 from .discover import prepare_related_extended_inventory, run_expand, run_policy, run_rbac, run_related_candidates, run_seed
@@ -118,6 +118,44 @@ def cmd_run(args) -> None:
     log.info("Pipeline complete for app=%s", cfg.app)
 
 
+def cmd_vm_quick(args) -> None:
+    """Run a single-VM focused pipeline from one resource ID."""
+    cfg = load_config(args.config)
+    vm_resource_id = str(args.vm_resource_id or "").strip()
+    if not vm_resource_id:
+        raise ValueError("--vm-resource-id is required")
+
+    cfg_data = asdict(cfg)
+    cfg_data["seedResourceGroups"] = []
+    cfg_data["seedTags"] = {}
+    cfg_data["seedTagKeys"] = []
+    cfg_data["seedManagementGroups"] = []
+    cfg_data["seedEntireSubscriptions"] = False
+    cfg_data["seedResourceIds"] = [vm_resource_id]
+    cfg_data["expandScope"] = "related"
+    cfg_data["includeVmDetails"] = True
+    cfg_data["diagramFocus"] = {
+        "preset": "vm-dependencies",
+        "resourceTypes": [],
+        "includeDependencies": True,
+        "dependencyDepth": max(1, int(getattr(args, "relationship_depth", 2) or 2)),
+        "networkScope": "immediate-vm-network",
+        "diagramType": "network",
+    }
+    output_dir_override = str(getattr(args, "output_dir", "") or "").strip()
+    if output_dir_override:
+        cfg_data["outputDir"] = output_dir_override
+
+    vm_cfg = load_config_from_dict(cfg_data)
+    for stage in build_pipeline_stages(
+        vm_cfg,
+        software_inventory_workspace=args.software_inventory_csv,
+        software_inventory_days=args.software_inventory_days,
+    ):
+        stage.action()
+    log.info("VM quick pipeline complete for vm=%s at %s", vm_resource_id, vm_cfg.outputDir)
+
+
 def cmd_registry_refresh(args) -> None:
     assets_dir = Path(args.assets_dir).expanduser().resolve()
     subs = [s.strip() for s in (args.subscriptions or "").split(",") if s.strip()]
@@ -147,6 +185,7 @@ def cmd_config_presets(args) -> None:
 def _iter_command_specs() -> Iterable[CommandSpec]:
     return [
         CommandSpec("run", cmd_run, "Run the full pipeline", supports_software_inventory=True),
+        CommandSpec("vm-quick", cmd_vm_quick, "Run a single-VM immediate-related discovery/diagram pipeline", supports_software_inventory=True),
         CommandSpec("telemetry", _run_with_config(run_telemetry_enrichment), "Enrich graph with App Insights, Activity Log, and Flow Log telemetry"),
         CommandSpec("seed", _run_with_config(run_seed), "Seed resources from RGs"),
         CommandSpec("expand", cmd_expand, "Expand resources transitively", supports_software_inventory=True),
@@ -214,6 +253,10 @@ def build_parser() -> argparse.ArgumentParser:
             p.add_argument("--pack", help="Analyze only one pack slug such as root or an application name")
             p.add_argument("--rebuild-index", action="store_true", help="Rebuild the local chunk index before analysis")
             p.add_argument("--model", help="Override the configured localAnalysis.model for this run")
+        if spec.name == "vm-quick":
+            p.add_argument("--vm-resource-id", required=True, help="ARM resource ID of the VM to focus on")
+            p.add_argument("--relationship-depth", type=int, default=2, help="Neighbor expansion depth for VM quick run (default: 2)")
+            p.add_argument("--output-dir", help="Optional override output directory for the VM quick run")
         if spec.name == "registry-refresh":
             default_assets = Path(__file__).parent.parent.parent / "assets"
             p.add_argument(

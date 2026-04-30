@@ -18,8 +18,10 @@ let diagramBetaState = {
     diagrams: [],
     activeIndex: -1,
     iframeReady: false,
+    iframeLastEvent: '',
     viewerAvailable: false,
     viewerUrl: '',
+    viewerInitTimer: null,
     tagValuesByKey: {},
     previewSetPaths: [],
 };
@@ -1413,8 +1415,10 @@ async function loadDiagramBeta() {
             diagrams: [],
             activeIndex: -1,
             iframeReady: diagramBetaState.iframeReady,
+            iframeLastEvent: diagramBetaState.iframeLastEvent,
             viewerAvailable: diagramBetaState.viewerAvailable,
             viewerUrl: diagramBetaState.viewerUrl,
+            viewerInitTimer: diagramBetaState.viewerInitTimer,
             tagValuesByKey: diagramBetaState.tagValuesByKey,
             previewSetPaths: [],
         };
@@ -1444,8 +1448,10 @@ async function loadDiagramBeta() {
             diagrams,
             activeIndex: -1,
             iframeReady: diagramBetaState.iframeReady,
+            iframeLastEvent: diagramBetaState.iframeLastEvent,
             viewerAvailable: diagramBetaState.viewerAvailable,
             viewerUrl: diagramBetaState.viewerUrl,
+            viewerInitTimer: diagramBetaState.viewerInitTimer,
             tagValuesByKey: diagramBetaState.tagValuesByKey,
             previewSetPaths: diagramBetaState.previewSetPaths,
         };
@@ -1461,9 +1467,12 @@ async function loadDiagramBeta() {
 
         buttonsHost.innerHTML = diagrams.map((diagram, idx) => {
             const badge = diagramMetaBadgeText(diagram.meta);
+            const classText = diagram.diagramClass ? String(diagram.diagramClass) : 'diagram';
+            const hover = escapeHtml(diagram.hover || `${diagram.path || ''}`);
             const badgeHtml = badge ? `<div class="placeholder" style="font-size: 11px; margin-top: 2px;">${escapeHtml(badge)}</div>` : '';
             const title = escapeHtml(diagram.label || diagram.path || `diagram ${idx + 1}`);
-            return `<button type="button" onclick="previewDiagramBeta(${idx})">${title}${badgeHtml}</button>`;
+            const sub = `<div class="placeholder" style="font-size: 11px; margin-top: 2px;">${escapeHtml(classText)} · ${escapeHtml(diagram.path || '')}</div>`;
+            return `<button type="button" title="${hover}" onclick="previewDiagramBeta(${idx})">${title}${sub}${badgeHtml}</button>`;
         }).join('');
 
         statusEl.textContent = `Found ${diagrams.length} diagram artifact(s).`;
@@ -1561,6 +1570,21 @@ async function loadDiagramScopeOptions() {
 
 function onDiagramGenerateTargetChanged() {
     const target = document.getElementById('diagramGenerateTarget')?.value || 'resourcegroup';
+    const tagKeyGroup = document.getElementById('diagramGenerateTagKeyGroup');
+    const tagValueGroup = document.getElementById('diagramGenerateTagValueGroup');
+    const vmQuickGroup = document.getElementById('diagramVmQuickGroup');
+    const isTagTarget = target === 'tag' || target === 'application' || target === 'resourcegroup-tag';
+    const isVmTarget = target === 'resource';
+    if (tagKeyGroup) {
+        tagKeyGroup.style.display = isTagTarget ? '' : 'none';
+    }
+    if (tagValueGroup) {
+        tagValueGroup.style.display = isTagTarget ? '' : 'none';
+    }
+    if (vmQuickGroup) {
+        vmQuickGroup.style.display = isVmTarget ? '' : 'none';
+    }
+
     const includeNeighborsEl = document.getElementById('diagramIncludeNeighbors');
     const depthEl = document.getElementById('diagramRelationshipDepth');
     if (includeNeighborsEl && depthEl) {
@@ -1574,7 +1598,23 @@ function onDiagramGenerateTargetChanged() {
             }
         }
     }
+    onDiagramNeighborModeChanged();
     loadDiagramScopeOptions();
+}
+
+function onDiagramNeighborModeChanged() {
+    const includeNeighborsEl = document.getElementById('diagramIncludeNeighbors');
+    const depthEl = document.getElementById('diagramRelationshipDepth');
+    if (!includeNeighborsEl || !depthEl) {
+        return;
+    }
+    const enabled = includeNeighborsEl.value === 'true';
+    depthEl.disabled = !enabled;
+    if (!enabled) {
+        depthEl.value = '0';
+    } else if (depthEl.value === '0') {
+        depthEl.value = '1';
+    }
 }
 
 function spacingPresetFromSlider(value) {
@@ -1768,6 +1808,65 @@ async function generateScopedNetworkDiagram() {
             statusEl.textContent = `Scoped diagram generation failed: ${error.message}`;
         }
         return null;
+    }
+}
+
+async function generateVmQuickDiagram() {
+    const runId = document.getElementById('diagramBetaRunIdSelect')?.value || '';
+    const vmResourceId = document.getElementById('diagramVmResourceId')?.value.trim() || '';
+    const diagramMode = document.getElementById('diagramGenerateMode')?.value || 'MSFT';
+    const spacingPreset = spacingPresetFromSlider(document.getElementById('diagramSpacingSlider')?.value || '20');
+    const layoutMagic = (document.getElementById('diagramLayoutMagic')?.value || 'true') === 'true';
+    const edgeLabels = (document.getElementById('diagramEdgeLabels')?.value || 'false') === 'true';
+    const subnetColors = (document.getElementById('diagramSubnetColors')?.value || 'true') === 'true';
+    const statusEl = document.getElementById('diagramBetaStatus');
+
+    if (!runId) {
+        alert('Choose a run first.');
+        return;
+    }
+    if (!vmResourceId) {
+        alert('Provide a VM resource ID.');
+        return;
+    }
+
+    try {
+        if (statusEl) {
+            statusEl.textContent = 'Generating VM quick diagram (immediate related resources)...';
+        }
+        const response = await fetch('/api/diagram/generate-vm-quick', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                run_id: runId,
+                vm_resource_id: vmResourceId,
+                include_neighbors: true,
+                relationship_depth: 2,
+                diagram_mode: diagramMode,
+                spacing_preset: spacingPreset,
+                layout_magic: layoutMagic,
+                edge_labels: edgeLabels,
+                subnet_colors: subnetColors,
+            }),
+        });
+        const result = await response.json();
+        if (!response.ok) {
+            throw new Error(result.detail || 'VM quick diagram generation failed');
+        }
+
+        if (statusEl) {
+            statusEl.textContent = `Generated VM quick diagram (${result.nodeCount} nodes / ${result.edgeCount} edges): ${result.diagramPath}`;
+        }
+
+        await loadDiagramBeta();
+        const idx = diagramBetaState.diagrams.findIndex(item => item.path === result.diagramPath);
+        if (idx >= 0) {
+            await previewDiagramBeta(idx);
+        }
+    } catch (error) {
+        if (statusEl) {
+            statusEl.textContent = `VM quick diagram generation failed: ${error.message}`;
+        }
     }
 }
 
@@ -1967,7 +2066,15 @@ async function previewDiagramBeta(index) {
                 } else if (Date.now() < timeoutAt) {
                     setTimeout(waitForReady, 150);
                 } else {
-                    statusEl.textContent = 'Embedded viewer did not initialize in time. Try refreshing Diagram Beta.';
+                    diagramBetaState.viewerAvailable = false;
+                    iframe.style.display = 'none';
+                    imageHost.style.display = '';
+                    imageHost.innerHTML = `
+                        <div class="diagram-header"><strong>${escapeHtml(diagram.label || diagram.name || 'draw.io')}</strong></div>
+                        <p class="placeholder" style="margin-bottom: 8px;">Embedded viewer did not initialize in time. Falling back to raw XML preview.</p>
+                        <pre>${escapeHtml(xmlText.slice(0, 25000))}${xmlText.length > 25000 ? '\n... (truncated)' : ''}</pre>
+                    `;
+                    statusEl.textContent = 'Embedded viewer did not initialize in time. Falling back to XML preview for this session.';
                 }
             };
             waitForReady();
@@ -2448,6 +2555,10 @@ document.addEventListener('DOMContentLoaded', () => {
     onResourceDiagramSpacingChanged();
 
     window.addEventListener('message', (event) => {
+        const iframe = document.getElementById('diagramBetaIframe');
+        if (iframe && event.source && iframe.contentWindow && event.source !== iframe.contentWindow) {
+            return;
+        }
         let payload = event.data;
         if (typeof payload === 'string') {
             try {
@@ -2459,8 +2570,22 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!payload || typeof payload !== 'object') {
             return;
         }
-        if (payload.event === 'init') {
+        const eventName = String(payload.event || '').toLowerCase();
+        diagramBetaState.iframeLastEvent = eventName;
+        if (eventName === 'configure' && iframe?.contentWindow) {
+            iframe.contentWindow.postMessage(JSON.stringify({ action: 'configure' }), '*');
+            return;
+        }
+        if (eventName === 'init' || eventName === 'ready') {
             diagramBetaState.iframeReady = true;
+            const hint = document.getElementById('diagramBetaViewerHint');
+            if (hint && diagramBetaState.viewerAvailable) {
+                hint.textContent = 'Embedded viewer ready.';
+            }
+            if (diagramBetaState.viewerInitTimer) {
+                clearTimeout(diagramBetaState.viewerInitTimer);
+                diagramBetaState.viewerInitTimer = null;
+            }
         }
     });
 });
@@ -2478,6 +2603,8 @@ async function initDiagramBetaViewer() {
         if (!response.ok || !result.available || !result.url) {
             diagramBetaState.viewerAvailable = false;
             diagramBetaState.viewerUrl = '';
+            diagramBetaState.iframeReady = false;
+            diagramBetaState.iframeLastEvent = '';
             iframe.style.display = 'none';
             hint.textContent = 'Local embedded viewer not found. Beta tab will use XML/image fallback only.';
             return;
@@ -2485,12 +2612,30 @@ async function initDiagramBetaViewer() {
 
         diagramBetaState.viewerAvailable = true;
         diagramBetaState.viewerUrl = String(result.url);
+        diagramBetaState.iframeReady = false;
+        diagramBetaState.iframeLastEvent = 'loading';
+        if (diagramBetaState.viewerInitTimer) {
+            clearTimeout(diagramBetaState.viewerInitTimer);
+            diagramBetaState.viewerInitTimer = null;
+        }
+        iframe.onload = () => {
+            diagramBetaState.iframeLastEvent = 'iframe-load';
+        };
         iframe.src = diagramBetaState.viewerUrl;
         iframe.style.display = '';
-        hint.textContent = `Using local viewer (${result.source}).`;
+        hint.textContent = `Using local viewer (${result.source}). Waiting for readiness signal...`;
+        diagramBetaState.viewerInitTimer = setTimeout(() => {
+            if (!diagramBetaState.iframeReady) {
+                diagramBetaState.viewerAvailable = false;
+                iframe.style.display = 'none';
+                hint.textContent = 'Embedded viewer did not report ready state. Using XML/image fallback.';
+            }
+        }, 12000);
     } catch (error) {
         diagramBetaState.viewerAvailable = false;
         diagramBetaState.viewerUrl = '';
+        diagramBetaState.iframeReady = false;
+        diagramBetaState.iframeLastEvent = '';
         iframe.style.display = 'none';
         hint.textContent = `Local viewer detection failed: ${error.message}`;
     }

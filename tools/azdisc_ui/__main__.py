@@ -391,6 +391,26 @@ def create_app() -> FastAPI:
                 return None
             return parsed if isinstance(parsed, dict) else None
 
+        def _hover_text(rel_path: str, diagram_class: str, meta: dict | None) -> str:
+            details = [f"Path: {rel_path}", f"Type: {diagram_class}"]
+            if isinstance(meta, dict):
+                scope = str(meta.get("scope") or "").strip()
+                target = str(meta.get("target") or "").strip()
+                generated_at = str(meta.get("generatedAt") or "").strip()
+                mode = str(meta.get("diagramMode") or "").strip()
+                spacing = str(meta.get("spacingPreset") or "").strip()
+                if target:
+                    details.append(f"Target: {target}")
+                if scope:
+                    details.append(f"Scope: {scope}")
+                if mode:
+                    details.append(f"Mode: {mode}")
+                if spacing:
+                    details.append(f"Spacing: {spacing}")
+                if generated_at:
+                    details.append(f"Generated: {generated_at}")
+            return " | ".join(details)
+
         diagrams = []
         for path in root.rglob("*"):
             if not path.is_file():
@@ -402,18 +422,30 @@ def create_app() -> FastAPI:
 
             rel = str(path.relative_to(root))
             lower_rel = rel.lower()
+            meta = _read_diagram_meta(path)
+
             if lower_rel.startswith("applications/") and lower_rel.endswith("/diagram.drawio"):
                 diagram_class = "application-slice"
                 label = f"Application Slice: {path.parent.name}"
+            elif path.name.lower() == "diagram.drawio" and lower_rel == "diagram.drawio":
+                diagram_class = "global-topology"
+                label = "Global Topology (root)"
+            elif path.name.lower() == "diagram.drawio" and isinstance(meta, dict):
+                target = str(meta.get("target") or "scoped")
+                scope = str(meta.get("scope") or path.parent.name)
+                diagram_class = f"scoped-{target}"
+                label = f"Scoped ({target}): {scope}"
             elif path.name.lower() == "diagram.drawio":
                 diagram_class = "global-topology"
-                label = "Global Topology"
+                label = f"Global Topology: {path.parent.as_posix()}"
             elif suffix in {".svg", ".png"}:
                 diagram_class = "image"
                 label = f"Image: {path.name}"
             else:
                 diagram_class = "drawio"
                 label = path.name
+
+            hover = _hover_text(rel, diagram_class, meta)
 
             diagrams.append(
                 {
@@ -423,7 +455,8 @@ def create_app() -> FastAPI:
                     "diagramClass": diagram_class,
                     "label": label,
                     "size": path.stat().st_size,
-                    "meta": _read_diagram_meta(path),
+                    "meta": meta,
+                    "hover": hover,
                 }
             )
 
@@ -740,8 +773,8 @@ def create_app() -> FastAPI:
             )
         if not scope_value:
             raise HTTPException(status_code=400, detail="scope is required")
-        if diagram_mode not in {"MSFT", "L2R"}:
-            raise HTTPException(status_code=400, detail="diagram_mode must be one of: MSFT, L2R")
+        if diagram_mode not in {"MSFT", "L2R", "HUB-SPOKE"}:
+            raise HTTPException(status_code=400, detail="diagram_mode must be one of: MSFT, L2R, HUB-SPOKE")
         if spacing_preset not in {"compact", "spacious"}:
             raise HTTPException(status_code=400, detail="spacing_preset must be one of: compact, spacious")
 
@@ -1020,8 +1053,8 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="run_id is required")
         if not isinstance(resource_ids, list) or not resource_ids:
             raise HTTPException(status_code=400, detail="resource_ids must be a non-empty array")
-        if diagram_mode not in {"MSFT", "L2R"}:
-            raise HTTPException(status_code=400, detail="diagram_mode must be one of: MSFT, L2R")
+        if diagram_mode not in {"MSFT", "L2R", "HUB-SPOKE"}:
+            raise HTTPException(status_code=400, detail="diagram_mode must be one of: MSFT, L2R, HUB-SPOKE")
         if spacing_preset not in {"compact", "spacious"}:
             raise HTTPException(status_code=400, detail="spacing_preset must be one of: compact, spacious")
 
@@ -1183,6 +1216,54 @@ def create_app() -> FastAPI:
             "nodeCount": len(filtered_nodes),
             "edgeCount": len(filtered_edges),
         }
+
+    @app.post("/api/diagram/generate-vm-quick", tags=["artifacts"])
+    async def generate_vm_quick_diagram(payload: dict) -> dict:
+        """Generate an immediate VM-centric dependency diagram from one VM resource ID."""
+        from tools.azdisc.util import normalize_id
+
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="payload must be a JSON object")
+
+        run_id = str(payload.get("run_id") or "").strip()
+        vm_resource_id = normalize_id(payload.get("vm_resource_id") or "")
+        if not run_id:
+            raise HTTPException(status_code=400, detail="run_id is required")
+        if not vm_resource_id:
+            raise HTTPException(status_code=400, detail="vm_resource_id is required")
+
+        default_mode = str(payload.get("diagram_mode") or "MSFT").strip().upper()
+        default_spacing = str(payload.get("spacing_preset") or "compact").strip().lower()
+
+        scoped_payload = {
+            "run_id": run_id,
+            "target": "resource",
+            "scope": vm_resource_id,
+            "include_neighbors": bool(payload.get("include_neighbors", True)),
+            "relationship_depth": int(payload.get("relationship_depth", 2) or 2),
+            "diagram_mode": default_mode,
+            "spacing_preset": default_spacing,
+            "layout_magic": bool(payload.get("layout_magic", True)),
+            "edge_labels": bool(payload.get("edge_labels", False)),
+            "subnet_colors": bool(payload.get("subnet_colors", True)),
+        }
+
+        result = await generate_selection_diagram(
+            {
+                "run_id": scoped_payload["run_id"],
+                "resource_ids": [scoped_payload["scope"]],
+                "include_neighbors": scoped_payload["include_neighbors"],
+                "relationship_depth": scoped_payload["relationship_depth"],
+                "diagram_mode": scoped_payload["diagram_mode"],
+                "spacing_preset": scoped_payload["spacing_preset"],
+                "layout_magic": scoped_payload["layout_magic"],
+                "edge_labels": scoped_payload["edge_labels"],
+                "subnet_colors": scoped_payload["subnet_colors"],
+            }
+        )
+        result["target"] = "vm-quick"
+        result["scope"] = vm_resource_id
+        return result
     
     @app.get("/api/artifacts/download/{run_id}/{file_path:path}", tags=["artifacts"])
     async def download_artifact(run_id: str, file_path: str) -> FileResponse:
