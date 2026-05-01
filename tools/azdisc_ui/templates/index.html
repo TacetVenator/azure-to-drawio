@@ -8,6 +8,7 @@
 </head>
 <body>
     <div class="container">
+        <div id="globalNotice" class="global-notice hidden" role="status" aria-live="polite"></div>
         <header>
             <h1>Azure Discovery Web UI</h1>
             <p class="subtitle">Configuration, Pipeline Management, and Artifact Browsing</p>
@@ -63,6 +64,26 @@
                         <button type="button" onclick="applySelectedConfigPreset()">Apply Preset</button>
                     </div>
                     <div id="configPresetDescription" class="placeholder" style="margin-top: 8px; font-size: 12px;"></div>
+                </div>
+
+                <div class="section">
+                    <h3>Config File Workflow</h3>
+                    <p class="section-hint">Load an existing config file, edit fields in this form (including Output Directory), then save to a new path.</p>
+                    <div class="form-grid">
+                        <div class="form-group form-group-full">
+                            <label for="existingConfigPath" class="label-with-help">Existing Config Path <span class="info-tip" title="Absolute or workspace-relative path to an existing config.json file.">i</span></label>
+                            <input type="text" id="existingConfigPath" placeholder="app/myapp/config.json">
+                        </div>
+                        <div class="form-group form-group-full">
+                            <label for="configSavePath" class="label-with-help">Save Modified Config As <span class="info-tip" title="Target path for the updated config. Parent directories are created automatically.">i</span></label>
+                            <input type="text" id="configSavePath" placeholder="app/myapp/config.modified.json">
+                        </div>
+                    </div>
+                    <div class="scenario-actions">
+                        <button type="button" onclick="loadConfigFromPath()">Load Config File</button>
+                        <button type="button" onclick="saveConfigToPath()">Save Modified Config</button>
+                    </div>
+                    <div id="configFileStatus" class="placeholder" style="margin-top: 8px; font-size: 12px;"></div>
                 </div>
 
                 <div class="form-toolbar">
@@ -529,7 +550,7 @@
                 <h3>Execution Mode</h3>
                 <div class="form-grid">
                     <div class="form-group">
-                        <label for="authMode">Auth Mode</label>
+                        <label for="authMode" class="label-with-help">Auth Mode <span class="info-tip" title="Choose how discovery authenticates: auto tries token first and can fall back to CLI.">i</span></label>
                         <select id="authMode">
                             <option value="auto" selected>Auto (Token first, CLI fallback)</option>
                             <option value="token">Token only</option>
@@ -555,23 +576,23 @@
                 <p class="placeholder">Use local file paths for large seed or inventory artifacts so the browser does not have to load them first.</p>
                 <div class="form-grid">
                     <div class="form-group">
-                        <label for="importAppName">Run Name</label>
+                        <label for="importAppName" class="label-with-help">Run Name <span class="info-tip" title="Friendly name for this imported artifact run.">i</span></label>
                         <input type="text" id="importAppName" placeholder="contoso-import">
                     </div>
                     <div class="form-group">
-                        <label for="importSubscriptions">Subscriptions (comma-separated, optional)</label>
+                        <label for="importSubscriptions" class="label-with-help">Subscriptions (comma-separated, optional) <span class="info-tip" title="Optional subscription IDs associated with imported artifacts.">i</span></label>
                         <input type="text" id="importSubscriptions" placeholder="00000000-0000-0000-0000-000000000000">
                     </div>
                     <div class="form-group form-group-full">
-                        <label for="importOutputDir">Output Directory (optional override)</label>
+                        <label for="importOutputDir" class="label-with-help">Output Directory (optional override) <span class="info-tip" title="Where imported artifacts will be copied and served from.">i</span></label>
                         <input type="text" id="importOutputDir" placeholder="Defaults to .azdisc_ui_runs/&lt;run_id&gt; under current working directory">
                     </div>
                     <div class="form-group form-group-full">
-                        <label for="importSeedPath">Seed JSON Path</label>
+                        <label for="importSeedPath" class="label-with-help">Seed JSON Path <span class="info-tip" title="Absolute path to an existing seed.json file.">i</span></label>
                         <input type="text" id="importSeedPath" placeholder="/absolute/path/to/seed.json">
                     </div>
                     <div class="form-group form-group-full">
-                        <label for="importInventoryPath">Inventory JSON Path</label>
+                        <label for="importInventoryPath" class="label-with-help">Inventory JSON Path <span class="info-tip" title="Absolute path to an existing inventory.json file.">i</span></label>
                         <input type="text" id="importInventoryPath" placeholder="/absolute/path/to/inventory.json">
                     </div>
                 </div>
@@ -602,7 +623,7 @@
             <h2>Artifact Browser</h2>
             
             <div class="section">
-                <label for="runIdSelect">Select Run:</label>
+                <label for="runIdSelect" class="label-with-help">Select Run <span class="info-tip" title="Choose a completed run to browse generated artifacts.">i</span></label>
                 <select id="runIdSelect" onchange="loadArtifacts()">
                     <option value="">-- Choose a run --</option>
                 </select>
@@ -637,48 +658,48 @@
                     <h3>Inventory Explorer</h3>
                     <div class="filter-grid">
                         <div class="form-group">
-                            <label for="inventoryArtifactType">Artifact</label>
+                            <label for="inventoryArtifactType" class="label-with-help">Artifact <span class="info-tip" title="Switch between inventory.json and seed.json data sources.">i</span></label>
                             <select id="inventoryArtifactType" onchange="onInventoryArtifactChanged()">
                                 <option value="inventory" selected>inventory.json</option>
                                 <option value="seed">seed.json</option>
                             </select>
                         </div>
                         <div class="form-group">
-                            <label for="inventoryQuery">Query</label>
+                            <label for="inventoryQuery" class="label-with-help">Query <span class="info-tip" title="Case-insensitive search across key resource fields and tags.">i</span></label>
                             <input type="text" id="inventoryQuery" placeholder="name, id, type, tag value...">
                         </div>
                         <div class="form-group">
-                            <label for="inventoryTypeFilter">Type</label>
+                            <label for="inventoryTypeFilter" class="label-with-help">Type <span class="info-tip" title="Filter by ARM resource type.">i</span></label>
                             <select id="inventoryTypeFilter">
                                 <option value="">All</option>
                             </select>
                         </div>
                         <div class="form-group">
-                            <label for="inventoryRgFilter">Resource Group</label>
+                            <label for="inventoryRgFilter" class="label-with-help">Resource Group <span class="info-tip" title="Filter to a specific resource group.">i</span></label>
                             <select id="inventoryRgFilter">
                                 <option value="">All</option>
                             </select>
                         </div>
                         <div class="form-group">
-                            <label for="inventorySubFilter">Subscription</label>
+                            <label for="inventorySubFilter" class="label-with-help">Subscription <span class="info-tip" title="Filter to a specific subscription ID.">i</span></label>
                             <select id="inventorySubFilter">
                                 <option value="">All</option>
                             </select>
                         </div>
                         <div class="form-group">
-                            <label for="inventoryTagKeyFilter">Tag Key</label>
+                            <label for="inventoryTagKeyFilter" class="label-with-help">Tag Key <span class="info-tip" title="Filter rows that include a specific tag key.">i</span></label>
                             <select id="inventoryTagKeyFilter" onchange="onInventoryTagKeyChanged()">
                                 <option value="">All</option>
                             </select>
                         </div>
                         <div class="form-group">
-                            <label for="inventoryTagValueFilter">Tag Value</label>
+                            <label for="inventoryTagValueFilter" class="label-with-help">Tag Value <span class="info-tip" title="Filter rows by selected tag value.">i</span></label>
                             <select id="inventoryTagValueFilter">
                                 <option value="">All</option>
                             </select>
                         </div>
                         <div class="form-group">
-                            <label for="inventoryPageSize">Page Size</label>
+                            <label for="inventoryPageSize" class="label-with-help">Page Size <span class="info-tip" title="Number of rows returned per page.">i</span></label>
                             <select id="inventoryPageSize">
                                 <option value="50">50</option>
                                 <option value="100" selected>100</option>
@@ -706,7 +727,7 @@
 
             <div class="section">
                 <div class="form-group">
-                    <label for="diagramBetaRunIdSelect">Run</label>
+                    <label for="diagramBetaRunIdSelect" class="label-with-help">Run <span class="info-tip" title="Choose the run whose diagrams should be previewed.">i</span></label>
                     <select id="diagramBetaRunIdSelect" onchange="loadDiagramBeta()">
                         <option value="">-- Choose a run --</option>
                     </select>
@@ -729,7 +750,7 @@
                 <h4 class="section-subtitle">1. Scope</h4>
                 <div class="filter-grid" style="margin-bottom: 8px;">
                     <div class="form-group">
-                        <label for="diagramGenerateTarget">Generate network diagram for</label>
+                        <label for="diagramGenerateTarget" class="label-with-help">Generate network diagram for <span class="info-tip" title="Pick the scope entity type used to build the diagram.">i</span></label>
                         <select id="diagramGenerateTarget" onchange="onDiagramGenerateTargetChanged()">
                             <option value="tag">Tag</option>
                             <option value="application">Application</option>
@@ -739,27 +760,37 @@
                         </select>
                     </div>
                     <div id="diagramGenerateTagKeyGroup" class="form-group" style="display: none;">
-                        <label for="diagramGenerateTagKey">Tag Key (for RG-by-tag)</label>
+                        <label for="diagramGenerateTagKey" class="label-with-help">Tag Key (for RG-by-tag) <span class="info-tip" title="Tag key used when generating resource-group scopes by tag.">i</span></label>
                         <select id="diagramGenerateTagKey" onchange="onDiagramTagKeyChanged(); loadDiagramScopeOptions()">
                             <option value="">All tag keys</option>
                         </select>
                     </div>
                     <div id="diagramGenerateTagValueGroup" class="form-group" style="display: none;">
-                        <label for="diagramGenerateTagValue">Tag Value (optional)</label>
+                        <label for="diagramGenerateTagValue" class="label-with-help">Tag Value (optional) <span class="info-tip" title="Optional tag value to further narrow RG-by-tag scope.">i</span></label>
                         <select id="diagramGenerateTagValue" onchange="loadDiagramScopeOptions()">
                             <option value="">All tag values</option>
                         </select>
                     </div>
                     <div id="diagramVmQuickGroup" class="form-group form-group-full" style="display: none;">
-                        <label for="diagramVmResourceId">VM Resource ID Shortcut</label>
-                        <input type="text" id="diagramVmResourceId" placeholder="/subscriptions/.../resourceGroups/.../providers/Microsoft.Compute/virtualMachines/vm-name">
+                        <label for="diagramVmSelect" class="label-with-help">Virtual Machine
+                            <span class="info-tip" title="Select a VM from the discovered inventory. The full resource ID is used when generating the diagram.">i</span>
+                        </label>
+                        <select id="diagramVmSelect" onchange="onDiagramVmSelectChanged()" style="margin-bottom: 6px;">
+                            <option value="">-- Select a VM --</option>
+                        </select>
+                        <label for="diagramVmResourceId" class="label-with-help" style="font-size: 12px; color: #666; margin-top: 4px;">
+                            Resource ID <span class="info-tip" title="ARM resource ID. Auto-filled from the picker above, or enter manually.">i</span>
+                        </label>
+                        <input type="text" id="diagramVmResourceId" placeholder="/subscriptions/.../resourceGroups/.../providers/Microsoft.Compute/virtualMachines/vm-name" style="font-size: 12px;">
                         <div class="inventory-actions" style="margin-top: 8px;">
                             <button class="btn-primary" type="button" onclick="generateVmQuickDiagram()">Generate VM Quick Diagram</button>
+                            <button type="button" onclick="loadVmScopeOptions()">Refresh VM List</button>
                         </div>
+                        <div id="diagramVmScopeStatus" class="placeholder" style="margin-top: 4px; font-size: 12px;"></div>
                     </div>
-                    <div class="form-group form-group-full">
-                        <label for="diagramGenerateScope">Scope</label>
-                        <select id="diagramGenerateScope">
+                    <div id="diagramGenerateScopeGroup" class="form-group form-group-full">
+                        <label for="diagramGenerateScope" class="label-with-help">Scope <span class="info-tip" title="Concrete scope item selected from discovered inventory.">i</span></label>
+                        <select id="diagramGenerateScope" onchange="autoTuneDiagramSettings()">
                             <option value="">-- Choose scope --</option>
                         </select>
                     </div>
@@ -768,14 +799,14 @@
                 <h4 class="section-subtitle">2. Relationship Expansion</h4>
                 <div class="filter-grid" style="margin-bottom: 8px;">
                     <div class="form-group">
-                        <label for="diagramIncludeNeighbors">Relationship Expansion</label>
+                        <label for="diagramIncludeNeighbors" class="label-with-help">Relationship Expansion <span class="info-tip" title="Include directly related resources around the selected scope.">i</span></label>
                         <select id="diagramIncludeNeighbors" onchange="onDiagramNeighborModeChanged()">
                             <option value="false" selected>No expansion (low-noise)</option>
                             <option value="true">Include related resources</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label for="diagramRelationshipDepth">Relationship Depth</label>
+                        <label for="diagramRelationshipDepth" class="label-with-help">Relationship Depth <span class="info-tip" title="Maximum edge-hop depth when expanding relationships.">i</span></label>
                         <select id="diagramRelationshipDepth">
                             <option value="0" selected>0</option>
                             <option value="1">1</option>
@@ -784,11 +815,18 @@
                         </select>
                     </div>
                 </div>
+                <div class="diagram-shortcut-row" role="group" aria-label="Relationship depth shortcuts">
+                    <span class="diagram-shortcut-label">Depth presets</span>
+                    <button type="button" class="diagram-shortcut-btn" data-depth-shortcut="isolated" onclick="applyDiagramDepthShortcut('isolated')">Isolated</button>
+                    <button type="button" class="diagram-shortcut-btn" data-depth-shortcut="immediate" onclick="applyDiagramDepthShortcut('immediate')">Immediate</button>
+                    <button type="button" class="diagram-shortcut-btn" data-depth-shortcut="expanded" onclick="applyDiagramDepthShortcut('expanded')">Expanded</button>
+                    <button type="button" class="diagram-shortcut-btn" data-depth-shortcut="deep" onclick="applyDiagramDepthShortcut('deep')">Deep</button>
+                </div>
 
                 <h4 class="section-subtitle">3. Visual Style</h4>
                 <div class="filter-grid">
                     <div class="form-group">
-                        <label for="diagramGenerateMode">Diagram Style</label>
+                        <label for="diagramGenerateMode" class="label-with-help">Diagram Style <span class="info-tip" title="Choose visual rendering style for generated output.">i</span></label>
                         <select id="diagramGenerateMode">
                             <option value="MSFT" selected>MSFT (architecture-center style)</option>
                             <option value="L2R">L2R (left-to-right flow)</option>
@@ -796,37 +834,52 @@
                         </select>
                     </div>
                     <div class="form-group">
-                        <label for="diagramSpacingSlider">Spacing</label>
+                        <label for="diagramSpacingSlider" class="label-with-help">Spacing <span class="info-tip" title="Controls how tightly nodes are packed in the layout.">i</span></label>
                         <input type="range" id="diagramSpacingSlider" min="0" max="100" step="1" value="20" oninput="onDiagramSpacingChanged()">
                         <div class="placeholder" id="diagramSpacingValue">Compact</div>
                     </div>
                     <div class="form-group">
-                        <label for="diagramLayoutMagic">Smart Layout</label>
+                        <label for="diagramLayoutMagic" class="label-with-help">Smart Layout <span class="info-tip" title="Enable extra layout heuristics for cleaner routing.">i</span></label>
                         <select id="diagramLayoutMagic">
                             <option value="true" selected>Enabled</option>
                             <option value="false">Disabled</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label for="diagramEdgeLabels">Edge Labels</label>
+                        <label for="diagramEdgeLabels" class="label-with-help">Edge Labels <span class="info-tip" title="Show or hide labels on graph relationships.">i</span></label>
                         <select id="diagramEdgeLabels">
                             <option value="false" selected>Hidden</option>
                             <option value="true">Visible</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label for="diagramSubnetColors">Subnet Colors</label>
+                        <label for="diagramSubnetColors" class="label-with-help">Subnet Colors <span class="info-tip" title="Apply subnet-based color accents in network diagrams.">i</span></label>
                         <select id="diagramSubnetColors">
                             <option value="false" selected>Off</option>
                             <option value="true">On</option>
                         </select>
                     </div>
                 </div>
+                <div class="diagram-shortcut-row" role="group" aria-label="Visual style shortcuts">
+                    <span class="diagram-shortcut-label">Style presets</span>
+                    <button type="button" class="diagram-shortcut-btn" data-style-shortcut="architecture" onclick="applyDiagramStyleShortcut('architecture')">Architecture</button>
+                    <button type="button" class="diagram-shortcut-btn" data-style-shortcut="presentation" onclick="applyDiagramStyleShortcut('presentation')">Presentation</button>
+                    <button type="button" class="diagram-shortcut-btn" data-style-shortcut="flow" onclick="applyDiagramStyleShortcut('flow')">Flow</button>
+                    <button type="button" class="diagram-shortcut-btn" data-style-shortcut="hub-spoke" onclick="applyDiagramStyleShortcut('hub-spoke')">Hub-Spoke</button>
+                    <button type="button" class="diagram-shortcut-btn" data-style-shortcut="diagnostic" onclick="applyDiagramStyleShortcut('diagnostic')">Diagnostic</button>
+                </div>
+                <div class="diagram-live-preview-row">
+                    <label class="checkbox-label" style="margin: 0;">
+                        <input type="checkbox" id="diagramLivePreviewToggle" onchange="onDiagramLivePreviewToggleChanged()">
+                        <span>Live preview: auto-regenerate when scope, depth, or style changes.</span>
+                    </label>
+                    <button class="btn-primary" type="button" onclick="refreshDiagramLivePreviewNow()">Refresh Preview Now</button>
+                </div>
                 <div class="inventory-actions">
                     <button class="btn-primary" type="button" onclick="generateScopedNetworkDiagram()">Generate Scoped Network Diagram</button>
                     <button class="btn-primary" type="button" onclick="generateStylePreviewSet()">Generate Style Previews</button>
                     <button class="btn-primary" type="button" onclick="autoTuneDiagramSettings()">Auto Tune</button>
-                    <button class="btn-primary" type="button" onclick="loadDiagramScopeOptions()">Refresh Scope Options</button>
+                    <button class="btn-primary" type="button" onclick="loadDiagramScopeOptionsForCurrentTarget()">Refresh Scope Options</button>
                 </div>
             </div>
 
@@ -863,7 +916,7 @@
 
             <div class="section">
                 <div class="form-group">
-                    <label for="resourceDiagramRunIdSelect">Run</label>
+                    <label for="resourceDiagramRunIdSelect" class="label-with-help">Run <span class="info-tip" title="Choose a run to source resources for manual selection.">i</span></label>
                     <select id="resourceDiagramRunIdSelect" onchange="loadResourceDiagramInventory(true)">
                         <option value="">-- Choose a run --</option>
                     </select>
@@ -877,19 +930,19 @@
                 <h3>Resource Selection</h3>
                 <div class="filter-grid">
                     <div class="form-group">
-                        <label for="resourceDiagramQuery">Query</label>
+                        <label for="resourceDiagramQuery" class="label-with-help">Query <span class="info-tip" title="Filter selectable resources by name, id, type, or tags.">i</span></label>
                         <input type="text" id="resourceDiagramQuery" placeholder="name, id, type, tag value...">
                     </div>
                     <div class="form-group">
-                        <label for="resourceDiagramTagKey">Tag Key</label>
+                        <label for="resourceDiagramTagKey" class="label-with-help">Tag Key <span class="info-tip" title="Optional tag key filter for selectable resources.">i</span></label>
                         <input type="text" id="resourceDiagramTagKey" placeholder="Application">
                     </div>
                     <div class="form-group">
-                        <label for="resourceDiagramTagValue">Tag Value</label>
+                        <label for="resourceDiagramTagValue" class="label-with-help">Tag Value <span class="info-tip" title="Optional tag value filter paired with Tag Key.">i</span></label>
                         <input type="text" id="resourceDiagramTagValue" placeholder="ERP">
                     </div>
                     <div class="form-group">
-                        <label for="resourceDiagramPageSize">Page Size</label>
+                        <label for="resourceDiagramPageSize" class="label-with-help">Page Size <span class="info-tip" title="Rows displayed per page in resource selector.">i</span></label>
                         <select id="resourceDiagramPageSize">
                             <option value="50">50</option>
                             <option value="100" selected>100</option>
@@ -910,14 +963,14 @@
                 <h3>Generate Discrete Diagram</h3>
                 <div class="filter-grid">
                     <div class="form-group">
-                        <label for="resourceDiagramIncludeNeighbors">Relationship Expansion</label>
+                        <label for="resourceDiagramIncludeNeighbors" class="label-with-help">Relationship Expansion <span class="info-tip" title="Include connected resources around your explicit selection.">i</span></label>
                         <select id="resourceDiagramIncludeNeighbors">
                             <option value="false">No expansion (selected only)</option>
                             <option value="true" selected>Include related resources</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label for="resourceDiagramRelationshipDepth">Relationship Depth</label>
+                        <label for="resourceDiagramRelationshipDepth" class="label-with-help">Relationship Depth <span class="info-tip" title="Maximum relationship hop depth to include.">i</span></label>
                         <select id="resourceDiagramRelationshipDepth">
                             <option value="0">0</option>
                             <option value="1" selected>1</option>
@@ -926,7 +979,7 @@
                         </select>
                     </div>
                     <div class="form-group">
-                        <label for="resourceDiagramMode">Diagram Style</label>
+                        <label for="resourceDiagramMode" class="label-with-help">Diagram Style <span class="info-tip" title="Visual style for selection-based diagrams.">i</span></label>
                         <select id="resourceDiagramMode">
                             <option value="MSFT" selected>MSFT (architecture-center style)</option>
                             <option value="L2R">L2R (left-to-right flow)</option>
@@ -934,26 +987,26 @@
                         </select>
                     </div>
                     <div class="form-group">
-                        <label for="resourceDiagramSpacingSlider">Spacing</label>
+                        <label for="resourceDiagramSpacingSlider" class="label-with-help">Spacing <span class="info-tip" title="Controls layout density for the generated diagram.">i</span></label>
                         <input type="range" id="resourceDiagramSpacingSlider" min="0" max="100" step="1" value="20" oninput="onResourceDiagramSpacingChanged()">
                         <div class="placeholder" id="resourceDiagramSpacingValue">Compact</div>
                     </div>
                     <div class="form-group">
-                        <label for="resourceDiagramLayoutMagic">Smart Layout</label>
+                        <label for="resourceDiagramLayoutMagic" class="label-with-help">Smart Layout <span class="info-tip" title="Enable additional routing and placement heuristics.">i</span></label>
                         <select id="resourceDiagramLayoutMagic">
                             <option value="true" selected>Enabled</option>
                             <option value="false">Disabled</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label for="resourceDiagramEdgeLabels">Edge Labels</label>
+                        <label for="resourceDiagramEdgeLabels" class="label-with-help">Edge Labels <span class="info-tip" title="Show labels on relationships in the output diagram.">i</span></label>
                         <select id="resourceDiagramEdgeLabels">
                             <option value="false" selected>Hidden</option>
                             <option value="true">Visible</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label for="resourceDiagramSubnetColors">Subnet Colors</label>
+                        <label for="resourceDiagramSubnetColors" class="label-with-help">Subnet Colors <span class="info-tip" title="Enable subnet colorization in generated topology views.">i</span></label>
                         <select id="resourceDiagramSubnetColors">
                             <option value="false" selected>Off</option>
                             <option value="true">On</option>

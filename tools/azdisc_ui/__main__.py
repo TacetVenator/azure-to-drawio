@@ -115,6 +115,80 @@ def create_app() -> FastAPI:
             "presets": presets,
             "total": len(presets),
         }
+
+    @app.post("/api/config/load", tags=["config"])
+    async def load_config_file(payload: dict) -> dict:
+        """Load an existing config file and return normalized config data."""
+        from dataclasses import asdict
+        from tools.azdisc.config import load_config
+
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="payload must be a JSON object")
+
+        raw_path = str(payload.get("config_path") or "").strip()
+        if not raw_path:
+            raise HTTPException(status_code=400, detail="config_path is required")
+
+        cfg_path = Path(raw_path).expanduser()
+        if not cfg_path.is_absolute():
+            cfg_path = (Path.cwd() / cfg_path).resolve()
+        else:
+            cfg_path = cfg_path.resolve()
+
+        if not cfg_path.exists() or not cfg_path.is_file():
+            raise HTTPException(status_code=400, detail=f"Config file not found: {cfg_path}")
+
+        try:
+            cfg = load_config(str(cfg_path))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Failed to load config: {exc}")
+
+        return {
+            "config_path": str(cfg_path),
+            "config": asdict(cfg),
+        }
+
+    @app.post("/api/config/save", tags=["config"])
+    async def save_config_file(payload: dict) -> dict:
+        """Validate and save a config dictionary to a target file path."""
+        from dataclasses import asdict
+        from tools.azdisc.config import load_config_from_dict
+
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="payload must be a JSON object")
+
+        config_data = payload.get("config_data")
+        if not isinstance(config_data, dict):
+            raise HTTPException(status_code=400, detail="config_data must be a JSON object")
+
+        raw_path = str(payload.get("save_path") or "").strip()
+        if not raw_path:
+            raise HTTPException(status_code=400, detail="save_path is required")
+
+        save_path = Path(raw_path).expanduser()
+        if not save_path.is_absolute():
+            save_path = (Path.cwd() / save_path).resolve()
+        else:
+            save_path = save_path.resolve()
+
+        create_parent = bool(payload.get("create_parent", True))
+        if create_parent:
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+        elif not save_path.parent.exists():
+            raise HTTPException(status_code=400, detail=f"Parent directory does not exist: {save_path.parent}")
+
+        try:
+            cfg = load_config_from_dict(config_data)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid config_data: {exc}")
+
+        normalized = asdict(cfg)
+        save_path.write_text(json.dumps(normalized, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+        return {
+            "save_path": str(save_path),
+            "bytes_written": save_path.stat().st_size,
+        }
     
     # ============================================================================
     # Pipeline Execution API Routes (Phase 2, 2A)
@@ -531,8 +605,8 @@ def create_app() -> FastAPI:
         """Return local embedded viewer URL when a bundled diagrams.net viewer is available."""
         ui_static_root = Path(__file__).resolve().parent / "static"
         local_candidates = [
-            ui_static_root / "vendor" / "drawio-viewer.html",
             ui_static_root / "vendor" / "diagrams-net" / "index.html",
+            ui_static_root / "vendor" / "drawio-viewer.html",
             ui_static_root / "vendor" / "drawio" / "index.html",
         ]
         for candidate in local_candidates:
@@ -557,6 +631,7 @@ def create_app() -> FastAPI:
         limit: int = 500,
         tag_key: str = "",
         tag_value: str = "",
+        type_filter: str = "",
     ) -> dict:
         """Return scope dropdown options for scoped diagram generation."""
         from tools.azdisc_ui.services.pipeline_runner import get_runner
@@ -708,6 +783,7 @@ def create_app() -> FastAPI:
             return {"target": target_mode, "options": options}
 
         # target_mode == "resource"
+        wanted_type = str(type_filter or "").strip().lower()
         resources: list[dict] = []
         for row in inventory:
             if not isinstance(row, dict):
@@ -715,11 +791,13 @@ def create_app() -> FastAPI:
             rid = str(row.get("id") or "").strip()
             if not rid:
                 continue
+            rtype = str(row.get("type") or "unknown").lower()
+            if wanted_type and rtype != wanted_type:
+                continue
             name = str(row.get("name") or rid.split("/")[-1])
-            rtype = str(row.get("type") or "unknown")
             rg = str(row.get("resourceGroup") or "")
-            label = f"{name} ({rtype})" + (f" - {rg}" if rg else "")
-            resources.append({"value": rid, "label": label, "count": 1})
+            label = f"{name} ({rtype})" + (f" — {rg}" if rg else "")
+            resources.append({"value": rid, "label": label, "name": name, "resourceGroup": rg, "type": rtype, "count": 1})
 
         resources.sort(key=lambda row: row["label"].lower())
         return {"target": target_mode, "options": resources[:safe_limit]}
@@ -1629,7 +1707,7 @@ if __name__ == "__main__":
     
     app = create_app()
     
-    print("Starting azdisc_ui on http://localhost:8000")
+    print("Starting azdisc_ui on http://localhost:18427")
     print("  config validation: POST /api/config/validate")
     print("  pipeline run:      POST /api/pipeline/run")
     print("  pipeline status:   GET  /api/pipeline/status/{run_id}")
@@ -1640,6 +1718,6 @@ if __name__ == "__main__":
     uvicorn.run(
         app,
         host="127.0.0.1",
-        port=8000,
+        port=18427,
         log_level="info",
     )
