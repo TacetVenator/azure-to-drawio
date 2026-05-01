@@ -64,7 +64,7 @@ An optional FastAPI-based web interface is available for configuration validatio
 python3 -m tools.azdisc_ui
 ```
 
-Then open `http://localhost:8000` in your browser. The UI provides:
+Then open `http://localhost:18427` in your browser. The UI provides:
 - **Config Validator**: Validate configuration dictionaries before running pipelines
 - **Pipeline Dashboard**: Submit new runs and monitor their status
 - **Artifact Browser**: Browse and download generated diagrams, reports, and metadata

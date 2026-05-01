@@ -12,6 +12,8 @@ SUPPORTED_ARTIFACTS = {
     "seed": "seed.json",
 }
 
+_FACET_CACHE: Dict[tuple[str, float, int], Dict[str, Any]] = {}
+
 
 def resolve_inventory_path(output_dir: str, artifact: str) -> Path:
     key = str(artifact or "inventory").strip().lower()
@@ -25,11 +27,29 @@ def resolve_inventory_path(output_dir: str, artifact: str) -> Path:
     return path
 
 
+def _path_signature(path: Path) -> tuple[str, float, int]:
+    stat = path.stat()
+    return (str(path.resolve()), stat.st_mtime, stat.st_size)
+
+
 def _contains_query(item: Dict[str, Any], query: str) -> bool:
     if not query:
         return True
     query_l = query.lower()
-    return query_l in json.dumps(item, sort_keys=True, separators=(",", ":")).lower()
+    tags = item.get("tags") if isinstance(item.get("tags"), dict) else {}
+    searchable = " ".join(
+        [
+            str(item.get("id", "")),
+            str(item.get("name", "")),
+            str(item.get("type", "")),
+            str(item.get("resourceGroup", "")),
+            str(item.get("subscriptionId", "")),
+            str(item.get("location", "")),
+            str(item.get("kind", "")),
+            json.dumps(tags, sort_keys=True, separators=(",", ":")),
+        ]
+    ).lower()
+    return query_l in searchable
 
 
 def _matches_filters(
@@ -142,6 +162,10 @@ def query_inventory(
 def get_inventory_facets(output_dir: str, *, artifact: str = "inventory") -> Dict[str, Any]:
     """Return distinct field values for fast dropdown filters."""
     path = resolve_inventory_path(output_dir, artifact)
+    signature = _path_signature(path)
+    cached = _FACET_CACHE.get(signature)
+    if cached is not None:
+        return cached
 
     types: set[str] = set()
     resource_groups: set[str] = set()
@@ -171,7 +195,7 @@ def get_inventory_facets(output_dir: str, *, artifact: str = "inventory") -> Dic
             if v:
                 tag_values_by_key.setdefault(k, set()).add(v)
 
-    return {
+    result = {
         "artifact": artifact,
         "artifactPath": path.name,
         "totalRows": total_rows,
@@ -186,3 +210,9 @@ def get_inventory_facets(output_dir: str, *, artifact: str = "inventory") -> Dic
             },
         },
     }
+
+    # Keep cache bounded to avoid unbounded memory growth across many runs.
+    if len(_FACET_CACHE) > 32:
+        _FACET_CACHE.clear()
+    _FACET_CACHE[signature] = result
+    return result

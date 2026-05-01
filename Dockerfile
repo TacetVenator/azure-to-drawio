@@ -5,9 +5,9 @@ WORKDIR /app
 COPY . .
 
 RUN pip install --upgrade pip && \
-    pip install pytest pytest-html
+    pip install pytest pytest-html && \
+    pip install -r tools/azdisc_ui/requirements.txt
 
-# Optional: install any other dependencies
-# RUN pip install -r requirements.txt
+EXPOSE 18427
 
-CMD ["/bin/bash"]
+CMD ["python", "-m", "uvicorn", "tools.azdisc_ui.__main__:create_app", "--factory", "--host", "0.0.0.0", "--port", "18427"]

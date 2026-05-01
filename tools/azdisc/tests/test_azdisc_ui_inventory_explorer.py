@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from tools.azdisc_ui.services import inventory_explorer
 from tools.azdisc_ui.services.inventory_explorer import get_inventory_facets, query_inventory
 
 
@@ -107,3 +108,24 @@ def test_get_inventory_facets_returns_distinct_sorted_values(tmp_path: Path) -> 
     assert result["facets"]["tagKeys"] == ["Application", "Environment"]
     assert result["facets"]["tagValuesByKey"]["Application"] == ["Data", "ERP"]
     assert result["facets"]["tagValuesByKey"]["Environment"] == ["prod"]
+
+
+def test_get_inventory_facets_uses_cache_for_unchanged_artifact(tmp_path: Path, monkeypatch) -> None:
+    _write_inventory(tmp_path / "inventory.json")
+    inventory_explorer._FACET_CACHE.clear()
+
+    call_count = 0
+    original_iter_rows = inventory_explorer._iter_rows
+
+    def counting_iter_rows(path: Path):
+        nonlocal call_count
+        call_count += 1
+        yield from original_iter_rows(path)
+
+    monkeypatch.setattr(inventory_explorer, "_iter_rows", counting_iter_rows)
+
+    first = get_inventory_facets(str(tmp_path), artifact="inventory")
+    second = get_inventory_facets(str(tmp_path), artifact="inventory")
+
+    assert first == second
+    assert call_count == 1

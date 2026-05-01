@@ -113,7 +113,7 @@ pip install -r tools/azdisc_ui/requirements.txt
 python3 -m tools.azdisc_ui
 ```
 
-Server starts on `http://localhost:8000`
+Server starts on `http://localhost:18427`
 
 ### Workflow
 

@@ -135,6 +135,58 @@ def test_config_presets_endpoint_lists_scoped_presets() -> None:
     assert vm_preset["config"]["diagramFocus"]["networkScope"] == "immediate-vm-network"
 
 
+def test_config_load_endpoint_round_trips_existing_file(tmp_path: Path) -> None:
+    cfg_path = tmp_path / "existing-config.json"
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "app": "from-file",
+                "subscriptions": ["sub-1"],
+                "seedResourceGroups": ["rg-a"],
+                "outputDir": str(tmp_path / "out"),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    client = testclient.TestClient(create_app())
+    response = client.post("/api/config/load", json={"config_path": str(cfg_path)})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["config_path"] == str(cfg_path.resolve())
+    assert payload["config"]["app"] == "from-file"
+    assert payload["config"]["outputDir"] == str(tmp_path / "out")
+
+
+def test_config_save_endpoint_writes_normalized_config_file(tmp_path: Path) -> None:
+    save_path = tmp_path / "saved" / "config.saved.json"
+
+    client = testclient.TestClient(create_app())
+    response = client.post(
+        "/api/config/save",
+        json={
+            "save_path": str(save_path),
+            "create_parent": True,
+            "config_data": {
+                "app": "saved-config",
+                "subscriptions": ["sub-1"],
+                "seedResourceGroups": ["rg-a"],
+                "outputDir": str(tmp_path / "out-saved"),
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["save_path"] == str(save_path.resolve())
+    assert save_path.exists()
+
+    saved = json.loads(save_path.read_text(encoding="utf-8"))
+    assert saved["app"] == "saved-config"
+    assert saved["outputDir"] == str(tmp_path / "out-saved")
+
+
 def test_inventory_explore_supports_tag_key_value_filters(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -238,6 +290,61 @@ def test_diagram_scope_options_supports_resourcegroup_tag_target(
     assert payload["target"] == "resourcegroup-tag"
     assert payload["options"]
     assert payload["options"][0]["value"] == "rg-app"
+
+
+def test_diagram_scope_options_type_filter_returns_only_matching_resources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = "scope-options-type-filter-run"
+    output_dir = tmp_path / run_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "inventory.json").write_text(
+        json.dumps(
+            [
+                {
+                    "id": "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Compute/virtualMachines/vm-a",
+                    "name": "vm-a",
+                    "type": "Microsoft.Compute/virtualMachines",
+                    "resourceGroup": "rg1",
+                },
+                {
+                    "id": "/subscriptions/sub1/resourceGroups/rg1/providers/Microsoft.Network/networkInterfaces/nic-a",
+                    "name": "nic-a",
+                    "type": "Microsoft.Network/networkInterfaces",
+                    "resourceGroup": "rg1",
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    runner = PipelineRunner(state_dir=tmp_path / "runner-state")
+    cfg = Config(
+        app="type-filter-test",
+        subscriptions=[],
+        seedResourceGroups=["rg1"],
+        outputDir=str(output_dir),
+    )
+    runner.register_imported_run(run_id, cfg, imported_artifacts=["inventory.json"])
+    monkeypatch.setattr(pipeline_runner_module, "_runner", runner)
+
+    client = testclient.TestClient(create_app())
+    # Without filter: both resources are returned
+    response_all = client.get(f"/api/diagram/scope-options/{run_id}?target=resource")
+    assert response_all.status_code == 200
+    all_options = response_all.json()["options"]
+    assert len(all_options) == 2
+
+    # With type_filter: only the VM is returned
+    response_vms = client.get(
+        f"/api/diagram/scope-options/{run_id}?target=resource&type_filter=microsoft.compute/virtualmachines"
+    )
+    assert response_vms.status_code == 200
+    vm_options = response_vms.json()["options"]
+    assert len(vm_options) == 1
+    assert vm_options[0]["name"] == "vm-a"
+    assert vm_options[0]["resourceGroup"] == "rg1"
+    assert "virtualMachines/vm-a" in vm_options[0]["value"]
 
 
 def test_generate_selection_diagram_supports_low_noise_no_expansion(
