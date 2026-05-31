@@ -1,0 +1,141 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "pytest-ui-fast",
+			"type": "shell",
+			"command": "./.venv/bin/pytest",
+			"args": [
+				"tools/azdisc/tests/test_azdisc_ui.py",
+				"-q"
+			],
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "pytest-ui-inventory-regression",
+			"type": "shell",
+			"command": "./.venv/bin/pytest",
+			"args": [
+				"tools/azdisc/tests/test_azdisc_ui_inventory_explorer.py",
+				"-q"
+			],
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "pytest-ui-full-slice",
+			"type": "shell",
+			"command": "./.venv/bin/pytest",
+			"args": [
+				"tools/azdisc/tests/test_azdisc_ui.py",
+				"tools/azdisc/tests/test_azdisc_ui_inventory_explorer.py",
+				"tools/azdisc/tests/test_azdisc_ui_pipeline_executor.py",
+				"-q"
+			],
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "docker-build-azdisc-ui-18427",
+			"type": "shell",
+			"command": "docker",
+			"args": [
+				"build",
+				"-t",
+				"azure-to-drawio:dev",
+				"."
+			],
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "docker-run-azdisc-ui-18427",
+			"type": "shell",
+			"command": "docker",
+			"args": [
+				"run",
+				"--rm",
+				"-d",
+				"--name",
+				"azdisc-ui-dev",
+				"-p",
+				"18427:18427",
+				"azure-to-drawio:dev"
+			],
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "docker-healthcheck-azdisc-ui-18427",
+			"type": "shell",
+			"command": "sh",
+			"args": [
+				"-c",
+				"curl -fsS http://127.0.0.1:18427/health"
+			],
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "docker-stop-azdisc-ui-dev",
+			"type": "shell",
+			"command": "sh",
+			"args": [
+				"-c",
+				"docker stop azdisc-ui-dev >/dev/null 2>&1 || true"
+			],
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "docker-check-drawio-cli",
+			"type": "shell",
+			"command": "docker",
+			"args": [
+				"exec",
+				"azdisc-ui-dev",
+				"sh",
+				"-c",
+				"command -v drawio || echo drawio-not-found"
+			],
+			"problemMatcher": [],
+			"group": "test"
+		},
+		{
+			"label": "install-playwright-python",
+			"type": "shell",
+			"command": "./.venv/bin/pip",
+			"args": [
+				"install",
+				"playwright"
+			],
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "install-playwright-chromium",
+			"type": "shell",
+			"command": "./.venv/bin/python",
+			"args": [
+				"-m",
+				"playwright",
+				"install",
+				"chromium"
+			],
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "mock-walkthrough-screenshots",
+			"type": "shell",
+			"command": "./.venv/bin/python",
+			"args": [
+				"test-results/ux/mock_walkthrough_capture.py"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		}
+	]
+}

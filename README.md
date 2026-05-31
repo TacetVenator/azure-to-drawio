@@ -636,6 +636,8 @@ python3 -m tools.azdisc -v run app/myapp/config.json
 
 ## Configuration
 
+For practical, copy-paste configuration recipes that produce different diagram outcomes (clean RG view, strict RG-only, VM-focused, network-only, and more), see `DIAGRAM_CONFIGURATIONS.md`.
+
 ### Config File Format
 
 The tool reads a JSON configuration file. An example is provided at `app/myapp/config.json`:

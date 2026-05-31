@@ -1,0 +1,29 @@
+{
+  "app": "myapp-vm-focused",
+  "subscriptions": ["<your-subscription-id>"],
+  "outputDir": "app/myapp/out-vm-focused",
+  "seedResourceIds": [
+    "/subscriptions/<subscription-id>/resourceGroups/<rg>/providers/Microsoft.Compute/virtualMachines/<vm-name>"
+  ],
+  "expandScope": "related",
+  "layout": "SUB>REGION>RG>NET",
+  "diagramMode": "L2R",
+  "spacing": "spacious",
+  "networkDetail": "compact",
+  "edgeLabels": false,
+  "layoutMagic": false,
+  "includeRbac": false,
+  "resolvePrincipalNames": false,
+  "includePolicy": false,
+  "includeAdvisor": false,
+  "includeQuota": false,
+  "includeVmDetails": false,
+  "enableTelemetry": false,
+  "diagramFocus": {
+    "preset": "vm-dependencies",
+    "includeDependencies": true,
+    "dependencyDepth": 2,
+    "networkScope": "immediate-vm-network",
+    "diagramType": "network"
+  }
+}

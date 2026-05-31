@@ -152,6 +152,8 @@ class Config:
     migrationPlan: MigrationPlanConfig = field(default_factory=MigrationPlanConfig)
     localAnalysis: LocalAnalysisConfig = field(default_factory=LocalAnalysisConfig)
     diagramFocus: DiagramFocusConfig = field(default_factory=DiagramFocusConfig)
+    anonymizeOutput: bool = False
+    anonymizeSalt: str = ""
 
     def out(self, filename: str) -> Path:
         return Path(self.outputDir) / filename
@@ -557,6 +559,13 @@ def load_config(path: str) -> Config:
     migration_plan = _load_migration_plan(data.get("migrationPlan"))
     local_analysis = _load_local_analysis(data.get("localAnalysis"))
     diagram_focus = _load_diagram_focus(data.get("diagramFocus"))
+    anonymize_output = data.get("anonymizeOutput", False)
+    if not isinstance(anonymize_output, bool):
+        raise ValueError(f"anonymizeOutput must be a boolean, got {anonymize_output!r}")
+    anonymize_salt = data.get("anonymizeSalt", "")
+    if not isinstance(anonymize_salt, str):
+        raise ValueError(f"anonymizeSalt must be a string, got {anonymize_salt!r}")
+
 
     cfg = Config(
         app=data["app"],
@@ -592,6 +601,8 @@ def load_config(path: str) -> Config:
         migrationPlan=migration_plan,
         localAnalysis=local_analysis,
         diagramFocus=diagram_focus,
+        anonymizeOutput=anonymize_output,
+        anonymizeSalt=anonymize_salt,
     )
     log.info(
         "Loaded config for app=%s, subs=%d, seedMGs=%d, seedRGs=%d, seedResourceIds=%d, seedTags=%d, seedTagKeys=%d, tagFallbackToRG=%s, seedAllSubs=%s, includeRbac=%s, resolvePrincipalNames=%s, includePolicy=%s, includeAdvisor=%s, includeQuota=%s, includeVmDetails=%s, deepDiscovery=%s, appSplit=%s, migrationPlan=%s, localAnalysis=%s",
@@ -653,6 +664,8 @@ def load_config_from_dict(data: dict) -> Config:
         raise ValueError(
             f"seedEntireSubscriptions must be a boolean, got {seed_entire_subscriptions!r}"
         )
+    # NOTE: load_config_from_dict does not re-validate seed presence — callers are
+    # responsible for ensuring at least one seed selector is populated.
     if not seed_rgs and not seed_resource_ids and not seed_tags and not seed_tag_keys and not seed_entire_subscriptions and not seed_management_groups:
         raise ValueError(
             "Config must include at least one of seedResourceGroups, seedResourceIds, seedTags, seedTagKeys, or seedEntireSubscriptions (or seedManagementGroups)"
@@ -727,6 +740,13 @@ def load_config_from_dict(data: dict) -> Config:
     migration_plan = _load_migration_plan(data.get("migrationPlan"))
     local_analysis = _load_local_analysis(data.get("localAnalysis"))
     diagram_focus = _load_diagram_focus(data.get("diagramFocus"))
+    anonymize_output = data.get("anonymizeOutput", False)
+    if not isinstance(anonymize_output, bool):
+        raise ValueError(f"anonymizeOutput must be a boolean, got {anonymize_output!r}")
+    anonymize_salt = data.get("anonymizeSalt", "")
+    if not isinstance(anonymize_salt, str):
+        raise ValueError(f"anonymizeSalt must be a string, got {anonymize_salt!r}")
+
 
     cfg = Config(
         app=data["app"],
@@ -762,5 +782,7 @@ def load_config_from_dict(data: dict) -> Config:
         migrationPlan=migration_plan,
         localAnalysis=local_analysis,
         diagramFocus=diagram_focus,
+        anonymizeOutput=anonymize_output,
+        anonymizeSalt=anonymize_salt,
     )
     return cfg

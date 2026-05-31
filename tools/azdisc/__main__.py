@@ -115,6 +115,18 @@ def cmd_run(args) -> None:
         software_inventory_days=args.software_inventory_days,
     ):
         stage.action()
+    if cfg.anonymizeOutput:
+        from pathlib import Path
+        from .anonymize import ResourceAnonymizer
+        anon = ResourceAnonymizer(salt=cfg.anonymizeSalt)
+        anon.apply_output_dir(Path(cfg.outputDir))
+        map_path = Path(cfg.outputDir) / ".anon-map.json"
+        anon.save_map(map_path)
+        log.info(
+            "Anonymization applied: %d mappings. Map at %s — keep confidential.",
+            anon.mapping_count,
+            map_path,
+        )
     log.info("Pipeline complete for app=%s", cfg.app)
 
 

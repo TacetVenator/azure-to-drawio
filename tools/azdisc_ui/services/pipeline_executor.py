@@ -171,6 +171,28 @@ class PipelineExecutor:
                 "fallback_stage": fallback_stage,
             }
             _log_marker(f"Pipeline ended: {result['status']}")
+
+            # ── Anonymization post-processing ──────────────────────────────────
+            if config.anonymizeOutput and result["status"] != "failed":
+                try:
+                    from tools.azdisc.anonymize import ResourceAnonymizer
+                    anon = ResourceAnonymizer(salt=config.anonymizeSalt)
+                    anon.apply_output_dir(Path(config.outputDir))
+                    map_path = Path(config.outputDir) / ".anon-map.json"
+                    anon.save_map(map_path)
+                    _log_marker(
+                        f"Anonymization complete: {anon.mapping_count} mappings. "
+                        f"Map written to {map_path.name} — DO NOT SHARE this file."
+                    )
+                    log.info(
+                        "Anonymization applied to run output (%d mappings, salt=%r)",
+                        anon.mapping_count,
+                        "***" if config.anonymizeSalt else "(none)",
+                    )
+                except Exception as anon_err:
+                    log.error("Anonymization post-processing failed: %s", anon_err)
+                    _log_marker(f"Anonymization FAILED: {anon_err}")
+
             _run_logger.removeHandler(_file_handler)
             _file_handler.close()
             return result

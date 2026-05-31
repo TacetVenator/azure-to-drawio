@@ -1,0 +1,19 @@
+{
+  "app": "myapp-rg-strict",
+  "subscriptions": ["<your-subscription-id>"],
+  "outputDir": "app/myapp/out-rg-strict",
+  "seedResourceGroups": ["<your-resource-group-name>"],
+  "layout": "SUB>REGION>RG>NET",
+  "diagramMode": "L2R",
+  "spacing": "spacious",
+  "networkDetail": "compact",
+  "edgeLabels": false,
+  "layoutMagic": false,
+  "includeRbac": false,
+  "resolvePrincipalNames": false,
+  "includePolicy": false,
+  "includeAdvisor": false,
+  "includeQuota": false,
+  "includeVmDetails": false,
+  "enableTelemetry": false
+}
